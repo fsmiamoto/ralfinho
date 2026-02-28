@@ -23,7 +23,8 @@ type Config struct {
 	RunsDir       string // directory for run storage
 
 	// Subcommand
-	ViewRunID string // non-empty means "view" subcommand
+	ViewRunID string // non-empty means "view <run-id>" subcommand
+	ViewList  bool   // true means "view" without a run-id (list mode)
 }
 
 const usage = `Usage: ralfinho [flags] [PROMPT_FILE]
@@ -164,7 +165,10 @@ func parseView(args []string) (*Config, error) {
 
 	remaining := fs.Args()
 	if len(remaining) == 0 {
-		return nil, fmt.Errorf("view requires a <run-id> argument")
+		return &Config{
+			ViewList: true,
+			RunsDir:  runsDir,
+		}, nil
 	}
 
 	return &Config{

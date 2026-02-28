@@ -50,9 +50,35 @@ func NewModel(ch <-chan runner.Event) Model {
 	}
 }
 
+// NewViewerModel creates a read-only TUI model pre-loaded with events.
+// It is used for replaying a saved run — no event channel, not running.
+func NewViewerModel(events []DisplayEvent, meta runner.RunMeta) Model {
+	status := fmt.Sprintf("Run %s | %s | %s | %d iterations",
+		shortID(meta.RunID), meta.Status, meta.StartedAt, meta.IterationsCompleted)
+
+	m := Model{
+		events:     events,
+		paneRatio:  0.5,
+		running:    false,
+		status:     status,
+		autoScroll: false,
+	}
+	return m
+}
+
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
 // waitForEvent returns a Cmd that waits for the next event on the channel.
 func (m Model) waitForEvent() tea.Cmd {
 	ch := m.eventCh
+	if ch == nil {
+		return nil
+	}
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {

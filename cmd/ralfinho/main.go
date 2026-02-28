@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/dorayaki-do/ralfinho/internal/prompt"
 	"github.com/dorayaki-do/ralfinho/internal/runner"
 	"github.com/dorayaki-do/ralfinho/internal/tui"
+	"github.com/dorayaki-do/ralfinho/internal/viewer"
 )
 
 func main() {
@@ -26,10 +28,13 @@ func main() {
 	}
 
 	// Handle "view" subcommand.
+	if cfg.ViewList {
+		listRuns(cfg)
+		return
+	}
 	if cfg.ViewRunID != "" {
-		fmt.Fprintf(os.Stderr, "ralfinho view: not yet implemented (run-id=%s, runs-dir=%s)\n",
-			cfg.ViewRunID, cfg.RunsDir)
-		os.Exit(0)
+		runViewer(cfg)
+		return
 	}
 
 	// Resolve the prompt text.
@@ -113,6 +118,75 @@ func exitForStatus(status runner.Status) {
 	case runner.StatusInterrupted:
 		os.Exit(2)
 	}
+}
+
+// runViewer loads a saved run and opens it in a read-only TUI.
+func runViewer(cfg *cli.Config) {
+	saved, err := viewer.LoadRun(cfg.RunsDir, cfg.ViewRunID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ralfinho view: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Convert raw events to display events.
+	conv := tui.NewEventConverter()
+	var displayEvents []tui.DisplayEvent
+	for i := range saved.Events {
+		des := conv.Convert(&saved.Events[i])
+		displayEvents = append(displayEvents, des...)
+	}
+
+	model := tui.NewViewerModel(displayEvents, saved.Meta)
+	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "ralfinho: TUI error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// listRuns prints a summary of all available runs.
+func listRuns(cfg *cli.Config) {
+	runs, err := viewer.ListRuns(cfg.RunsDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ralfinho view: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(runs) == 0 {
+		fmt.Println("No runs found.")
+		return
+	}
+
+	fmt.Println("Available runs:")
+	for _, meta := range runs {
+		id := meta.RunID
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		date := formatMetaDate(meta.StartedAt)
+		source := meta.PromptSource
+		if source == "" {
+			source = "unknown"
+		}
+		fmt.Printf("  %s  %s  %-22s %d iterations  (%s)\n",
+			id, date, meta.Status, meta.IterationsCompleted, source)
+	}
+}
+
+// formatMetaDate parses an RFC3339 timestamp and returns a short date string.
+func formatMetaDate(s string) string {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, s)
+		if err != nil {
+			if len(s) >= 16 {
+				return s[:16]
+			}
+			return s
+		}
+	}
+	return t.Format("2006-01-02 15:04")
 }
 
 // resolvePrompt reads the prompt content based on the CLI config.
