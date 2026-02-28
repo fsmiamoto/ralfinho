@@ -112,9 +112,33 @@ func runTUI(cfg *cli.Config, promptText string) {
 		p.Send(tui.DoneMsg{Result: result})
 	}()
 
-	if _, err := p.Run(); err != nil {
+	finalModel, err := p.Run()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "ralfinho: TUI error: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Print session summary to stderr.
+	if m, ok := finalModel.(tui.Model); ok {
+		if r := m.RunResult(); r != nil {
+			fmt.Fprintf(os.Stderr, "\n=== run summary ===\n")
+			fmt.Fprintf(os.Stderr, "run-id:     %s\n", r.RunID)
+			fmt.Fprintf(os.Stderr, "iterations: %d\n", r.Iterations)
+			fmt.Fprintf(os.Stderr, "status:     %s\n", r.Status)
+			exitForStatus(r.Status)
+		} else {
+			// User quit before runner finished — try to get result with a short timeout.
+			select {
+			case result := <-resultCh:
+				fmt.Fprintf(os.Stderr, "\n=== run summary ===\n")
+				fmt.Fprintf(os.Stderr, "run-id:     %s\n", result.RunID)
+				fmt.Fprintf(os.Stderr, "iterations: %d\n", result.Iterations)
+				fmt.Fprintf(os.Stderr, "status:     %s\n", result.Status)
+				exitForStatus(result.Status)
+			case <-time.After(500 * time.Millisecond):
+				// Runner still going; exit without summary.
+			}
+		}
 	}
 }
 

@@ -37,6 +37,9 @@ type Model struct {
 	eventCh      <-chan runner.Event
 	converter    *EventConverter
 	autoScroll   bool // auto-scroll stream when new events arrive
+	confirmQuit  bool // waiting for quit confirmation
+	confirmCtrlC bool // true if ctrl+c triggered confirm, false if q
+	result       *runner.RunResult
 }
 
 // NewModel creates a TUI model that reads runner events from ch.
@@ -65,6 +68,11 @@ func NewViewerModel(events []DisplayEvent, meta runner.RunMeta) Model {
 		autoScroll: false,
 	}
 	return m
+}
+
+// RunResult returns the runner result if available, or nil.
+func (m Model) RunResult() *runner.RunResult {
+	return m.result
 }
 
 func shortID(id string) string {
@@ -128,6 +136,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case DoneMsg:
 		m.running = false
 		m.status = fmt.Sprintf("Done — %s (%d iterations)", msg.Result.Status, msg.Result.Iterations)
+		m.result = &msg.Result
 		return m, nil
 	}
 
@@ -173,10 +182,29 @@ func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle quit confirmation state.
+	if m.confirmQuit {
+		if m.confirmCtrlC && msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+		if !m.confirmCtrlC && msg.String() == "y" {
+			return m, tea.Quit
+		}
+		m.confirmQuit = false
+		return m, nil
+	}
+
 	switch msg.String() {
 
-	case "q", "ctrl+c":
-		return m, tea.Quit
+	case "q":
+		m.confirmQuit = true
+		m.confirmCtrlC = false
+		return m, nil
+
+	case "ctrl+c":
+		m.confirmQuit = true
+		m.confirmCtrlC = true
+		return m, nil
 
 	case "j", "down":
 		if m.focusedPane == 0 && len(m.events) > 0 {
@@ -444,6 +472,16 @@ func (m Model) renderDetail(contentWidth int) string {
 }
 
 func (m Model) renderStatus() string {
+	if m.confirmQuit {
+		var bar string
+		if m.confirmCtrlC {
+			bar = "Press Ctrl+C again to quit, any other key to cancel"
+		} else {
+			bar = "Quit? Press y to confirm, any other key to cancel"
+		}
+		return statusBarStyle.Width(m.width).Render(bar)
+	}
+
 	left := m.status
 	if m.running {
 		left = "Running | " + left
