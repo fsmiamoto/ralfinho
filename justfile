@@ -32,3 +32,8 @@ install: build
 # Remove local build artifacts
 clean:
     rm -f bin/{{binary}}
+
+# Tag the latest commit and push the tag (e.g. just tag v1.0.0)
+tag version:
+    git tag {{version}}
+    git push origin {{version}}
