@@ -1,7 +1,5 @@
 # Ralfinho
 
-An autonomous coding agent runner with real-time TUI inspection.
-
 My take on the [Ralph Wiggum](https://ghuntley.com/ralph/) technique.
 
 > _Aren't there already one hundred million tools for doing this?_
@@ -11,14 +9,13 @@ My take on the [Ralph Wiggum](https://ghuntley.com/ralph/) technique.
 ## Installation
 
 ```bash
-go install github.com/dorayaki-do/ralfinho/cmd/ralfinho@latest
+go install github.com/fsmiamoto/ralfinho/cmd/ralfinho@latest
 ```
 
-Or build from source:
+Or install from source:
 
 ```bash
-just build
-# Binary at ./bin/ralfinho
+just install
 ```
 
 ## Usage
@@ -59,17 +56,6 @@ ralfinho view              # List all runs
 ralfinho view <run-id>     # View a specific run (supports prefix matching)
 ```
 
-### TUI Keybindings
-
-| Key         | Action                      |
-| ----------- | --------------------------- |
-| j/k, ↑/↓   | Navigate events             |
-| Tab         | Switch pane focus           |
-| Ctrl+d/u    | Page detail pane            |
-| g/G         | Jump to top/bottom          |
-| r           | Toggle raw/rendered         |
-| q           | Quit                        |
-
 ## Run Artifacts
 
 Each run is saved to `.ralfinho/runs/<uuid>/`:
@@ -79,17 +65,3 @@ Each run is saved to `.ralfinho/runs/<uuid>/`:
 - `effective-prompt.md` — the prompt that was sent
 - `session.log` — human-readable timestamped log
 - `raw-output.log` — raw agent stdout
-
-## How It Works
-
-Ralfinho runs an AI coding agent (default: [pi](https://github.com/mariozechner/pi-coding-agent))
-in an iteration loop. Each iteration sends the prompt to the agent and monitors
-its JSON output stream. The agent signals completion by outputting
-`<promise>COMPLETE</promise>`.
-
-The TUI provides a two-pane view: an event stream on top (showing tool calls,
-assistant text, iteration boundaries) and a detail pane on the bottom (showing
-full content for the selected event, with markdown rendering for assistant text).
-
-In non-TTY environments (CI, pipes), the TUI is automatically disabled and
-output goes to stderr as plain text.
