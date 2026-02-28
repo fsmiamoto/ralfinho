@@ -18,6 +18,9 @@ const (
 	EventToolExecutionEnd   EventType = "tool_execution_end"
 	EventTurnEnd            EventType = "turn_end"
 	EventAgentEnd           EventType = "agent_end"
+
+	// Synthetic events emitted by the runner (not from pi).
+	EventIteration EventType = "iteration"
 )
 
 // Event is the top-level envelope for every JSONL line emitted by pi.

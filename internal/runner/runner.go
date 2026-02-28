@@ -39,6 +39,7 @@ type RunConfig struct {
 	PromptSource  string // "prompt", "plan", or "default"
 	PromptFile    string // path when PromptSource is "prompt"
 	PlanFile      string // path when PromptSource is "plan"
+	EventChan     chan<- Event // optional: send events to TUI
 }
 
 // RunResult is the summary returned after the loop finishes.
@@ -102,6 +103,13 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 		r.iteration = result.Iterations
 		r.sessionLogf("\n=== Iteration %d ===\n", r.iteration)
 		r.logf("--- iteration %d ---\n", result.Iterations)
+
+		// Send synthetic iteration event to TUI.
+		r.sendEvent(Event{
+			Type:      EventIteration,
+			ID:        fmt.Sprintf("iteration-%d", r.iteration),
+			Timestamp: time.Now().Format(time.RFC3339),
+		})
 
 		status, err := r.runIteration(ctx)
 		if err != nil {
@@ -260,9 +268,30 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 	return iterContinue, nil
 }
 
+// sendEvent sends an event to the TUI channel if configured (non-blocking).
+func (r *Runner) sendEvent(ev Event) {
+	if r.cfg.EventChan != nil {
+		select {
+		case r.cfg.EventChan <- ev:
+		default:
+		}
+	}
+}
+
+// sendSynthetic sends a synthetic event (e.g. iteration boundary) to the TUI.
+func (r *Runner) sendSynthetic(evType EventType, id string) {
+	r.sendEvent(Event{
+		Type:      evType,
+		ID:        id,
+		Timestamp: time.Now().Format(time.RFC3339),
+	})
+}
+
 // handleEvent processes a single parsed event, printing a summary to stderr,
 // accumulating assistant text, and writing to session.log.
 func (r *Runner) handleEvent(ev *Event, assistantText *strings.Builder) {
+	// Forward to TUI if channel is set.
+	r.sendEvent(*ev)
 	switch ev.Type {
 	case EventSession:
 		r.logf("  session id=%s\n", ev.ID)
