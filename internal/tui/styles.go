@@ -2,16 +2,17 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-// Color constants for event types.
+// Color constants for the blue-accent theme.
 var (
-	colorUser      = lipgloss.Color("69")  // blue
-	colorAssistant = lipgloss.Color("78")  // green
-	colorTool      = lipgloss.Color("214") // yellow/orange
+	ColorAccent    = lipgloss.Color("69")  // blue, primary accent
+	colorUser      = lipgloss.Color("75")  // lighter blue
+	colorAssistant = lipgloss.Color("114") // soft green
+	colorTool      = lipgloss.Color("214") // orange
 	colorError     = lipgloss.Color("196") // red
-	colorThinking  = lipgloss.Color("139") // muted purple
-	colorDim       = lipgloss.Color("240") // gray
+	colorThinking  = lipgloss.Color("183") // lighter purple
+	colorDim       = lipgloss.Color("242") // gray
 	colorBright    = lipgloss.Color("255") // white
-	colorIteration = lipgloss.Color("117") // cyan
+	colorIteration = lipgloss.Color("111") // blue-cyan
 	colorInfo      = lipgloss.Color("248") // light gray
 )
 
@@ -19,28 +20,69 @@ var (
 var (
 	focusedBorder = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("69"))
+			BorderForeground(ColorAccent)
 
 	unfocusedBorder = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("240"))
+			BorderForeground(colorDim)
 )
 
-// selectedStyle highlights the currently selected stream item.
-var selectedStyle = lipgloss.NewStyle().
-	Reverse(true).
+// Header styles for the top bar.
+var (
+	headerStyle = lipgloss.NewStyle().
+			Background(ColorAccent).
+			Foreground(lipgloss.Color("255")).
+			Bold(true).
+			Padding(0, 1)
+
+	headerDimStyle = lipgloss.NewStyle().
+			Background(ColorAccent).
+			Foreground(lipgloss.Color("153")).
+			Bold(true).
+			Padding(0, 1)
+)
+
+// Selection styles.
+var (
+	selectedStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("236")).
+			Foreground(lipgloss.Color("255")).
+			Bold(true)
+
+	selectedIndicator = lipgloss.NewStyle().
+				Foreground(ColorAccent).
+				Bold(true)
+)
+
+// Status bar styles.
+var (
+	statusBarStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252")).
+			Background(lipgloss.Color("237")).
+			Padding(0, 1)
+
+	statusKeyStyle = lipgloss.NewStyle().
+			Foreground(ColorAccent).
+			Bold(true)
+
+	statusSepStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240"))
+)
+
+// Pane title styles.
+var (
+	titleStyle = lipgloss.NewStyle().
+			Foreground(ColorAccent).
+			Bold(true)
+
+	titleCountStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("245"))
+)
+
+// iterationBarStyle is used for iteration separators in the stream.
+var iterationBarStyle = lipgloss.NewStyle().
+	Foreground(colorIteration).
 	Bold(true)
-
-// statusBarStyle renders the bottom status bar.
-var statusBarStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.Color("252")).
-	Background(lipgloss.Color("236")).
-	Padding(0, 1)
-
-// titleStyle renders pane titles.
-var titleStyle = lipgloss.NewStyle().
-	Bold(true).
-	Foreground(lipgloss.Color("252"))
 
 // eventStyle returns the style for a given event type.
 func eventStyle(evType string) lipgloss.Style {

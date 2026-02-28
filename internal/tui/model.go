@@ -3,7 +3,9 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	runewidth "github.com/mattn/go-runewidth"
@@ -29,7 +31,7 @@ type Model struct {
 	streamScroll int     // scroll offset in stream pane
 	width        int     // terminal width
 	height       int     // terminal height
-	paneRatio    float64 // fraction of height for top pane
+	paneRatio    float64 // fraction of width for left (stream) pane
 	focusedPane  int     // 0=stream, 1=detail
 	rawMode      bool    // show raw detail vs rendered
 	running      bool    // agent still running
@@ -40,17 +42,26 @@ type Model struct {
 	confirmQuit  bool // waiting for quit confirmation
 	confirmCtrlC bool // true if ctrl+c triggered confirm, false if q
 	result       *runner.RunResult
+	spinner      spinner.Model
+	startTime    time.Time
+	modelName    string
+	iteration    int // current iteration count for header display
 }
 
 // NewModel creates a TUI model that reads runner events from ch.
 func NewModel(ch <-chan runner.Event) Model {
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 	return Model{
-		paneRatio:  0.5,
+		paneRatio:  0.2,
 		running:    true,
 		status:     "Starting...",
 		eventCh:    ch,
 		converter:  NewEventConverter(),
 		autoScroll: true,
+		spinner:    s,
+		startTime:  time.Now(),
 	}
 }
 
@@ -62,7 +73,7 @@ func NewViewerModel(events []DisplayEvent, meta runner.RunMeta) Model {
 
 	m := Model{
 		events:     events,
-		paneRatio:  0.5,
+		paneRatio:  0.2,
 		running:    false,
 		status:     status,
 		autoScroll: false,
@@ -102,7 +113,7 @@ type rawEventMsg runner.Event
 
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
-	return m.waitForEvent()
+	return tea.Batch(m.waitForEvent(), m.spinner.Tick)
 }
 
 // Update implements tea.Model.
@@ -116,7 +127,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		// Re-init markdown renderer with new width.
-		detailWidth := m.width - 4
+		detailWidth := m.detailWidth() - 4
 		if detailWidth < 20 {
 			detailWidth = 20
 		}
@@ -138,6 +149,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = fmt.Sprintf("Done — %s (%d iterations)", msg.Result.Status, msg.Result.Iterations)
 		m.result = &msg.Result
 		return m, nil
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -158,9 +174,22 @@ func (m Model) handleRawEvent(ev runner.Event) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
-	// Update status bar on iteration boundaries.
+	// Update status bar and iteration counter on iteration boundaries.
 	if de.Type == "iteration" && m.running {
+		m.iteration = de.Iteration
 		m.status = fmt.Sprintf("Iteration #%d", de.Iteration)
+	}
+
+	// Extract model name from assistant_text summaries like "← Assistant (claude-xxx)".
+	if de.Type == "assistant_text" && de.Summary != "" {
+		if start := strings.Index(de.Summary, "("); start != -1 {
+			if end := strings.Index(de.Summary[start:], ")"); end != -1 {
+				name := de.Summary[start+1 : start+end]
+				if name != "" {
+					m.modelName = name
+				}
+			}
+		}
 	}
 
 	// For assistant_text updates, merge with the last assistant_text event.
@@ -254,14 +283,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "ctrl+d":
-		pageSize := m.detailHeight() / 2
+		pageSize := m.paneHeight() / 2
 		if pageSize < 1 {
 			pageSize = 1
 		}
 		m.detailScroll += pageSize
 
 	case "ctrl+u":
-		pageSize := m.detailHeight() / 2
+		pageSize := m.paneHeight() / 2
 		if pageSize < 1 {
 			pageSize = 1
 		}
@@ -281,7 +310,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) ensureStreamCursorVisible() {
-	streamH := m.streamHeight()
+	streamH := m.paneHeight() - 1
 	if streamH <= 0 {
 		return
 	}
@@ -294,25 +323,32 @@ func (m *Model) ensureStreamCursorVisible() {
 }
 
 // Layout dimensions helpers.
-func (m Model) streamHeight() int {
-	// Top pane content height (minus borders=2, title area is inside border).
-	h := int(float64(m.usableHeight()) * m.paneRatio)
-	if h < 3 {
-		h = 3
+func (m Model) streamWidth() int {
+	w := int(float64(m.width) * m.paneRatio)
+	if w < 16 {
+		w = 16
 	}
-	return h - 2 // subtract border lines
+	return w
 }
 
-func (m Model) detailHeight() int {
-	h := m.usableHeight() - int(float64(m.usableHeight())*m.paneRatio)
+func (m Model) detailWidth() int {
+	w := m.width - m.streamWidth()
+	if w < 30 {
+		w = 30
+	}
+	return w
+}
+
+func (m Model) paneHeight() int {
+	h := m.usableHeight() - 2
 	if h < 3 {
 		h = 3
 	}
-	return h - 2 // subtract border lines
+	return h
 }
 
 func (m Model) usableHeight() int {
-	return m.height - 1 // 1 for status bar
+	return m.height - 2 // 1 for header + 1 for status bar
 }
 
 // View implements tea.Model.
@@ -321,28 +357,79 @@ func (m Model) View() string {
 		return "Initializing..."
 	}
 
-	contentWidth := m.width - 2 // border left+right
-
-	streamView := m.renderStream(contentWidth)
-	detailView := m.renderDetail(contentWidth)
+	headerBar := m.renderHeader()
+	streamView := m.renderStream()
+	detailView := m.renderDetail()
 	statusBar := m.renderStatus()
 
-	return lipgloss.JoinVertical(lipgloss.Left, streamView, detailView, statusBar)
+	middleRow := lipgloss.JoinHorizontal(lipgloss.Top, streamView, detailView)
+	return lipgloss.JoinVertical(lipgloss.Left, headerBar, middleRow, statusBar)
 }
 
-func (m Model) renderStream(contentWidth int) string {
-	streamH := m.streamHeight()
+func (m Model) renderHeader() string {
+	maxWidth := m.width - 2 // account for headerStyle Padding(0,1)
+	if maxWidth < 10 {
+		maxWidth = 10
+	}
+
+	var parts []string
+
+	if m.running {
+		parts = append(parts, m.spinner.View())
+	}
+	parts = append(parts, "ralfinho")
+
+	sep := " ─── "
+
+	// Build optional segments, only adding them if they fit.
+	var optional []string
+	if m.iteration > 0 {
+		optional = append(optional, fmt.Sprintf("Iteration #%d", m.iteration))
+	}
+	if m.modelName != "" {
+		optional = append(optional, m.modelName)
+	}
+	if m.running && !m.startTime.IsZero() {
+		elapsed := time.Since(m.startTime).Truncate(time.Second)
+		mins := int(elapsed.Minutes())
+		secs := int(elapsed.Seconds()) % 60
+		optional = append(optional, fmt.Sprintf("%dm %ds", mins, secs))
+	}
+
+	bar := strings.Join(parts, sep)
+	for _, seg := range optional {
+		candidate := bar + sep + seg
+		if lipgloss.Width(candidate) <= maxWidth {
+			bar = candidate
+		}
+	}
+
+	return headerStyle.Width(m.width).Render(bar)
+}
+
+func (m Model) renderStream() string {
+	sw := m.streamWidth()
+	ph := m.paneHeight()
+	contentWidth := sw - 2 // inside borders
+
+	indicatorWidth := lipgloss.Width(selectedIndicator.Render("▌"))
+	lineWidth := contentWidth - indicatorWidth
+	if lineWidth < 1 {
+		lineWidth = 1
+	}
+
+	visibleLines := ph - 1 // minus title line
 
 	var lines []string
-	for i := m.streamScroll; i < len(m.events) && i < m.streamScroll+streamH-1; i++ {
+	for i := m.streamScroll; i < len(m.events) && i < m.streamScroll+visibleLines; i++ {
 		ev := m.events[i]
 		line := ev.Summary
-		if contentWidth > 0 && lipgloss.Width(line) > contentWidth {
+		if lineWidth > 0 && lipgloss.Width(line) > lineWidth {
 			w := 0
 			truncated := ""
 			for _, r := range line {
 				rw := runewidth.RuneWidth(r)
-				if w+rw > contentWidth-3 {
+				if w+rw > lineWidth-3 {
 					break
 				}
 				truncated += string(r)
@@ -352,8 +439,8 @@ func (m Model) renderStream(contentWidth int) string {
 		}
 
 		// Pad to fill width.
-		if lw := lipgloss.Width(line); lw < contentWidth {
-			line = line + strings.Repeat(" ", contentWidth-lw)
+		if lw := lipgloss.Width(line); lw < lineWidth {
+			line = line + strings.Repeat(" ", lineWidth-lw)
 		}
 
 		style := eventStyle(ev.Type)
@@ -363,33 +450,35 @@ func (m Model) renderStream(contentWidth int) string {
 		}
 
 		if i == m.cursor {
-			lines = append(lines, selectedStyle.Render(line))
+			lines = append(lines, selectedIndicator.Render("▌")+selectedStyle.Render(line))
 		} else {
-			lines = append(lines, style.Render(line))
+			lines = append(lines, " "+style.Render(line))
 		}
 	}
 
 	// Pad remaining lines if not enough events.
-	for len(lines) < streamH-1 {
+	for len(lines) < visibleLines {
 		lines = append(lines, strings.Repeat(" ", contentWidth))
 	}
 
 	content := strings.Join(lines, "\n")
 
-	title := " Stream "
+	title := fmt.Sprintf(" 📡 Stream (%d) ", len(m.events))
 	border := focusedBorder
 	if m.focusedPane != 0 {
 		border = unfocusedBorder
 	}
 
 	return border.
-		Width(m.width - 2).
-		Height(streamH).
+		Width(sw - 2).
+		Height(ph).
 		Render(titleStyle.Render(title) + "\n" + content)
 }
 
-func (m Model) renderDetail(contentWidth int) string {
-	detailH := m.detailHeight()
+func (m Model) renderDetail() string {
+	dw := m.detailWidth()
+	ph := m.paneHeight()
+	contentWidth := dw - 2 // inside borders
 
 	var content string
 
@@ -398,10 +487,11 @@ func (m Model) renderDetail(contentWidth int) string {
 		if m.rawMode {
 			content = fmt.Sprintf("Type: %s\nTime: %s\nIteration: %d\n\n%s",
 				ev.Type, ev.Timestamp.Format("15:04:05"), ev.Iteration, ev.Detail)
+			content = WrapText(content, contentWidth)
 		} else if ev.Type == "assistant_text" && ev.Detail != "" {
 			content = renderMarkdown(ev.Detail, contentWidth)
 		} else {
-			content = ev.Detail
+			content = WrapText(ev.Detail, contentWidth)
 		}
 	}
 
@@ -412,15 +502,11 @@ func (m Model) renderDetail(contentWidth int) string {
 	// Split into lines and apply scroll.
 	allLines := strings.Split(content, "\n")
 	totalLines := len(allLines)
+	visibleLines := ph - 1
 
-	// Clamp detailScroll.
-	maxScroll := totalLines - (detailH - 1)
+	maxScroll := totalLines - visibleLines
 	if maxScroll < 0 {
 		maxScroll = 0
-	}
-	if m.detailScroll > maxScroll {
-		// We can't mutate m here, but the view is best-effort.
-		// Just clamp for display.
 	}
 
 	scroll := m.detailScroll
@@ -429,7 +515,7 @@ func (m Model) renderDetail(contentWidth int) string {
 	}
 
 	start := scroll
-	end := start + detailH - 1
+	end := start + visibleLines
 	if end > totalLines {
 		end = totalLines
 	}
@@ -454,15 +540,15 @@ func (m Model) renderDetail(contentWidth int) string {
 	}
 
 	// Pad.
-	for len(lines) < detailH-1 {
+	for len(lines) < visibleLines {
 		lines = append(lines, "")
 	}
 
 	displayContent := strings.Join(lines, "\n")
 
-	title := " Detail "
-	if totalLines > detailH {
-		title = fmt.Sprintf(" Detail [%d/%d] ", scroll+1, totalLines)
+	title := " 📋 Detail "
+	if totalLines > visibleLines {
+		title = fmt.Sprintf(" 📋 Detail [%d/%d] ", scroll+1, totalLines)
 	}
 
 	border := focusedBorder
@@ -471,8 +557,8 @@ func (m Model) renderDetail(contentWidth int) string {
 	}
 
 	return border.
-		Width(m.width - 2).
-		Height(detailH).
+		Width(dw - 2).
+		Height(ph).
 		Render(titleStyle.Render(title) + "\n" + displayContent)
 }
 
@@ -487,9 +573,14 @@ func (m Model) renderStatus() string {
 		return statusBarStyle.Width(m.width).Render(bar)
 	}
 
+	maxWidth := m.width - 2 // account for statusBarStyle Padding(0,1)
+	if maxWidth < 10 {
+		maxWidth = 10
+	}
+
 	left := m.status
 	if m.running {
-		left = "Running | " + left
+		left = "Running │ " + left
 	}
 
 	modeStr := "rendered"
@@ -497,14 +588,59 @@ func (m Model) renderStatus() string {
 		modeStr = "raw"
 	}
 
-	right := fmt.Sprintf("↑↓:select  Tab:pane  r:%s  q:quit", modeStr)
+	sep := statusSepStyle.Render(" │ ")
+	right := statusKeyStyle.Render("↑↓") + ":nav" +
+		sep + statusKeyStyle.Render("Tab") + ":pane" +
+		sep + statusKeyStyle.Render("r") + ":" + modeStr +
+		sep + statusKeyStyle.Render("q") + ":quit"
 
-	// Pad to fill width.
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	leftW := lipgloss.Width(left)
+	rightW := lipgloss.Width(right)
+
+	// If left + right won't fit, drop the right side progressively.
+	if leftW+1+rightW > maxWidth {
+		// Try shorter right: just "q:quit"
+		right = statusKeyStyle.Render("q") + ":quit"
+		rightW = lipgloss.Width(right)
+	}
+	if leftW+1+rightW > maxWidth {
+		// Drop right entirely.
+		right = ""
+		rightW = 0
+	}
+
+	// Truncate left if still too wide.
+	if leftW > maxWidth-rightW-1 && rightW > 0 {
+		left = truncateToWidth(left, maxWidth-rightW-1)
+		leftW = lipgloss.Width(left)
+	} else if rightW == 0 && leftW > maxWidth {
+		left = truncateToWidth(left, maxWidth)
+		leftW = lipgloss.Width(left)
+	}
+
+	gap := maxWidth - leftW - rightW
 	if gap < 1 {
 		gap = 1
 	}
 
 	bar := left + strings.Repeat(" ", gap) + right
 	return statusBarStyle.Width(m.width).Render(bar)
+}
+
+// truncateToWidth truncates a string to fit within maxW visual columns.
+func truncateToWidth(s string, maxW int) string {
+	if maxW < 4 {
+		maxW = 4
+	}
+	w := 0
+	truncated := ""
+	for _, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if w+rw > maxW-3 {
+			return truncated + "..."
+		}
+		truncated += string(r)
+		w += rw
+	}
+	return s
 }
