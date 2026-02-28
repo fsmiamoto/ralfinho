@@ -4,7 +4,13 @@ My take on the [Ralph Wiggum](https://ghuntley.com/ralph/) technique.
 
 > _Aren't there already one hundred million tools for doing this?_
 >
-> Yes, but where's the fun and what do I learn by just using those?
+> Yes, but what do I learn by just using those?
+>
+> Paraphrashing [pi](https://pi.dev): There are many Ralphs out there, but this one is mine.
+
+<p align="center">
+  <img src="docs/screenshot.png" alt="ralfinho screenshot" width="800">
+</p>
 
 ## Installation
 
