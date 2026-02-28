@@ -101,15 +101,24 @@ func (b *MainBlock) renderToolCall(width int, spinnerView string) string {
 	}
 
 	if b.ToolDone && b.ToolResult != "" {
-		// Inner content width: total width minus border (2) minus padding (2).
-		sepW := width - 4
-		if sepW < 10 {
-			sepW = 10
+		// For read/write/edit, don't dump file contents — just show a
+		// line count summary.  Full output is in the Detail pane.
+		toolLower := strings.ToLower(b.ToolName)
+		if toolLower == "read" || toolLower == "write" || toolLower == "edit" {
+			lines := strings.Count(b.ToolResult, "\n") + 1
+			summary := fmt.Sprintf("(%d lines)", lines)
+			inner = append(inner, toolResultStyle.Render(summary))
+		} else {
+			// Inner content width: total width minus border (2) minus padding (2).
+			sepW := width - 4
+			if sepW < 10 {
+				sepW = 10
+			}
+			sep := toolSepStyle.Render(strings.Repeat("─", sepW))
+			inner = append(inner, sep)
+			result := truncateResult(b.ToolResult, 6)
+			inner = append(inner, toolResultStyle.Render(result))
 		}
-		sep := toolSepStyle.Render(strings.Repeat("─", sepW))
-		inner = append(inner, sep)
-		result := truncateResult(b.ToolResult, 6)
-		inner = append(inner, toolResultStyle.Render(result))
 	}
 
 	content := strings.Join(inner, "\n")
