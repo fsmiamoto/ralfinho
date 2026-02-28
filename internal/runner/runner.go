@@ -75,6 +75,9 @@ func New(cfg RunConfig) *Runner {
 // Run executes the agent loop until completion, max iterations, or interruption.
 func (r *Runner) Run(ctx context.Context) RunResult {
 	r.startedAt = time.Now()
+	if r.cfg.EventChan != nil {
+		r.stderr = io.Discard
+	}
 	result := RunResult{
 		RunID:  r.runID,
 		Status: StatusRunning,

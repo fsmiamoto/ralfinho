@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	runewidth "github.com/mattn/go-runewidth"
 	"github.com/dorayaki-do/ralfinho/internal/runner"
 )
 
@@ -300,16 +301,26 @@ func (m Model) renderStream(contentWidth int) string {
 	streamH := m.streamHeight()
 
 	var lines []string
-	for i := m.streamScroll; i < len(m.events) && i < m.streamScroll+streamH; i++ {
+	for i := m.streamScroll; i < len(m.events) && i < m.streamScroll+streamH-1; i++ {
 		ev := m.events[i]
 		line := ev.Summary
-		if contentWidth > 0 && len(line) > contentWidth {
-			line = line[:contentWidth-3] + "..."
+		if contentWidth > 0 && lipgloss.Width(line) > contentWidth {
+			w := 0
+			truncated := ""
+			for _, r := range line {
+				rw := runewidth.RuneWidth(r)
+				if w+rw > contentWidth-3 {
+					break
+				}
+				truncated += string(r)
+				w += rw
+			}
+			line = truncated + "..."
 		}
 
 		// Pad to fill width.
-		if len(line) < contentWidth {
-			line = line + strings.Repeat(" ", contentWidth-len(line))
+		if lw := lipgloss.Width(line); lw < contentWidth {
+			line = line + strings.Repeat(" ", contentWidth-lw)
 		}
 
 		style := eventStyle(ev.Type)
@@ -326,7 +337,7 @@ func (m Model) renderStream(contentWidth int) string {
 	}
 
 	// Pad remaining lines if not enough events.
-	for len(lines) < streamH {
+	for len(lines) < streamH-1 {
 		lines = append(lines, strings.Repeat(" ", contentWidth))
 	}
 
@@ -370,7 +381,7 @@ func (m Model) renderDetail(contentWidth int) string {
 	totalLines := len(allLines)
 
 	// Clamp detailScroll.
-	maxScroll := totalLines - detailH
+	maxScroll := totalLines - (detailH - 1)
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
@@ -385,7 +396,7 @@ func (m Model) renderDetail(contentWidth int) string {
 	}
 
 	start := scroll
-	end := start + detailH
+	end := start + detailH - 1
 	if end > totalLines {
 		end = totalLines
 	}
@@ -393,14 +404,24 @@ func (m Model) renderDetail(contentWidth int) string {
 	var lines []string
 	for i := start; i < end; i++ {
 		line := allLines[i]
-		if len(line) > contentWidth {
-			line = line[:contentWidth]
+		if lipgloss.Width(line) > contentWidth {
+			w := 0
+			truncated := ""
+			for _, r := range line {
+				rw := runewidth.RuneWidth(r)
+				if w+rw > contentWidth {
+					break
+				}
+				truncated += string(r)
+				w += rw
+			}
+			line = truncated
 		}
 		lines = append(lines, line)
 	}
 
 	// Pad.
-	for len(lines) < detailH {
+	for len(lines) < detailH-1 {
 		lines = append(lines, "")
 	}
 
@@ -436,7 +457,7 @@ func (m Model) renderStatus() string {
 	right := fmt.Sprintf("↑↓:select  Tab:pane  r:%s  q:quit", modeStr)
 
 	// Pad to fill width.
-	gap := m.width - len(left) - len(right)
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
 	}
