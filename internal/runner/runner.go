@@ -20,10 +20,10 @@ import (
 type Status string
 
 const (
-	StatusRunning            Status = "running"
-	StatusCompleted          Status = "completed"
-	StatusInterrupted        Status = "interrupted"
-	StatusFailed             Status = "failed"
+	StatusRunning              Status = "running"
+	StatusCompleted            Status = "completed"
+	StatusInterrupted          Status = "interrupted"
+	StatusFailed               Status = "failed"
 	StatusMaxIterationsReached Status = "max_iterations_reached"
 )
 
@@ -36,9 +36,9 @@ type RunConfig struct {
 	Prompt        string // the full prompt text to send each iteration
 	MaxIterations int    // 0 = unlimited
 	RunsDir       string
-	PromptSource  string // "prompt", "plan", or "default"
-	PromptFile    string // path when PromptSource is "prompt"
-	PlanFile      string // path when PromptSource is "plan"
+	PromptSource  string       // "prompt", "plan", or "default"
+	PromptFile    string       // path when PromptSource is "prompt"
+	PlanFile      string       // path when PromptSource is "plan"
 	EventChan     chan<- Event // optional: send events to TUI
 }
 
@@ -59,7 +59,7 @@ type Runner struct {
 	rawFile     *os.File  // raw-output.log
 	sessionFile *os.File  // session.log
 	startedAt   time.Time
-	iteration   int            // current iteration number
+	iteration   int             // current iteration number
 	sessionText strings.Builder // accumulates assistant text for session.log
 }
 
@@ -142,7 +142,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 type iterStatus int
 
 const (
-	iterContinue    iterStatus = iota
+	iterContinue iterStatus = iota
 	iterComplete
 	iterInterrupted
 )

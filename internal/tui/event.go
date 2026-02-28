@@ -12,9 +12,9 @@ import (
 
 // DisplayEvent is a UI-friendly representation of a runner event.
 type DisplayEvent struct {
-	Type      string    // "session", "user_msg", "assistant_text", "thinking", "tool_start", "tool_end", "turn_end", "agent_end", "iteration", "info"
-	Summary   string    // one-line summary for the stream pane
-	Detail    string    // full content for the detail pane
+	Type      string // "session", "user_msg", "assistant_text", "thinking", "tool_start", "tool_end", "turn_end", "agent_end", "iteration", "info"
+	Summary   string // one-line summary for the stream pane
+	Detail    string // full content for the detail pane
 	Timestamp time.Time
 	Iteration int
 }

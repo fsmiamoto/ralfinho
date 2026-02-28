@@ -7,6 +7,8 @@ import (
 	"os"
 	"time"
 
+	"golang.org/x/term"
+
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/dorayaki-do/ralfinho/internal/cli"
@@ -42,6 +44,11 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ralfinho: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Auto-disable TUI when not connected to a terminal.
+	if !cfg.NoTUI && !isTerminal() {
+		cfg.NoTUI = true
 	}
 
 	if cfg.NoTUI {
@@ -201,4 +208,9 @@ func resolvePrompt(cfg *cli.Config) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown input mode %q", cfg.InputMode)
 	}
+}
+
+// isTerminal reports whether stderr is connected to a terminal.
+func isTerminal() bool {
+	return term.IsTerminal(int(os.Stderr.Fd()))
 }

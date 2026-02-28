@@ -7,17 +7,17 @@ import "encoding/json"
 type EventType string
 
 const (
-	EventSession            EventType = "session"
-	EventAgentStart         EventType = "agent_start"
-	EventTurnStart          EventType = "turn_start"
-	EventMessageStart       EventType = "message_start"
-	EventMessageUpdate      EventType = "message_update"
-	EventMessageEnd         EventType = "message_end"
-	EventToolExecutionStart EventType = "tool_execution_start"
+	EventSession             EventType = "session"
+	EventAgentStart          EventType = "agent_start"
+	EventTurnStart           EventType = "turn_start"
+	EventMessageStart        EventType = "message_start"
+	EventMessageUpdate       EventType = "message_update"
+	EventMessageEnd          EventType = "message_end"
+	EventToolExecutionStart  EventType = "tool_execution_start"
 	EventToolExecutionUpdate EventType = "tool_execution_update"
-	EventToolExecutionEnd   EventType = "tool_execution_end"
-	EventTurnEnd            EventType = "turn_end"
-	EventAgentEnd           EventType = "agent_end"
+	EventToolExecutionEnd    EventType = "tool_execution_end"
+	EventTurnEnd             EventType = "turn_end"
+	EventAgentEnd            EventType = "agent_end"
 
 	// Synthetic events emitted by the runner (not from pi).
 	EventIteration EventType = "iteration"
