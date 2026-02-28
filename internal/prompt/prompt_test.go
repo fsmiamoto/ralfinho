@@ -39,9 +39,25 @@ func TestBuildFromPlan(t *testing.T) {
 		t.Error("output missing COMPLETE marker instruction")
 	}
 
-	// Must contain the autonomous agent preamble.
-	if !strings.Contains(got, "autonomous coding agent") {
-		t.Error("output missing agent preamble")
+	// Must contain the task-loop framing.
+	if !strings.Contains(got, "task loop") {
+		t.Error("output missing 'task loop' framing")
+	}
+	if !strings.Contains(got, "fresh context") {
+		t.Error("output missing 'fresh context' framing")
+	}
+
+	// Must reference the memory files.
+	if !strings.Contains(got, "PROGRESS.md") {
+		t.Error("output missing PROGRESS.md reference")
+	}
+	if !strings.Contains(got, "NOTES.md") {
+		t.Error("output missing NOTES.md reference")
+	}
+
+	// Must instruct to do only one task.
+	if !strings.Contains(got, "one task") {
+		t.Error("output missing 'one task' instruction")
 	}
 }
 
@@ -86,15 +102,32 @@ func TestBuildFromPromptFile_NonExistent(t *testing.T) {
 func TestBuildDefault(t *testing.T) {
 	got := BuildDefault()
 
+	if got == "" {
+		t.Error("BuildDefault() returned empty string")
+	}
+
 	if !strings.Contains(got, "<promise>COMPLETE</promise>") {
 		t.Error("BuildDefault() missing COMPLETE marker instruction")
 	}
 
-	if !strings.Contains(got, "autonomous coding agent") {
-		t.Error("BuildDefault() missing agent preamble")
+	// Must contain the task-loop framing.
+	if !strings.Contains(got, "task loop") {
+		t.Error("BuildDefault() missing 'task loop' framing")
+	}
+	if !strings.Contains(got, "fresh context") {
+		t.Error("BuildDefault() missing 'fresh context' framing")
 	}
 
-	if got == "" {
-		t.Error("BuildDefault() returned empty string")
+	// Must reference the memory files.
+	if !strings.Contains(got, "PROGRESS.md") {
+		t.Error("BuildDefault() missing PROGRESS.md reference")
+	}
+	if !strings.Contains(got, "NOTES.md") {
+		t.Error("BuildDefault() missing NOTES.md reference")
+	}
+
+	// Must instruct to do only one task.
+	if !strings.Contains(got, "one task") {
+		t.Error("BuildDefault() missing 'one task' instruction")
 	}
 }
