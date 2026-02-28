@@ -158,6 +158,11 @@ func (m Model) handleRawEvent(ev runner.Event) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
+	// Update status bar on iteration boundaries.
+	if de.Type == "iteration" && m.running {
+		m.status = fmt.Sprintf("Iteration #%d", de.Iteration)
+	}
+
 	// For assistant_text updates, merge with the last assistant_text event.
 	if de.Type == "assistant_text" && len(m.events) > 0 {
 		last := &m.events[len(m.events)-1]
