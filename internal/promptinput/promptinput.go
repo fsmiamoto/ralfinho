@@ -16,10 +16,11 @@ const (
 )
 
 type ResolveInput struct {
-	PromptFlag       string
-	PositionalPrompt string
-	PlanFlag         string
-	CWD              string
+	PromptFlag         string
+	PositionalPrompt   string
+	PlanFlag           string
+	PromptTemplateFlag string
+	CWD                string
 }
 
 type Resolution struct {
@@ -59,7 +60,11 @@ func ResolveAndBuild(in ResolveInput) (Resolution, error) {
 		if _, err := os.ReadFile(in.PlanFlag); err != nil {
 			return Resolution{}, fmt.Errorf("read plan file %q: %w", in.PlanFlag, err)
 		}
-		return Resolution{Source: SourcePlan, PlanFile: in.PlanFlag, EffectivePrompt: buildTemplate(in.PlanFlag)}, nil
+		effectivePrompt, err := buildTemplate(in.PlanFlag, in.PromptTemplateFlag)
+		if err != nil {
+			return Resolution{}, err
+		}
+		return Resolution{Source: SourcePlan, PlanFile: in.PlanFlag, EffectivePrompt: effectivePrompt}, nil
 	}
 
 	defaultPlanPath := filepath.Join(cwd, "PLAN.md")
@@ -67,10 +72,18 @@ func ResolveAndBuild(in ResolveInput) (Resolution, error) {
 		if _, err := os.ReadFile(defaultPlanPath); err != nil {
 			return Resolution{}, fmt.Errorf("read default plan file %q: %w", defaultPlanPath, err)
 		}
-		return Resolution{Source: SourceDefault, PlanFile: "./PLAN.md", EffectivePrompt: buildTemplate("./PLAN.md")}, nil
+		effectivePrompt, err := buildTemplate("./PLAN.md", in.PromptTemplateFlag)
+		if err != nil {
+			return Resolution{}, err
+		}
+		return Resolution{Source: SourceDefault, PlanFile: "./PLAN.md", EffectivePrompt: effectivePrompt}, nil
 	}
 
-	return Resolution{Source: SourceDefault, EffectivePrompt: buildTemplate("")}, nil
+	effectivePrompt, err := buildTemplate("", in.PromptTemplateFlag)
+	if err != nil {
+		return Resolution{}, err
+	}
+	return Resolution{Source: SourceDefault, EffectivePrompt: effectivePrompt}, nil
 }
 
 func WriteEffectivePrompt(runDir string, effectivePrompt string) (string, error) {
@@ -84,13 +97,14 @@ func WriteEffectivePrompt(runDir string, effectivePrompt string) (string, error)
 	return path, nil
 }
 
-func buildTemplate(planPath string) string {
+func buildTemplate(planPath string, templatePath string) (string, error) {
 	planInstruction := "Read docs/V1_PLAN.md and docs/V1_PROGRESS.md to find the highest-priority incomplete task."
 	if strings.TrimSpace(planPath) != "" {
 		planInstruction = fmt.Sprintf("Study %s and docs/V1_PROGRESS.md to find the highest-priority incomplete task.", planPath)
 	}
 
-	return fmt.Sprintf(`You are an elite coding agent executing an implementation plan.
+	if strings.TrimSpace(templatePath) == "" {
+		return fmt.Sprintf(`You are an elite coding agent executing an implementation plan.
 
 ## Your Task
 
@@ -105,5 +119,17 @@ func buildTemplate(planPath string) string {
 If ALL tasks in docs/V1_PROGRESS.md are complete, reply with:
 
 <promise>COMPLETE</promise>
-`, planInstruction)
+`, planInstruction), nil
+	}
+
+	templateBytes, err := os.ReadFile(templatePath)
+	if err != nil {
+		return "", fmt.Errorf("read prompt template %q: %w", templatePath, err)
+	}
+	prompt := strings.ReplaceAll(string(templateBytes), "{{PLAN_INSTRUCTION}}", planInstruction)
+	prompt = strings.ReplaceAll(prompt, "{{PLAN_PATH}}", planPath)
+	if !strings.Contains(prompt, "<promise>COMPLETE</promise>") {
+		prompt = strings.TrimRight(prompt, "\n") + "\n\n<promise>COMPLETE</promise>\n"
+	}
+	return prompt, nil
 }

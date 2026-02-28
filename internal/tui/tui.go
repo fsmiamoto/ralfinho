@@ -27,8 +27,21 @@ const (
 	FocusDetails
 )
 
+type statusLevel int
+
+const (
+	statusInfo statusLevel = iota
+	statusSuccess
+	statusWarn
+	statusError
+)
+
 type IterationMessage struct {
 	Report runner.IterationReport
+	Events []eventlog.Event
+}
+
+type StreamEventsMessage struct {
 	Events []eventlog.Event
 }
 
@@ -57,6 +70,7 @@ type Model struct {
 	continueCh       chan<- bool
 	interruptCh      chan<- struct{}
 	statusLine       string
+	statusLevel      statusLevel
 
 	renderer *glamour.TermRenderer
 }
@@ -72,17 +86,19 @@ func NewLiveModel(runID string, meta runstore.Meta, continueCh chan<- bool, inte
 		continueCh:  continueCh,
 		interruptCh: interruptCh,
 		statusLine:  "Running... Ctrl+C to interrupt.",
+		statusLevel: statusInfo,
 	}
 }
 
 func NewViewModel(runID string, meta runstore.Meta, events []eventlog.Event) *Model {
 	return &Model{
-		mode:       ModeView,
-		runID:      runID,
-		meta:       meta,
-		events:     events,
-		focus:      FocusStream,
-		statusLine: "Read-only viewer. q to quit.",
+		mode:        ModeView,
+		runID:       runID,
+		meta:        meta,
+		events:      events,
+		focus:       FocusStream,
+		statusLine:  "Read-only viewer. q to quit.",
+		statusLevel: statusInfo,
 	}
 }
 
@@ -96,6 +112,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.height = 6
 		}
 		return m, nil
+	case StreamEventsMessage:
+		m.events = append(m.events, msg.Events...)
+		if len(m.events) > 0 {
+			m.selected = len(m.events) - 1
+		}
+		m.clamp()
+		return m, nil
 	case IterationMessage:
 		m.events = append(m.events, msg.Events...)
 		if len(m.events) > 0 {
@@ -103,23 +126,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Report.Interrupted {
 			m.statusLine = fmt.Sprintf("Iteration %d interrupted.", msg.Report.Iteration)
+			m.statusLevel = statusWarn
 		} else if msg.Report.Err != nil {
 			m.statusLine = fmt.Sprintf("Iteration %d failed: %v", msg.Report.Iteration, msg.Report.Err)
+			m.statusLevel = statusError
 		} else {
 			m.statusLine = fmt.Sprintf("Iteration %d finished (%d new events).", msg.Report.Iteration, len(msg.Events))
+			m.statusLevel = statusSuccess
 		}
 		m.clamp()
 		return m, nil
 	case ContinuePromptMessage:
 		m.awaitingContinue = true
 		m.statusLine = "Continue to next iteration? [y/n]"
+		m.statusLevel = statusWarn
 		return m, nil
 	case RunFinishedMessage:
 		m.running = false
 		if msg.Err != nil {
+			m.meta.Status = string(runner.StatusFailed)
 			m.statusLine = fmt.Sprintf("Run failed: %v (q to quit)", msg.Err)
+			m.statusLevel = statusError
 		} else {
+			m.meta.Status = string(msg.Result.Status)
 			m.statusLine = fmt.Sprintf("Run finished with status: %s (q to quit)", msg.Result.Status)
+			m.statusLevel = runStatusLevel(m.meta.Status)
 		}
 		return m, nil
 	case tea.KeyMsg:
@@ -128,6 +159,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "y":
 				m.awaitingContinue = false
 				m.statusLine = "Continuing..."
+				m.statusLevel = statusInfo
 				select {
 				case m.continueCh <- true:
 				default:
@@ -135,6 +167,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "n":
 				m.awaitingContinue = false
 				m.statusLine = "Stopping..."
+				m.statusLevel = statusWarn
 				select {
 				case m.continueCh <- false:
 				default:
@@ -151,12 +184,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				default:
 				}
 				m.statusLine = "Interrupt requested."
+				m.statusLevel = statusWarn
 				return m, nil
 			}
 			return m, tea.Quit
 		case "q":
 			if m.mode == ModeLive && m.running {
 				m.statusLine = "Run active. Use Ctrl+C to interrupt first."
+				m.statusLevel = statusWarn
 				return m, nil
 			}
 			return m, tea.Quit
@@ -209,7 +244,8 @@ func (m *Model) View() string {
 		return "Loading TUI..."
 	}
 
-	header := lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("ralfinho run=%s status=%s", m.runID, m.meta.Status))
+	headerText := fmt.Sprintf("ralfinho run=%s status=%s", m.runID, m.meta.Status)
+	header := headerStyleForRunStatus(m.meta.Status).Render(headerText)
 	streamW := max(24, m.width/3)
 	detailW := m.width - streamW - 1
 	bodyH := m.height - 3
@@ -219,7 +255,7 @@ func (m *Model) View() string {
 	stream := m.renderStream(streamW, bodyH)
 	details := m.renderDetails(detailW, bodyH)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, stream, details)
-	status := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.statusLine)
+	status := statusStyleFor(m.statusLevel).Render(m.statusLine)
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, status)
 }
 
@@ -250,7 +286,17 @@ func (m *Model) renderStream(w, h int) string {
 		if i == m.selected {
 			prefix = "> "
 		}
-		lines = append(lines, prefix+summarizeEvent(m.events[i]))
+		line := prefix + summarizeEvent(m.events[i])
+		hasError := isErrorEvent(m.events[i])
+		switch {
+		case i == m.selected && hasError:
+			line = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196")).Render(line)
+		case i == m.selected:
+			line = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("45")).Render(line)
+		case hasError:
+			line = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(line)
+		}
+		lines = append(lines, line)
 	}
 	return style.Render(strings.Join(lines, "\n"))
 }
@@ -363,6 +409,9 @@ func (m *Model) detailsHeight() int {
 
 func summarizeEvent(ev eventlog.Event) string {
 	parts := []string{ev.Type}
+	if isErrorEvent(ev) {
+		parts = append(parts, "level=error")
+	}
 	if ev.ToolName != "" {
 		parts = append(parts, "tool="+ev.ToolName)
 	}
@@ -377,6 +426,56 @@ func summarizeEvent(ev eventlog.Event) string {
 		parts = append(parts, c)
 	}
 	return strings.Join(parts, " | ")
+}
+
+func statusStyleFor(level statusLevel) lipgloss.Style {
+	switch level {
+	case statusSuccess:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	case statusWarn:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	case statusError:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+	default:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	}
+}
+
+func headerStyleForRunStatus(status string) lipgloss.Style {
+	base := lipgloss.NewStyle().Bold(true)
+	switch runStatusLevel(status) {
+	case statusSuccess:
+		return base.Foreground(lipgloss.Color("42"))
+	case statusWarn:
+		return base.Foreground(lipgloss.Color("220"))
+	case statusError:
+		return base.Foreground(lipgloss.Color("196"))
+	default:
+		return base.Foreground(lipgloss.Color("45"))
+	}
+}
+
+func runStatusLevel(status string) statusLevel {
+	switch status {
+	case string(runner.StatusCompleted):
+		return statusSuccess
+	case string(runner.StatusInterrupted), string(runner.StatusMaxIterationsReached):
+		return statusWarn
+	case string(runner.StatusFailed):
+		return statusError
+	default:
+		return statusInfo
+	}
+}
+
+func isErrorEvent(ev eventlog.Event) bool {
+	check := strings.ToLower(strings.Join([]string{ev.Type, ev.ToolName, ev.Content}, " "))
+	for _, marker := range []string{"error", "fail", "panic", "fatal", "exception"} {
+		if strings.Contains(check, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func max(a, b int) int {

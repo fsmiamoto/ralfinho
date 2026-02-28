@@ -25,6 +25,11 @@ import (
 
 const defaultRunsDir = ".ralfinho/runs"
 
+var (
+	errRunHelp  = errors.New("run help requested")
+	errViewHelp = errors.New("view help requested")
+)
+
 type commandType string
 
 const (
@@ -33,13 +38,14 @@ const (
 )
 
 type runOptions struct {
-	promptFile       string
-	planFile         string
-	positionalPrompt string
-	agent            string
-	maxIterations    int
-	noTUI            bool
-	runsDir          string
+	promptFile         string
+	planFile           string
+	promptTemplateFile string
+	positionalPrompt   string
+	agent              string
+	maxIterations      int
+	noTUI              bool
+	runsDir            string
 }
 
 type viewOptions struct {
@@ -63,7 +69,16 @@ func main() {
 func run() error {
 	opts, err := parseCLI(os.Args[1:])
 	if err != nil {
-		return err
+		switch {
+		case errors.Is(err, errRunHelp):
+			fmt.Fprint(os.Stdout, runUsage())
+			return nil
+		case errors.Is(err, errViewHelp):
+			fmt.Fprint(os.Stdout, viewUsage())
+			return nil
+		default:
+			return err
+		}
 	}
 
 	switch opts.command {
@@ -78,9 +93,10 @@ func run() error {
 
 func runCommand(opts runOptions) error {
 	resolution, err := promptinput.ResolveAndBuild(promptinput.ResolveInput{
-		PromptFlag:       opts.promptFile,
-		PositionalPrompt: opts.positionalPrompt,
-		PlanFlag:         opts.planFile,
+		PromptFlag:         opts.promptFile,
+		PositionalPrompt:   opts.positionalPrompt,
+		PlanFlag:           opts.planFile,
+		PromptTemplateFlag: opts.promptTemplateFile,
 	})
 	if err != nil {
 		return err
@@ -169,16 +185,33 @@ func executeRun(opts runOptions, effectivePrompt, runID string, meta runstore.Me
 
 	memoryEvents := make([]eventlog.Event, 0, 128)
 	var artifactErr error
+	var stateMu sync.Mutex
 	recordArtifactErr := func(err error) {
-		if err != nil && artifactErr == nil {
+		if err == nil {
+			return
+		}
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		if artifactErr == nil {
 			artifactErr = err
 		}
 	}
-	appendIteration := func(report runner.IterationReport) []eventlog.Event {
-		recordArtifactErr(artifacts.AppendRawOutput(report.Iteration, report.Output))
-		events := eventlog.ParseOutput(report.Output, report.Iteration, time.Now())
+	appendEvents := func(events []eventlog.Event) {
+		if len(events) == 0 {
+			return
+		}
+		stateMu.Lock()
 		memoryEvents = append(memoryEvents, events...)
+		stateMu.Unlock()
 		recordArtifactErr(artifacts.AppendEvents(events))
+	}
+	appendIteration := func(report runner.IterationReport, parseEvents bool) []eventlog.Event {
+		recordArtifactErr(artifacts.AppendRawOutput(report.Iteration, report.Output))
+		events := []eventlog.Event{}
+		if parseEvents {
+			events = eventlog.ParseOutput(report.Output, report.Iteration, time.Now())
+			appendEvents(events)
+		}
 		if report.Interrupted {
 			recordArtifactErr(artifacts.AppendSessionLine(fmt.Sprintf("iteration %d interrupted", report.Iteration)))
 			return events
@@ -210,18 +243,31 @@ func executeRun(opts runOptions, effectivePrompt, runID string, meta runstore.Me
 				return cont, err
 			},
 			OnIteration: func(report runner.IterationReport) {
-				appendIteration(report)
+				appendIteration(report, true)
 			},
 		}, runner.ExecOnce)
+		stateMu.Lock()
+		eventsCount := len(memoryEvents)
+		stateMu.Unlock()
 		if artifactErr != nil && runErr == nil {
 			runErr = fmt.Errorf("artifact persistence failed: %w", artifactErr)
 		}
-		return result, len(memoryEvents), runErr
+		return result, eventsCount, runErr
 	}
 
 	continueCh := make(chan bool, 1)
 	model := tui.NewLiveModel(runID, meta, continueCh, interruptCh)
 	program := tea.NewProgram(model, tea.WithAltScreen())
+
+	execFn := func(ctx context.Context, iteration int, agent, prompt string) (string, error) {
+		return runner.ExecOnceStream(ctx, agent, prompt, func(line string) {
+			events := eventlog.ParseOutput(line, iteration, time.Now())
+			appendEvents(events)
+			if len(events) > 0 {
+				program.Send(tui.StreamEventsMessage{Events: events})
+			}
+		})
+	}
 
 	var wg sync.WaitGroup
 	var result runner.Result
@@ -247,10 +293,10 @@ func executeRun(opts runOptions, effectivePrompt, runID string, meta runstore.Me
 				return cont, nil
 			},
 			OnIteration: func(report runner.IterationReport) {
-				events := appendIteration(report)
-				program.Send(tui.IterationMessage{Report: report, Events: events})
+				appendIteration(report, false)
+				program.Send(tui.IterationMessage{Report: report})
 			},
-		}, runner.ExecOnce)
+		}, execFn)
 		program.Send(tui.RunFinishedMessage{Result: result, Err: runErr})
 	}()
 
@@ -260,10 +306,13 @@ func executeRun(opts runOptions, effectivePrompt, runID string, meta runstore.Me
 	}
 	wg.Wait()
 
+	stateMu.Lock()
+	eventsCount := len(memoryEvents)
+	stateMu.Unlock()
 	if artifactErr != nil && runErr == nil {
 		runErr = fmt.Errorf("artifact persistence failed: %w", artifactErr)
 	}
-	return result, len(memoryEvents), runErr
+	return result, eventsCount, runErr
 }
 
 func promptContinue(in io.Reader, out io.Writer) (bool, error) {
@@ -324,19 +373,65 @@ func isTerminal(f *os.File) bool {
 
 func parseCLI(args []string) (cliOptions, error) {
 	if len(args) > 0 && args[0] == string(commandView) {
+		if hasHelpFlag(args[1:]) {
+			return cliOptions{}, errViewHelp
+		}
 		view, err := parseViewArgs(args[1:])
 		if err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return cliOptions{}, errViewHelp
+			}
 			return cliOptions{}, err
 		}
 		return cliOptions{command: commandView, view: view}, nil
 	}
 
+	if hasHelpFlag(args) {
+		return cliOptions{}, errRunHelp
+	}
 	runOpts, err := parseRunArgs(args)
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return cliOptions{}, errRunHelp
+		}
 		return cliOptions{}, err
 	}
 
 	return cliOptions{command: commandRun, run: runOpts}, nil
+}
+
+func hasHelpFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" || arg == "help" {
+			return true
+		}
+	}
+	return false
+}
+
+func runUsage() string {
+	return `Usage:
+  ralfinho [options] [prompt-file]
+  ralfinho view [options] <run-id>
+
+Run options:
+  --prompt <path>           Path to prompt file
+  --plan <path>             Path to plan file
+  --prompt-template <path>  Path to prompt template file
+  --agent, -a <value>       Agent executable or profile (default: pi)
+  --max-iterations, -m <n>  Maximum iterations (0 for unlimited)
+  --no-tui                  Disable TUI output
+  --runs-dir <path>         Runs directory (default: .ralfinho/runs)
+
+View options:
+  --runs-dir <path>         Runs directory (default: .ralfinho/runs)
+`
+}
+
+func viewUsage() string {
+	return `Usage:
+  ralfinho view [--runs-dir <path>] <run-id>
+`
 }
 
 func parseRunArgs(args []string) (runOptions, error) {
@@ -346,6 +441,7 @@ func parseRunArgs(args []string) (runOptions, error) {
 	opts := runOptions{}
 	fs.StringVar(&opts.promptFile, "prompt", "", "Path to prompt file")
 	fs.StringVar(&opts.planFile, "plan", "", "Path to plan file")
+	fs.StringVar(&opts.promptTemplateFile, "prompt-template", "", "Path to prompt template file (supports {{PLAN_INSTRUCTION}} and {{PLAN_PATH}})")
 	fs.StringVar(&opts.agent, "agent", "pi", "Agent executable or profile")
 	fs.StringVar(&opts.agent, "a", "pi", "Agent executable or profile")
 	fs.IntVar(&opts.maxIterations, "max-iterations", 0, "Maximum iterations (0 for unlimited)")
@@ -367,6 +463,10 @@ func parseRunArgs(args []string) (runOptions, error) {
 
 	if opts.promptFile != "" && opts.planFile != "" {
 		return runOptions{}, errors.New("--prompt and --plan cannot be used together")
+	}
+
+	if opts.promptTemplateFile != "" && (opts.promptFile != "" || opts.positionalPrompt != "") {
+		return runOptions{}, errors.New("--prompt-template cannot be used with --prompt or positional prompt file")
 	}
 
 	if opts.maxIterations < 0 {

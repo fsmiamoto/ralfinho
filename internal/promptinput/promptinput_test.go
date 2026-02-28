@@ -98,6 +98,62 @@ func TestResolveAndBuildNoDefaultPlan(t *testing.T) {
 	}
 }
 
+func TestResolveAndBuildPromptTemplate(t *testing.T) {
+	dir := t.TempDir()
+	planPath := filepath.Join(dir, "PLAN_TASKS.md")
+	templatePath := filepath.Join(dir, "prompt.tmpl")
+	defaultPlanPath := filepath.Join(dir, "PLAN.md")
+
+	mustWrite(t, planPath, "# plan")
+	mustWrite(t, defaultPlanPath, "# default plan")
+	mustWrite(t, templatePath, "Instruction={{PLAN_INSTRUCTION}}\nPlan={{PLAN_PATH}}")
+
+	t.Run("template used for explicit plan", func(t *testing.T) {
+		res, err := ResolveAndBuild(ResolveInput{PlanFlag: planPath, PromptTemplateFlag: templatePath, CWD: dir})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(res.EffectivePrompt, "Instruction=Study "+planPath) {
+			t.Fatalf("expected plan instruction with explicit plan path, got %q", res.EffectivePrompt)
+		}
+		if !strings.Contains(res.EffectivePrompt, "Plan="+planPath) {
+			t.Fatalf("expected plan path placeholder replacement, got %q", res.EffectivePrompt)
+		}
+		if !strings.Contains(res.EffectivePrompt, "<promise>COMPLETE</promise>") {
+			t.Fatalf("expected completion marker appended, got %q", res.EffectivePrompt)
+		}
+	})
+
+	t.Run("template used for default PLAN.md", func(t *testing.T) {
+		res, err := ResolveAndBuild(ResolveInput{PromptTemplateFlag: templatePath, CWD: dir})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(res.EffectivePrompt, "Plan=./PLAN.md") {
+			t.Fatalf("expected default plan path placeholder replacement, got %q", res.EffectivePrompt)
+		}
+	})
+
+	t.Run("unknown placeholders remain unchanged", func(t *testing.T) {
+		unknownTemplatePath := filepath.Join(dir, "unknown.tmpl")
+		mustWrite(t, unknownTemplatePath, "X={{UNKNOWN}} Y={{PLAN_PATH}}")
+		res, err := ResolveAndBuild(ResolveInput{PromptTemplateFlag: unknownTemplatePath, CWD: t.TempDir()})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(res.EffectivePrompt, "X={{UNKNOWN}} Y=") {
+			t.Fatalf("expected unknown placeholder to remain, got %q", res.EffectivePrompt)
+		}
+	})
+
+	t.Run("missing template file errors", func(t *testing.T) {
+		_, err := ResolveAndBuild(ResolveInput{PlanFlag: planPath, PromptTemplateFlag: filepath.Join(dir, "missing.tmpl"), CWD: dir})
+		if err == nil {
+			t.Fatal("expected missing template error")
+		}
+	})
+}
+
 func TestWriteEffectivePrompt(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "runs", "id")
 	path, err := WriteEffectivePrompt(runDir, "hello")

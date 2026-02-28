@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -32,12 +33,28 @@ func TestParseViewArgs(t *testing.T) {
 	}
 }
 
+func TestParseRunArgsPromptTemplate(t *testing.T) {
+	opts, err := parseRunArgs([]string{"--plan", "docs/V1_PLAN.md", "--prompt-template", "templates/default.md"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts.promptTemplateFile != "templates/default.md" {
+		t.Fatalf("unexpected prompt template path: %s", opts.promptTemplateFile)
+	}
+}
+
 func TestParseRunArgsValidation(t *testing.T) {
 	if _, err := parseRunArgs([]string{"a.md", "b.md"}); err == nil {
 		t.Fatal("expected too many positional args error")
 	}
 	if _, err := parseRunArgs([]string{"--prompt", "p.md", "--plan", "plan.md"}); err == nil {
 		t.Fatal("expected prompt/plan conflict error")
+	}
+	if _, err := parseRunArgs([]string{"--prompt-template", "tmpl.md", "--prompt", "p.md"}); err == nil {
+		t.Fatal("expected prompt-template with prompt conflict error")
+	}
+	if _, err := parseRunArgs([]string{"--prompt-template", "tmpl.md", "positional.md"}); err == nil {
+		t.Fatal("expected prompt-template with positional prompt conflict error")
 	}
 	if _, err := parseRunArgs([]string{"--max-iterations", "-1"}); err == nil {
 		t.Fatal("expected max iterations validation error")
@@ -57,6 +74,16 @@ func TestPromptContinue(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Please answer y or n.") {
 		t.Fatalf("expected validation message, got %q", out.String())
+	}
+}
+
+func TestParseCLI_Help(t *testing.T) {
+	if _, err := parseCLI([]string{"--help"}); !errors.Is(err, errRunHelp) {
+		t.Fatalf("expected errRunHelp, got %v", err)
+	}
+
+	if _, err := parseCLI([]string{"view", "--help"}); !errors.Is(err, errViewHelp) {
+		t.Fatalf("expected errViewHelp, got %v", err)
 	}
 }
 

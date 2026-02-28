@@ -2,10 +2,12 @@ package runner
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -41,7 +43,7 @@ type Result struct {
 	LastOutput          string
 }
 
-type ExecFunc func(ctx context.Context, agent, prompt string) (string, error)
+type ExecFunc func(ctx context.Context, iteration int, agent, prompt string) (string, error)
 
 func Run(ctx context.Context, cfg Config, execFn ExecFunc) (Result, error) {
 	if cfg.MaxIterations < 0 {
@@ -62,7 +64,7 @@ func Run(ctx context.Context, cfg Config, execFn ExecFunc) (Result, error) {
 			return Result{IterationsCompleted: completed, Status: StatusMaxIterationsReached, LastOutput: lastOutput}, nil
 		}
 
-		output, err, interrupted := execWithInterrupt(ctx, cfg.Interrupt, execFn, cfg.Agent, cfg.Prompt)
+		output, err, interrupted := execWithInterrupt(ctx, cfg.Interrupt, execFn, iteration, cfg.Agent, cfg.Prompt)
 		lastOutput = output
 		if cfg.OnIteration != nil {
 			cfg.OnIteration(IterationReport{Iteration: iteration, Output: output, Err: err, Interrupted: interrupted})
@@ -110,9 +112,9 @@ func continueAfterInterrupt(onInterrupt func() (bool, error)) (bool, error) {
 	return onInterrupt()
 }
 
-func execWithInterrupt(ctx context.Context, interrupt <-chan struct{}, execFn ExecFunc, agent, prompt string) (string, error, bool) {
+func execWithInterrupt(ctx context.Context, interrupt <-chan struct{}, execFn ExecFunc, iteration int, agent, prompt string) (string, error, bool) {
 	if interrupt == nil {
-		output, err := execFn(ctx, agent, prompt)
+		output, err := execFn(ctx, iteration, agent, prompt)
 		return output, err, false
 	}
 
@@ -134,7 +136,7 @@ func execWithInterrupt(ctx context.Context, interrupt <-chan struct{}, execFn Ex
 		}
 	}()
 
-	output, err := execFn(iterCtx, agent, prompt)
+	output, err := execFn(iterCtx, iteration, agent, prompt)
 	close(stop)
 
 	wasInterrupted := false
@@ -170,7 +172,12 @@ func sleepWithInterrupt(ctx context.Context, d time.Duration, interrupt <-chan s
 	}
 }
 
-func ExecOnce(ctx context.Context, agent, prompt string) (string, error) {
+func ExecOnce(ctx context.Context, iteration int, agent, prompt string) (string, error) {
+	_ = iteration
+	return ExecOnceStream(ctx, agent, prompt, nil)
+}
+
+func ExecOnceStream(ctx context.Context, agent, prompt string, onLine func(line string)) (string, error) {
 	var cmd *exec.Cmd
 
 	switch agent {
@@ -184,8 +191,50 @@ func ExecOnce(ctx context.Context, agent, prompt string) (string, error) {
 		return "", fmt.Errorf("unknown agent %q", agent)
 	}
 
-	b, err := cmd.CombinedOutput()
-	return string(b), err
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", err
+	}
+
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+
+	type outLine struct {
+		text string
+	}
+	lineCh := make(chan outLine, 128)
+	var readWG sync.WaitGroup
+	readPipe := func(scanner *bufio.Scanner) {
+		defer readWG.Done()
+		for scanner.Scan() {
+			lineCh <- outLine{text: scanner.Text()}
+		}
+	}
+
+	readWG.Add(2)
+	go readPipe(bufio.NewScanner(stdout))
+	go readPipe(bufio.NewScanner(stderr))
+	go func() {
+		readWG.Wait()
+		close(lineCh)
+	}()
+
+	var out bytes.Buffer
+	for ln := range lineCh {
+		out.WriteString(ln.text)
+		out.WriteByte('\n')
+		if onLine != nil {
+			onLine(ln.text)
+		}
+	}
+
+	err = cmd.Wait()
+	return out.String(), err
 }
 
 func HasCompletionMarker(raw string) bool {

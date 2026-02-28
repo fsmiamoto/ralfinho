@@ -25,7 +25,7 @@ func TestHasCompletionMarker(t *testing.T) {
 
 func TestRun_CompletesOnSecondIteration(t *testing.T) {
 	calls := 0
-	execFn := func(ctx context.Context, agent, prompt string) (string, error) {
+	execFn := func(ctx context.Context, iteration int, agent, prompt string) (string, error) {
 		calls++
 		if calls == 2 {
 			return "done <promise>COMPLETE</promise>", nil
@@ -46,7 +46,7 @@ func TestRun_CompletesOnSecondIteration(t *testing.T) {
 }
 
 func TestRun_RespectsMaxIterations(t *testing.T) {
-	execFn := func(ctx context.Context, agent, prompt string) (string, error) {
+	execFn := func(ctx context.Context, iteration int, agent, prompt string) (string, error) {
 		return "not done", nil
 	}
 
@@ -63,7 +63,7 @@ func TestRun_RespectsMaxIterations(t *testing.T) {
 }
 
 func TestRun_ExecError(t *testing.T) {
-	execFn := func(ctx context.Context, agent, prompt string) (string, error) {
+	execFn := func(ctx context.Context, iteration int, agent, prompt string) (string, error) {
 		return "partial output", errors.New("boom")
 	}
 
@@ -83,7 +83,7 @@ func TestRun_InterruptStop(t *testing.T) {
 	interrupt := make(chan struct{}, 1)
 	interrupt <- struct{}{}
 
-	execFn := func(ctx context.Context, agent, prompt string) (string, error) {
+	execFn := func(ctx context.Context, iteration int, agent, prompt string) (string, error) {
 		<-ctx.Done()
 		return "interrupted", ctx.Err()
 	}
@@ -114,7 +114,7 @@ func TestRun_InterruptContinue(t *testing.T) {
 	continueCalls := 0
 	reports := make([]IterationReport, 0, 2)
 
-	execFn := func(ctx context.Context, agent, prompt string) (string, error) {
+	execFn := func(ctx context.Context, iteration int, agent, prompt string) (string, error) {
 		calls++
 		if calls == 1 {
 			<-ctx.Done()
