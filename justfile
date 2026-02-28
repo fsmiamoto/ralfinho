@@ -26,7 +26,7 @@ test:
     go test ./...
 
 # Install the CLI with Go into $GOBIN (or $GOPATH/bin)
-install:
+install: build
     go install ./cmd/{{binary}}
 
 # Remove local build artifacts
