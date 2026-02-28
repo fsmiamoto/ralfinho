@@ -1,4 +1,4 @@
-module github.com/dorayaki-do/ralfinho
+module github.com/fsmiamoto/ralfinho
 
 go 1.25.7
 

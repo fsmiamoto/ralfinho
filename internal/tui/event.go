@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dorayaki-do/ralfinho/internal/runner"
+	"github.com/fsmiamoto/ralfinho/internal/runner"
 )
 
 // DisplayEvent is a UI-friendly representation of a runner event.

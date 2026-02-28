@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dorayaki-do/ralfinho/internal/runner"
+	"github.com/fsmiamoto/ralfinho/internal/runner"
 )
 
 // SavedRun holds the loaded data for a past run.

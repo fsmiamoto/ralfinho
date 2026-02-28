@@ -11,11 +11,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/dorayaki-do/ralfinho/internal/cli"
-	"github.com/dorayaki-do/ralfinho/internal/prompt"
-	"github.com/dorayaki-do/ralfinho/internal/runner"
-	"github.com/dorayaki-do/ralfinho/internal/tui"
-	"github.com/dorayaki-do/ralfinho/internal/viewer"
+	"github.com/fsmiamoto/ralfinho/internal/cli"
+	"github.com/fsmiamoto/ralfinho/internal/prompt"
+	"github.com/fsmiamoto/ralfinho/internal/runner"
+	"github.com/fsmiamoto/ralfinho/internal/tui"
+	"github.com/fsmiamoto/ralfinho/internal/viewer"
 )
 
 func main() {

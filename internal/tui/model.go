@@ -9,7 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	runewidth "github.com/mattn/go-runewidth"
-	"github.com/dorayaki-do/ralfinho/internal/runner"
+	"github.com/fsmiamoto/ralfinho/internal/runner"
 )
 
 // Bubble Tea message types.
