@@ -112,3 +112,50 @@ func eventStyle(evType string) lipgloss.Style {
 
 // errorEventStyle is for tool errors.
 var errorEventStyle = lipgloss.NewStyle().Foreground(colorError)
+
+// Tool box border styles (for MainBlock tool rendering in the main view).
+var (
+	toolBoxRunning = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorDim).
+			Padding(0, 1)
+
+	toolBoxDone = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorTool).
+			Padding(0, 1)
+
+	toolBoxError = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorError).
+			Padding(0, 1)
+)
+
+// Tool header styles (the "⚙ toolname ✓" line inside the box).
+var (
+	toolHeaderStyle = lipgloss.NewStyle().
+			Foreground(colorTool).
+			Bold(true)
+
+	toolHeaderErrorStyle = lipgloss.NewStyle().
+				Foreground(colorError).
+				Bold(true)
+)
+
+// Thinking line style.
+var thinkingLineStyle = lipgloss.NewStyle().
+	Foreground(colorThinking).
+	Italic(true)
+
+// Iteration rule style (for the ━━━ line in main view).
+var iterationRuleStyle = lipgloss.NewStyle().
+	Foreground(colorIteration).
+	Bold(true)
+
+// Tool result separator.
+var toolSepStyle = lipgloss.NewStyle().
+	Foreground(colorDim)
+
+// Tool result text.
+var toolResultStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("250"))

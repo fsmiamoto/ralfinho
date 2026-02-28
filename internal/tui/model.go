@@ -32,7 +32,7 @@ type Model struct {
 	width        int     // terminal width
 	height       int     // terminal height
 	paneRatio    float64 // fraction of width for left (stream) pane
-	focusedPane  int     // 0=stream, 1=detail
+	focusedPane  int     // 0=main, 1=stream, 2=detail
 	rawMode      bool    // show raw detail vs rendered
 	running      bool    // agent still running
 	status       string  // status bar text
@@ -46,6 +46,12 @@ type Model struct {
 	startTime    time.Time
 	modelName    string
 	iteration    int // current iteration count for header display
+
+	// Main view (top pane) state.
+	blocks         []MainBlock // ordered content blocks for the main view
+	mainScroll     int         // scroll offset in main view (line-based)
+	mainAutoScroll bool        // auto-follow new content (default true)
+	activeToolIdx  int         // index of in-progress tool block in blocks (-1 = none)
 }
 
 // NewModel creates a TUI model that reads runner events from ch.
@@ -54,14 +60,16 @@ func NewModel(ch <-chan runner.Event) Model {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 	return Model{
-		paneRatio:  0.2,
-		running:    true,
-		status:     "Starting...",
-		eventCh:    ch,
-		converter:  NewEventConverter(),
-		autoScroll: true,
-		spinner:    s,
-		startTime:  time.Now(),
+		paneRatio:      0.3,
+		running:        true,
+		status:         "Starting...",
+		eventCh:        ch,
+		converter:      NewEventConverter(),
+		autoScroll:     true,
+		mainAutoScroll: true,
+		activeToolIdx:  -1,
+		spinner:        s,
+		startTime:      time.Now(),
 	}
 }
 
@@ -72,12 +80,20 @@ func NewViewerModel(events []DisplayEvent, meta runner.RunMeta) Model {
 		shortID(meta.RunID), meta.Status, meta.StartedAt, meta.IterationsCompleted)
 
 	m := Model{
-		events:     events,
-		paneRatio:  0.2,
-		running:    false,
-		status:     status,
-		autoScroll: false,
+		events:         events,
+		paneRatio:      0.3,
+		running:        false,
+		status:         status,
+		autoScroll:     false,
+		mainAutoScroll: false,
+		activeToolIdx:  -1,
 	}
+
+	// Pre-build blocks from loaded display events.
+	for _, de := range events {
+		m.buildBlock(de)
+	}
+
 	return m
 }
 
@@ -126,12 +142,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// Re-init markdown renderer with new width.
-		detailWidth := m.detailWidth() - 4
-		if detailWidth < 20 {
-			detailWidth = 20
+		// Re-init markdown renderer with main view content width (widest pane).
+		// Main view spans full terminal width; content width is width minus
+		// borders and padding. This width works for both main and detail panes.
+		mainContentWidth := m.width - 4
+		if mainContentWidth < 20 {
+			mainContentWidth = 20
 		}
-		initRenderer(detailWidth)
+		initRenderer(mainContentWidth)
 		return m, nil
 
 	case rawEventMsg:
@@ -199,11 +217,18 @@ func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
 			last.Summary = de.Summary
 			last.Detail = de.Detail
 			last.Timestamp = de.Timestamp
+			// Also update the corresponding block.
+			m.updateAssistantBlock(de)
+			m.autoScrollMain()
 			return m, nil
 		}
 	}
 
 	m.events = append(m.events, de)
+
+	// Build corresponding block for the main view.
+	m.buildBlock(de)
+	m.autoScrollMain()
 
 	// Auto-scroll: if cursor is at/near the bottom, follow new events.
 	if m.autoScroll {
@@ -213,6 +238,85 @@ func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// buildBlock appends or updates blocks based on the display event type.
+func (m *Model) buildBlock(de DisplayEvent) {
+	switch de.Type {
+	case "iteration":
+		m.blocks = append(m.blocks, MainBlock{
+			Kind:      BlockIteration,
+			Iteration: de.Iteration,
+		})
+	case "assistant_text":
+		// Merge with last BlockAssistantText for the same iteration.
+		if len(m.blocks) > 0 {
+			last := &m.blocks[len(m.blocks)-1]
+			if last.Kind == BlockAssistantText && last.Iteration == de.Iteration {
+				last.Text = de.Detail
+				return
+			}
+		}
+		m.blocks = append(m.blocks, MainBlock{
+			Kind:      BlockAssistantText,
+			Iteration: de.Iteration,
+			Text:      de.Detail,
+		})
+	case "thinking":
+		m.blocks = append(m.blocks, MainBlock{
+			Kind:        BlockThinking,
+			Iteration:   de.Iteration,
+			ThinkingLen: len(de.Detail),
+		})
+	case "tool_start":
+		m.blocks = append(m.blocks, MainBlock{
+			Kind:       BlockToolCall,
+			Iteration:  de.Iteration,
+			ToolName:   de.ToolName,
+			ToolCallID: de.ToolCallID,
+			ToolArgs:   formatToolArgs(de.ToolName, de.RawArgs),
+		})
+		m.activeToolIdx = len(m.blocks) - 1
+	case "tool_end":
+		// Find the matching tool_start block by ToolCallID.
+		for i := len(m.blocks) - 1; i >= 0; i-- {
+			if m.blocks[i].Kind == BlockToolCall && m.blocks[i].ToolCallID == de.ToolCallID {
+				m.blocks[i].ToolDone = true
+				m.blocks[i].ToolResult = de.ToolResultText
+				m.blocks[i].ToolError = de.ToolIsError
+				break
+			}
+		}
+		m.activeToolIdx = -1
+	case "info":
+		m.blocks = append(m.blocks, MainBlock{
+			Kind:     BlockInfo,
+			InfoText: de.Detail,
+		})
+	// user_msg, turn_end, agent_end, session — skip (don't clutter main view)
+	}
+}
+
+// updateAssistantBlock updates the last assistant text block when streaming.
+func (m *Model) updateAssistantBlock(de DisplayEvent) {
+	for i := len(m.blocks) - 1; i >= 0; i-- {
+		if m.blocks[i].Kind == BlockAssistantText && m.blocks[i].Iteration == de.Iteration {
+			m.blocks[i].Text = de.Detail
+			return
+		}
+	}
+}
+
+// autoScrollMain adjusts mainScroll to keep the bottom visible when auto-scrolling.
+func (m *Model) autoScrollMain() {
+	if !m.mainAutoScroll {
+		return
+	}
+	// Compute total rendered line count. Use a rough estimate: each block
+	// contributes at least 1 line. The precise count is computed in renderMain()
+	// but we need to set mainScroll high enough that renderMain() shows the bottom.
+	// Setting mainScroll to a very large value works because renderMain() clamps it.
+	m.mainScroll = 999999
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -241,26 +345,36 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "j", "down":
-		if m.focusedPane == 0 && len(m.events) > 0 {
+		if m.focusedPane == 0 {
+			// Scroll main view down.
+			m.mainScroll++
+			m.mainAutoScroll = false
+		} else if m.focusedPane == 1 && len(m.events) > 0 {
 			if m.cursor < len(m.events)-1 {
 				m.cursor++
 				m.detailScroll = 0
 			}
 			m.autoScroll = m.cursor >= len(m.events)-1
 			m.ensureStreamCursorVisible()
-		} else if m.focusedPane == 1 {
+		} else if m.focusedPane == 2 {
 			m.detailScroll++
 		}
 
 	case "k", "up":
 		if m.focusedPane == 0 {
+			// Scroll main view up.
+			if m.mainScroll > 0 {
+				m.mainScroll--
+			}
+			m.mainAutoScroll = false
+		} else if m.focusedPane == 1 {
 			if m.cursor > 0 {
 				m.cursor--
 				m.detailScroll = 0
 			}
 			m.autoScroll = false
 			m.ensureStreamCursorVisible()
-		} else if m.focusedPane == 1 {
+		} else if m.focusedPane == 2 {
 			if m.detailScroll > 0 {
 				m.detailScroll--
 			}
@@ -268,6 +382,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "g":
 		if m.focusedPane == 0 {
+			m.mainScroll = 0
+			m.mainAutoScroll = false
+		} else if m.focusedPane == 1 {
 			m.cursor = 0
 			m.streamScroll = 0
 			m.detailScroll = 0
@@ -275,7 +392,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "G":
-		if m.focusedPane == 0 && len(m.events) > 0 {
+		if m.focusedPane == 0 {
+			m.mainScroll = 999999 // clamped in renderMain()
+			m.mainAutoScroll = true
+		} else if m.focusedPane == 1 && len(m.events) > 0 {
 			m.cursor = len(m.events) - 1
 			m.detailScroll = 0
 			m.autoScroll = true
@@ -283,24 +403,45 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "ctrl+d":
-		pageSize := m.paneHeight() / 2
-		if pageSize < 1 {
-			pageSize = 1
+		if m.focusedPane == 0 {
+			pageSize := m.mainHeight() / 2
+			if pageSize < 1 {
+				pageSize = 1
+			}
+			m.mainScroll += pageSize
+			m.mainAutoScroll = false
+		} else {
+			pageSize := m.paneHeight() / 2
+			if pageSize < 1 {
+				pageSize = 1
+			}
+			m.detailScroll += pageSize
 		}
-		m.detailScroll += pageSize
 
 	case "ctrl+u":
-		pageSize := m.paneHeight() / 2
-		if pageSize < 1 {
-			pageSize = 1
-		}
-		m.detailScroll -= pageSize
-		if m.detailScroll < 0 {
-			m.detailScroll = 0
+		if m.focusedPane == 0 {
+			pageSize := m.mainHeight() / 2
+			if pageSize < 1 {
+				pageSize = 1
+			}
+			m.mainScroll -= pageSize
+			if m.mainScroll < 0 {
+				m.mainScroll = 0
+			}
+			m.mainAutoScroll = false
+		} else {
+			pageSize := m.paneHeight() / 2
+			if pageSize < 1 {
+				pageSize = 1
+			}
+			m.detailScroll -= pageSize
+			if m.detailScroll < 0 {
+				m.detailScroll = 0
+			}
 		}
 
 	case "tab":
-		m.focusedPane = (m.focusedPane + 1) % 2
+		m.focusedPane = (m.focusedPane + 1) % 3
 
 	case "r":
 		m.rawMode = !m.rawMode
@@ -322,7 +463,28 @@ func (m *Model) ensureStreamCursorVisible() {
 	}
 }
 
-// Layout dimensions helpers.
+// Layout dimension helpers.
+
+func (m Model) usableHeight() int {
+	return m.height - 2 // 1 for header + 1 for status bar
+}
+
+func (m Model) mainHeight() int {
+	h := int(float64(m.usableHeight()) * 0.6)
+	if h < 5 {
+		h = 5
+	}
+	return h
+}
+
+func (m Model) bottomHeight() int {
+	h := m.usableHeight() - m.mainHeight()
+	if h < 5 {
+		h = 5
+	}
+	return h
+}
+
 func (m Model) streamWidth() int {
 	w := int(float64(m.width) * m.paneRatio)
 	if w < 16 {
@@ -340,15 +502,11 @@ func (m Model) detailWidth() int {
 }
 
 func (m Model) paneHeight() int {
-	h := m.usableHeight() - 2
+	h := m.bottomHeight() - 2 // account for borders
 	if h < 3 {
 		h = 3
 	}
 	return h
-}
-
-func (m Model) usableHeight() int {
-	return m.height - 2 // 1 for header + 1 for status bar
 }
 
 // View implements tea.Model.
@@ -358,12 +516,100 @@ func (m Model) View() string {
 	}
 
 	headerBar := m.renderHeader()
+	mainView := m.renderMain()
 	streamView := m.renderStream()
 	detailView := m.renderDetail()
 	statusBar := m.renderStatus()
 
-	middleRow := lipgloss.JoinHorizontal(lipgloss.Top, streamView, detailView)
-	return lipgloss.JoinVertical(lipgloss.Left, headerBar, middleRow, statusBar)
+	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, streamView, detailView)
+	return lipgloss.JoinVertical(lipgloss.Left, headerBar, mainView, bottomRow, statusBar)
+}
+
+func (m Model) renderMain() string {
+	w := m.width
+	ph := m.mainHeight()
+	contentWidth := w - 4 // inside borders + padding
+
+	// Build content from blocks.
+	var sections []string
+	for i := range m.blocks {
+		spinnerView := ""
+		if i == m.activeToolIdx {
+			spinnerView = m.spinner.View()
+		}
+		rendered := m.blocks[i].Render(contentWidth, spinnerView)
+		if rendered != "" {
+			sections = append(sections, rendered)
+		}
+	}
+	content := strings.Join(sections, "\n\n")
+
+	// Split into lines and apply scroll.
+	var allLines []string
+	if content != "" {
+		allLines = strings.Split(content, "\n")
+	}
+	visibleLines := ph - 1 // minus title line
+
+	maxScroll := len(allLines) - visibleLines
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+
+	scroll := m.mainScroll
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+
+	start := scroll
+	end := start + visibleLines
+	if end > len(allLines) {
+		end = len(allLines)
+	}
+
+	var lines []string
+	for i := start; i < end; i++ {
+		line := allLines[i]
+		if lipgloss.Width(line) > contentWidth {
+			w := 0
+			truncated := ""
+			for _, r := range line {
+				rw := runewidth.RuneWidth(r)
+				if w+rw > contentWidth {
+					break
+				}
+				truncated += string(r)
+				w += rw
+			}
+			line = truncated
+		}
+		lines = append(lines, line)
+	}
+
+	// Pad remaining.
+	for len(lines) < visibleLines {
+		lines = append(lines, "")
+	}
+
+	displayContent := strings.Join(lines, "\n")
+
+	title := " 📺 Live "
+	if len(allLines) > visibleLines {
+		title = fmt.Sprintf(" 📺 Live [%d/%d] ", scroll+1, len(allLines))
+	}
+
+	border := focusedBorder
+	if m.focusedPane != 0 {
+		border = unfocusedBorder
+	}
+
+	return border.
+		Width(w - 2).
+		Height(ph).
+		Render(titleStyle.Render(title) + "\n" + displayContent)
 }
 
 func (m Model) renderHeader() string {
@@ -465,7 +711,7 @@ func (m Model) renderStream() string {
 
 	title := fmt.Sprintf(" 📡 Stream (%d) ", len(m.events))
 	border := focusedBorder
-	if m.focusedPane != 0 {
+	if m.focusedPane != 1 {
 		border = unfocusedBorder
 	}
 
@@ -552,7 +798,7 @@ func (m Model) renderDetail() string {
 	}
 
 	border := focusedBorder
-	if m.focusedPane != 1 {
+	if m.focusedPane != 2 {
 		border = unfocusedBorder
 	}
 

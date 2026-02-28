@@ -17,6 +17,13 @@ type DisplayEvent struct {
 	Detail    string // full content for the detail pane
 	Timestamp time.Time
 	Iteration int
+
+	// Tool-specific fields for block rendering in the main view.
+	ToolCallID     string          // for matching tool_start with tool_end
+	ToolName       string          // tool name (e.g. "bash", "read")
+	RawArgs        json.RawMessage // raw tool arguments for formatToolArgs()
+	ToolResultText string          // plain result text for tool_end events
+	ToolIsError    bool            // true if tool execution had an error
 }
 
 // EventConverter accumulates runner events and produces DisplayEvents.
@@ -195,11 +202,14 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			detail += fmt.Sprintf("\nArgs: %s", argsSummary)
 		}
 		return []DisplayEvent{{
-			Type:      "tool_start",
-			Summary:   summary,
-			Detail:    detail,
-			Timestamp: now,
-			Iteration: c.iteration,
+			Type:       "tool_start",
+			Summary:    summary,
+			Detail:     detail,
+			Timestamp:  now,
+			Iteration:  c.iteration,
+			ToolCallID: ev.ToolCallID,
+			ToolName:   ev.ToolName,
+			RawArgs:    ev.Args,
 		}}
 
 	case runner.EventToolExecutionEnd:
@@ -211,17 +221,21 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			summary = fmt.Sprintf("✓ %s done", ev.ToolName)
 		}
 		detail := fmt.Sprintf("Tool: %s\nCall ID: %s\nError: %v", ev.ToolName, ev.ToolCallID, isErr)
+		var resultText string
 		if ev.Result != nil {
-			resultStr := string(ev.Result)
-			detail += fmt.Sprintf("\nResult:\n%s", resultStr)
+			resultText = string(ev.Result)
+			detail += fmt.Sprintf("\nResult:\n%s", resultText)
 		}
-		evType := "tool_end"
 		return []DisplayEvent{{
-			Type:      evType,
-			Summary:   summary,
-			Detail:    detail,
-			Timestamp: now,
-			Iteration: c.iteration,
+			Type:           "tool_end",
+			Summary:        summary,
+			Detail:         detail,
+			Timestamp:      now,
+			Iteration:      c.iteration,
+			ToolCallID:     ev.ToolCallID,
+			ToolName:       ev.ToolName,
+			ToolResultText: resultText,
+			ToolIsError:    isErr,
 		}}
 
 	case runner.EventTurnEnd:
