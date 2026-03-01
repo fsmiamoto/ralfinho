@@ -166,6 +166,18 @@ func TestParseHelp(t *testing.T) {
 	}
 }
 
+func TestParseVersion(t *testing.T) {
+	for _, flag := range []string{"--version", "-v"} {
+		cfg, err := Parse([]string{flag})
+		if err != nil {
+			t.Fatalf("Parse(%q): unexpected error: %v", flag, err)
+		}
+		if !cfg.ShowVersion {
+			t.Errorf("Parse(%q): ShowVersion = false, want true", flag)
+		}
+	}
+}
+
 func TestParseAgentFlag(t *testing.T) {
 	cfg, err := Parse([]string{"--agent", "myagent"})
 	if err != nil {

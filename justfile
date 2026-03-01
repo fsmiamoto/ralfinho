@@ -1,4 +1,6 @@
 binary := "ralfinho"
+version := `git describe --tags --always --dirty 2>/dev/null || echo dev`
+ldflags := "-X github.com/fsmiamoto/ralfinho/internal/cli.Version=" + version
 
 # Show available recipes
 help:
@@ -7,7 +9,7 @@ help:
 # Build the CLI into ./bin
 build:
     mkdir -p bin
-    go build -o bin/{{binary}} ./cmd/{{binary}}
+    go build -ldflags '{{ldflags}}' -o bin/{{binary}} ./cmd/{{binary}}
 
 # Run the CLI locally (pass args after --, e.g. just run -- --help)
 run *args:
@@ -27,7 +29,7 @@ test:
 
 # Install the CLI with Go into $GOBIN (or $GOPATH/bin)
 install: build
-    go install ./cmd/{{binary}}
+    go install -ldflags '{{ldflags}}' ./cmd/{{binary}}
 
 # Remove local build artifacts
 clean:

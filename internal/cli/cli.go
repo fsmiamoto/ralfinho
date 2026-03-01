@@ -23,8 +23,9 @@ type Config struct {
 	RunsDir       string // directory for run storage
 
 	// Subcommand
-	ViewRunID string // non-empty means "view <run-id>" subcommand
-	ViewList  bool   // true means "view" without a run-id (list mode)
+	ViewRunID   string // non-empty means "view <run-id>" subcommand
+	ViewList    bool   // true means "view" without a run-id (list mode)
+	ShowVersion bool   // true means --version was requested
 }
 
 const usage = `Usage: ralfinho [flags] [PROMPT_FILE]
@@ -39,6 +40,7 @@ Flags:
   -m, --max-iterations <n> Max iterations, 0=unlimited (default: 0)
   --no-tui                Disable TUI, use plain stderr output
   --runs-dir <path>       Runs directory (default: ".ralfinho/runs")
+  -v, --version           Show version
   -h, --help              Show this help
 
 Subcommands:
@@ -58,16 +60,18 @@ func Parse(args []string) (*Config, error) {
 	fs.SetOutput(io.Discard) // we handle output ourselves
 
 	var (
-		promptFlag string
-		planFlag   string
-		agentFlag  string
-		agentShort string
-		maxIter    string
-		maxShort   string
-		noTUI      bool
-		runsDir    string
-		help       bool
-		helpShort  bool
+		promptFlag   string
+		planFlag     string
+		agentFlag    string
+		agentShort   string
+		maxIter      string
+		maxShort     string
+		noTUI        bool
+		runsDir      string
+		help         bool
+		helpShort    bool
+		version      bool
+		versionShort bool
 	)
 
 	fs.StringVar(&promptFlag, "prompt", "", "")
@@ -80,6 +84,8 @@ func Parse(args []string) (*Config, error) {
 	fs.StringVar(&runsDir, "runs-dir", ".ralfinho/runs", "")
 	fs.BoolVar(&help, "help", false, "")
 	fs.BoolVar(&helpShort, "h", false, "")
+	fs.BoolVar(&version, "version", false, "")
+	fs.BoolVar(&versionShort, "v", false, "")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprint(os.Stderr, usage)
@@ -89,6 +95,10 @@ func Parse(args []string) (*Config, error) {
 	if help || helpShort {
 		fmt.Fprint(os.Stderr, usage)
 		return nil, errors.New("") // signals help-requested; caller exits 0
+	}
+
+	if version || versionShort {
+		return &Config{ShowVersion: true}, nil
 	}
 
 	// Resolve agent: short flag wins if set, then long flag, then default.

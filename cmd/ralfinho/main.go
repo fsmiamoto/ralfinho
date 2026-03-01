@@ -29,6 +29,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Handle --version flag.
+	if cfg.ShowVersion {
+		fmt.Printf("ralfinho %s\n", cli.Version)
+		return
+	}
+
 	// Handle "view" subcommand.
 	if cfg.ViewList {
 		listRuns(cfg)
