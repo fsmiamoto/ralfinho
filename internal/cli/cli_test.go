@@ -73,6 +73,27 @@ func TestParsePromptFlag(t *testing.T) {
 	}
 }
 
+func TestParsePromptFlagWithPositional(t *testing.T) {
+	_, err := Parse([]string{"--prompt", "my-prompt.md", "extra.md"})
+	if err == nil {
+		t.Fatal("expected error for --prompt with positional arg, got nil")
+	}
+}
+
+func TestParsePlanFlagWithPositional(t *testing.T) {
+	_, err := Parse([]string{"--plan", "plan.md", "extra.md"})
+	if err == nil {
+		t.Fatal("expected error for --plan with positional arg, got nil")
+	}
+}
+
+func TestParseMultiplePositional(t *testing.T) {
+	_, err := Parse([]string{"one.md", "two.md"})
+	if err == nil {
+		t.Fatal("expected error for multiple positional args, got nil")
+	}
+}
+
 func TestParsePlanFlag(t *testing.T) {
 	cfg, err := Parse([]string{"--plan", "plan.md"})
 	if err != nil {

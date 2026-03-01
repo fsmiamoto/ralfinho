@@ -119,6 +119,17 @@ func Parse(args []string) (*Config, error) {
 		return nil, fmt.Errorf("--prompt and --plan are mutually exclusive")
 	}
 
+	positional := fs.Args()
+	if promptFlag != "" && len(positional) > 0 {
+		return nil, fmt.Errorf("unexpected positional argument %q with --prompt", positional[0])
+	}
+	if planFlag != "" && len(positional) > 0 {
+		return nil, fmt.Errorf("unexpected positional argument %q with --plan", positional[0])
+	}
+	if len(positional) > 1 {
+		return nil, fmt.Errorf("expected at most one prompt file, got %d", len(positional))
+	}
+
 	// Determine input mode and file.
 	cfg := &Config{
 		Agent:         agent,
@@ -126,8 +137,6 @@ func Parse(args []string) (*Config, error) {
 		NoTUI:         noTUI,
 		RunsDir:       runsDir,
 	}
-
-	positional := fs.Args()
 
 	switch {
 	case promptFlag != "":

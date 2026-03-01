@@ -59,6 +59,11 @@ func TestBuildFromPlan(t *testing.T) {
 	if !strings.Contains(got, "one task") {
 		t.Error("output missing 'one task' instruction")
 	}
+
+	// Must instruct to git commit.
+	if !strings.Contains(got, "Git commit") {
+		t.Error("output missing git commit instruction")
+	}
 }
 
 func TestBuildFromPlan_NonExistent(t *testing.T) {
@@ -129,5 +134,10 @@ func TestBuildDefault(t *testing.T) {
 	// Must instruct to do only one task.
 	if !strings.Contains(got, "one task") {
 		t.Error("BuildDefault() missing 'one task' instruction")
+	}
+
+	// Must instruct to git commit.
+	if !strings.Contains(got, "Git commit") {
+		t.Error("BuildDefault() missing git commit instruction")
 	}
 }
