@@ -14,6 +14,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os/exec"
@@ -306,6 +307,196 @@ func (c *acpClient) initialize(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Session update kinds
+// ---------------------------------------------------------------------------
+
+const (
+	// updateKindAgentMessage is emitted when the agent produces a text chunk.
+	updateKindAgentMessage = "AgentMessageChunk"
+
+	// updateKindToolCall is emitted when a tool call is created or completes.
+	updateKindToolCall = "ToolCall"
+
+	// updateKindToolCallUpdate is emitted for tool call progress updates.
+	updateKindToolCallUpdate = "ToolCallUpdate"
+
+	// updateKindTurnEnd signals the end of the agent's turn.
+	updateKindTurnEnd = "TurnEnd"
+)
+
+// ---------------------------------------------------------------------------
+// Session types
+// ---------------------------------------------------------------------------
+
+type sessionNewParams struct {
+	CWD string `json:"cwd"`
+}
+
+type sessionNewResult struct {
+	SessionID string `json:"sessionId"`
+}
+
+type sessionPromptParams struct {
+	SessionID string        `json:"sessionId"`
+	Prompt    promptContent `json:"prompt"`
+}
+
+type promptContent struct {
+	Content []contentBlock `json:"content"`
+}
+
+type contentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+// sessionUpdate represents a single update from a session/notification.
+// Kind identifies the update type (see updateKind* constants). Raw holds the
+// full JSON of the update object for downstream parsing of kind-specific fields.
+type sessionUpdate struct {
+	Kind string
+	Raw  json.RawMessage
+}
+
+// ---------------------------------------------------------------------------
+// Session methods
+// ---------------------------------------------------------------------------
+
+// sessionNew creates a new ACP session with the given working directory.
+// Returns the session ID assigned by the server.
+func (c *acpClient) sessionNew(ctx context.Context, cwd string) (string, error) {
+	resp, err := c.call(ctx, "session/new", sessionNewParams{CWD: cwd})
+	if err != nil {
+		return "", fmt.Errorf("session/new: %w", err)
+	}
+	var result sessionNewResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return "", fmt.Errorf("session/new: unmarshal result: %w", err)
+	}
+	if result.SessionID == "" {
+		return "", fmt.Errorf("session/new: empty session ID in response")
+	}
+	return result.SessionID, nil
+}
+
+// sessionPrompt sends a prompt to the given session and streams updates
+// back to the caller via onUpdate. Blocks until a TurnEnd update is received,
+// the context is cancelled, or the connection is closed.
+//
+// The onUpdate callback is called synchronously for each update — it should
+// not block.
+//
+// Note: permission requests (session/request_permission) arriving from the
+// server during prompt execution must be handled separately by consuming
+// from c.ReverseReqs concurrently.
+func (c *acpClient) sessionPrompt(ctx context.Context, sessionID, prompt string, onUpdate func(sessionUpdate)) error {
+	params := sessionPromptParams{
+		SessionID: sessionID,
+		Prompt: promptContent{
+			Content: []contentBlock{
+				{Type: "text", Text: prompt},
+			},
+		},
+	}
+
+	// Build the request manually instead of using call() because we need
+	// to process streaming notifications concurrently with waiting for the
+	// final response.
+	req := c.codec.newRequest("session/prompt", params)
+
+	// Register a response channel to detect errors or completion.
+	respCh := make(chan *rpcMessage, 1)
+	c.pendingMu.Lock()
+	if c.pending == nil {
+		c.pendingMu.Unlock()
+		return fmt.Errorf("acp: connection already closed")
+	}
+	c.pending[req.ID] = respCh
+	c.pendingMu.Unlock()
+
+	defer func() {
+		c.pendingMu.Lock()
+		if c.pending != nil {
+			delete(c.pending, req.ID)
+		}
+		c.pendingMu.Unlock()
+	}()
+
+	if err := c.codec.send(req); err != nil {
+		return fmt.Errorf("acp: send session/prompt: %w", err)
+	}
+
+	// Read events until TurnEnd, an error response, or cancellation.
+	for {
+		select {
+		case msg := <-c.Notifications:
+			if msg.Method != "session/notification" {
+				continue // ignore unrelated notifications
+			}
+			updates, err := parseNotificationUpdates(msg)
+			if err != nil {
+				continue // skip malformed notifications
+			}
+			for _, u := range updates {
+				onUpdate(u)
+				if u.Kind == updateKindTurnEnd {
+					return nil
+				}
+			}
+
+		case msg, ok := <-respCh:
+			if !ok {
+				// Channel closed by readLoop — connection died.
+				return fmt.Errorf("acp: connection closed during session/prompt: %v", c.readErr)
+			}
+			if msg.Error != nil {
+				return fmt.Errorf("acp: session/prompt error %d: %s", msg.Error.Code, msg.Error.Message)
+			}
+			// Success response arrived (typically after TurnEnd, but handle
+			// the case where the response arrives first).
+			return nil
+
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case <-c.done:
+			return fmt.Errorf("acp: connection closed during session/prompt: %v", c.readErr)
+		}
+	}
+}
+
+// parseNotificationUpdates extracts the updates array from a
+// session/notification's params. Returns one sessionUpdate per element,
+// each carrying its Kind and the full Raw JSON for downstream parsing.
+func parseNotificationUpdates(msg *rpcMessage) ([]sessionUpdate, error) {
+	if msg.Params == nil {
+		return nil, fmt.Errorf("notification has no params")
+	}
+
+	var params struct {
+		Updates []json.RawMessage `json:"updates"`
+	}
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		return nil, fmt.Errorf("unmarshal notification params: %w", err)
+	}
+
+	updates := make([]sessionUpdate, 0, len(params.Updates))
+	for _, raw := range params.Updates {
+		var header struct {
+			Kind string `json:"kind"`
+		}
+		if err := json.Unmarshal(raw, &header); err != nil {
+			continue // skip malformed updates
+		}
+		if header.Kind == "" {
+			continue // skip updates with no kind
+		}
+		updates = append(updates, sessionUpdate{Kind: header.Kind, Raw: raw})
+	}
+	return updates, nil
 }
 
 // ---------------------------------------------------------------------------

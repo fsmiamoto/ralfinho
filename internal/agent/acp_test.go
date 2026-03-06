@@ -259,6 +259,367 @@ func TestACPClient_ConnectionClosed(t *testing.T) {
 	cleanup()
 }
 
+// ---------------------------------------------------------------------------
+// Session method tests
+// ---------------------------------------------------------------------------
+
+func TestACPClient_SessionNew(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	type result struct {
+		id  string
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		id, err := c.sessionNew(ctx, "/workspace")
+		ch <- result{id, err}
+	}()
+
+	// Give the goroutine time to send the request.
+	time.Sleep(50 * time.Millisecond)
+
+	// Server responds with a session ID.
+	resp := `{"jsonrpc":"2.0","id":1,"result":{"sessionId":"sess-abc-123"}}`
+	if err := writeFramed(serverW, []byte(resp)); err != nil {
+		t.Fatalf("writeFramed: %v", err)
+	}
+
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			t.Fatalf("sessionNew returned error: %v", r.err)
+		}
+		if r.id != "sess-abc-123" {
+			t.Errorf("expected session ID %q, got %q", "sess-abc-123", r.id)
+		}
+	case <-ctx.Done():
+		t.Fatal("sessionNew timed out")
+	}
+}
+
+func TestACPClient_SessionNew_EmptyID(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	ch := make(chan error, 1)
+	go func() {
+		_, err := c.sessionNew(ctx, "/workspace")
+		ch <- err
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Server responds with an empty session ID.
+	resp := `{"jsonrpc":"2.0","id":1,"result":{"sessionId":""}}`
+	if err := writeFramed(serverW, []byte(resp)); err != nil {
+		t.Fatalf("writeFramed: %v", err)
+	}
+
+	select {
+	case err := <-ch:
+		if err == nil {
+			t.Fatal("expected error for empty session ID, got nil")
+		}
+		if !strings.Contains(err.Error(), "empty session ID") {
+			t.Errorf("error should mention 'empty session ID', got: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("sessionNew timed out")
+	}
+}
+
+func TestACPClient_SessionPrompt(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var received []sessionUpdate
+	var mu sync.Mutex
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- c.sessionPrompt(ctx, "sess-123", "hello world", func(u sessionUpdate) {
+			mu.Lock()
+			received = append(received, u)
+			mu.Unlock()
+		})
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Send AgentMessageChunk notification.
+	notif1 := `{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"sess-123","updates":[{"kind":"AgentMessageChunk","text":"Hello "}]}}`
+	if err := writeFramed(serverW, []byte(notif1)); err != nil {
+		t.Fatalf("writeFramed notif1: %v", err)
+	}
+
+	// Send ToolCall notification.
+	notif2 := `{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"sess-123","updates":[{"kind":"ToolCall","toolName":"read_file","status":"completed"}]}}`
+	if err := writeFramed(serverW, []byte(notif2)); err != nil {
+		t.Fatalf("writeFramed notif2: %v", err)
+	}
+
+	// Send TurnEnd notification.
+	notif3 := `{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"sess-123","updates":[{"kind":"TurnEnd"}]}}`
+	if err := writeFramed(serverW, []byte(notif3)); err != nil {
+		t.Fatalf("writeFramed notif3: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("sessionPrompt returned error: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("sessionPrompt timed out")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(received) != 3 {
+		t.Fatalf("expected 3 updates, got %d", len(received))
+	}
+	if received[0].Kind != updateKindAgentMessage {
+		t.Errorf("update 0: expected %s, got %s", updateKindAgentMessage, received[0].Kind)
+	}
+	if received[1].Kind != updateKindToolCall {
+		t.Errorf("update 1: expected %s, got %s", updateKindToolCall, received[1].Kind)
+	}
+	if received[2].Kind != updateKindTurnEnd {
+		t.Errorf("update 2: expected %s, got %s", updateKindTurnEnd, received[2].Kind)
+	}
+}
+
+func TestACPClient_SessionPrompt_MultipleUpdatesPerNotification(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var received []sessionUpdate
+	var mu sync.Mutex
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- c.sessionPrompt(ctx, "sess-123", "test", func(u sessionUpdate) {
+			mu.Lock()
+			received = append(received, u)
+			mu.Unlock()
+		})
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Send a single notification with multiple updates including TurnEnd.
+	notif := `{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"sess-123","updates":[{"kind":"AgentMessageChunk","text":"done"},{"kind":"TurnEnd"}]}}`
+	if err := writeFramed(serverW, []byte(notif)); err != nil {
+		t.Fatalf("writeFramed: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("sessionPrompt returned error: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("sessionPrompt timed out")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(received) != 2 {
+		t.Fatalf("expected 2 updates, got %d", len(received))
+	}
+	if received[0].Kind != updateKindAgentMessage {
+		t.Errorf("update 0: expected %s, got %s", updateKindAgentMessage, received[0].Kind)
+	}
+	if received[1].Kind != updateKindTurnEnd {
+		t.Errorf("update 1: expected %s, got %s", updateKindTurnEnd, received[1].Kind)
+	}
+}
+
+func TestACPClient_SessionPromptError(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- c.sessionPrompt(ctx, "sess-bad", "hello", func(u sessionUpdate) {})
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Server responds with an error to the session/prompt request.
+	resp := `{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"session not found"}}`
+	if err := writeFramed(serverW, []byte(resp)); err != nil {
+		t.Fatalf("writeFramed: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "session not found") {
+			t.Errorf("error should contain 'session not found', got: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("sessionPrompt did not return after error")
+	}
+}
+
+func TestACPClient_SessionPrompt_ConnectionClose(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- c.sessionPrompt(ctx, "sess-123", "hello", func(u sessionUpdate) {})
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Close the server writer to simulate kiro process exit.
+	serverW.Close()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected error on connection close, got nil")
+		}
+		if !strings.Contains(err.Error(), "connection closed") {
+			t.Errorf("error should mention 'connection closed', got: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("sessionPrompt did not return after connection close")
+	}
+
+	cleanup()
+}
+
+// ---------------------------------------------------------------------------
+// parseNotificationUpdates tests
+// ---------------------------------------------------------------------------
+
+func TestParseNotificationUpdates(t *testing.T) {
+	tests := []struct {
+		name      string
+		params    string
+		wantKinds []string
+		wantErr   bool
+	}{
+		{
+			name:      "single update",
+			params:    `{"updates":[{"kind":"TurnEnd"}]}`,
+			wantKinds: []string{"TurnEnd"},
+		},
+		{
+			name:      "multiple updates",
+			params:    `{"updates":[{"kind":"AgentMessageChunk","text":"hi"},{"kind":"TurnEnd"}]}`,
+			wantKinds: []string{"AgentMessageChunk", "TurnEnd"},
+		},
+		{
+			name:      "empty updates array",
+			params:    `{"updates":[]}`,
+			wantKinds: []string{},
+		},
+		{
+			name:    "nil params",
+			params:  "",
+			wantErr: true,
+		},
+		{
+			name:      "skip invalid JSON element",
+			params:    `{"updates":[{"kind":"Good"},42,{"kind":"AlsoGood"}]}`,
+			wantKinds: []string{"Good", "AlsoGood"},
+		},
+		{
+			name:      "skip empty kind",
+			params:    `{"updates":[{"kind":""},{"kind":"Valid"}]}`,
+			wantKinds: []string{"Valid"},
+		},
+		{
+			name:      "no updates field",
+			params:    `{"sessionId":"s1"}`,
+			wantKinds: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &rpcMessage{}
+			if tt.params != "" {
+				msg.Params = json.RawMessage(tt.params)
+			}
+			updates, err := parseNotificationUpdates(msg)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(updates) != len(tt.wantKinds) {
+				t.Fatalf("expected %d updates, got %d", len(tt.wantKinds), len(updates))
+			}
+			for i, want := range tt.wantKinds {
+				if updates[i].Kind != want {
+					t.Errorf("update %d: expected kind %q, got %q", i, want, updates[i].Kind)
+				}
+			}
+		})
+	}
+}
+
+func TestParseNotificationUpdates_RawPreserved(t *testing.T) {
+	params := `{"updates":[{"kind":"ToolCall","toolName":"bash","input":{"command":"ls"}}]}`
+	msg := &rpcMessage{Params: json.RawMessage(params)}
+
+	updates, err := parseNotificationUpdates(msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(updates))
+	}
+
+	// Verify the Raw field contains the full JSON of the update element.
+	var raw map[string]interface{}
+	if err := json.Unmarshal(updates[0].Raw, &raw); err != nil {
+		t.Fatalf("unmarshal raw: %v", err)
+	}
+	if raw["toolName"] != "bash" {
+		t.Errorf("expected toolName=bash, got %v", raw["toolName"])
+	}
+	if raw["kind"] != "ToolCall" {
+		t.Errorf("expected kind=ToolCall in raw, got %v", raw["kind"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Existing tests
+// ---------------------------------------------------------------------------
+
 func TestACPClient_Notify(t *testing.T) {
 	c, _, drainBuf, cleanup := mockACPClient(t)
 	defer cleanup()
