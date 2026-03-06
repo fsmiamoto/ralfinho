@@ -7,6 +7,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/fsmiamoto/ralfinho/internal/events"
@@ -63,4 +64,23 @@ func ApplyOptions(opts []Option) Options {
 		fn(&o)
 	}
 	return o
+}
+
+// Resolve maps an agent name to a concrete Agent implementation.
+//
+// Supported names:
+//   - "pi"   → PiAgent (invokes the pi CLI tool)
+//   - "kiro" → KiroAgent (invokes kiro-cli via ACP protocol)
+//
+// Unknown names produce a clear error listing the supported agents.
+// Options (e.g. WithRawWriter) are forwarded to the chosen implementation.
+func Resolve(name string, opts ...Option) (Agent, error) {
+	switch name {
+	case "pi":
+		return NewPiAgent("pi", opts...), nil
+	case "kiro":
+		return NewKiroAgent(opts...), nil
+	default:
+		return nil, fmt.Errorf("unknown agent %q (supported: pi, kiro)", name)
+	}
 }

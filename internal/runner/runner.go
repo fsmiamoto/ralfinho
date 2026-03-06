@@ -99,7 +99,15 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 	if r.rawFile != nil {
 		agentOpts = append(agentOpts, agent.WithRawWriter(r.rawFile))
 	}
-	r.iterAgent = agent.NewPiAgent(r.cfg.Agent, agentOpts...)
+	resolved, err := agent.Resolve(r.cfg.Agent, agentOpts...)
+	if err != nil {
+		r.logf("error: %v\n", err)
+		result.Status = StatusFailed
+		r.writeMeta(result)
+		r.closeRunFiles()
+		return result
+	}
+	r.iterAgent = resolved
 
 	done := false
 	for !done {

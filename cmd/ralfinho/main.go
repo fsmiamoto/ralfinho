@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/fsmiamoto/ralfinho/internal/agent"
 	"github.com/fsmiamoto/ralfinho/internal/cli"
 	"github.com/fsmiamoto/ralfinho/internal/prompt"
 	"github.com/fsmiamoto/ralfinho/internal/runner"
@@ -43,6 +44,12 @@ func main() {
 	if cfg.ViewRunID != "" {
 		runViewer(cfg)
 		return
+	}
+
+	// Validate agent name early (before creating run dirs / prompt resolution).
+	if _, err := agent.Resolve(cfg.Agent); err != nil {
+		fmt.Fprintf(os.Stderr, "ralfinho: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Resolve the prompt text.
