@@ -47,6 +47,7 @@ type RunResult struct {
 	RunID      string
 	Iterations int
 	Status     Status
+	Agent      string
 }
 
 // Runner drives the agent iteration loop.
@@ -82,6 +83,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 	result := RunResult{
 		RunID:  r.runID,
 		Status: StatusRunning,
+		Agent:  r.cfg.Agent,
 	}
 
 	r.logf("run %s started (agent=%s, max_iterations=%d)\n", r.runID, r.cfg.Agent, r.cfg.MaxIterations)

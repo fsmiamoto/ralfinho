@@ -76,8 +76,12 @@ func NewModel(ch <-chan runner.Event) Model {
 // NewViewerModel creates a read-only TUI model pre-loaded with events.
 // It is used for replaying a saved run — no event channel, not running.
 func NewViewerModel(events []DisplayEvent, meta runner.RunMeta) Model {
-	status := fmt.Sprintf("Run %s | %s | %s | %d iterations",
-		shortID(meta.RunID), meta.Status, meta.StartedAt, meta.IterationsCompleted)
+	agentName := meta.Agent
+	if agentName == "" {
+		agentName = "pi"
+	}
+	status := fmt.Sprintf("Run %s | %s | %s | %s | %d iterations",
+		shortID(meta.RunID), agentName, meta.Status, meta.StartedAt, meta.IterationsCompleted)
 
 	m := Model{
 		events:         events,
@@ -164,7 +168,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DoneMsg:
 		m.running = false
-		m.status = fmt.Sprintf("Done — %s (%d iterations)", msg.Result.Status, msg.Result.Iterations)
+		m.status = fmt.Sprintf("Done — %s | %s (%d iterations)", msg.Result.Agent, msg.Result.Status, msg.Result.Iterations)
 		m.result = &msg.Result
 		return m, nil
 
