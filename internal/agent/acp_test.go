@@ -1,0 +1,286 @@
+package agent
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// mockACPClient builds an acpClient wired to in-memory pipes instead of a real
+// subprocess. Returns the client, a writer to simulate kiro→client messages,
+// and a function to stop the drain goroutine.
+//
+// Writes from client→kiro are drained into a buffer accessible via the
+// returned drainBuf. This prevents send() from blocking on synchronous pipes.
+func mockACPClient(t *testing.T) (c *acpClient, serverW io.WriteCloser, drainBuf *safeBuffer, cleanup func()) {
+	t.Helper()
+
+	// kiro stdout → client (client reads from here)
+	serverToClientR, serverToClientW := io.Pipe()
+	// client → kiro stdin (client writes here)
+	clientToServerR, clientToServerW := io.Pipe()
+
+	c = &acpClient{
+		codec:         newRPCCodec(serverToClientR, clientToServerW),
+		pending:       make(map[int64]chan<- *rpcMessage),
+		Notifications: make(chan *rpcMessage, 128),
+		ReverseReqs:   make(chan *rpcMessage, 16),
+		done:          make(chan struct{}),
+	}
+	go c.readLoop()
+
+	// Drain client→server pipe in background so send() doesn't block.
+	buf := &safeBuffer{}
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		io.Copy(buf, clientToServerR)
+	}()
+
+	cleanup = func() {
+		serverToClientW.Close()
+		clientToServerW.Close()
+		<-c.done
+		clientToServerR.Close()
+		<-drainDone
+	}
+
+	return c, serverToClientW, buf, cleanup
+}
+
+// safeBuffer is a bytes.Buffer protected by a mutex for concurrent access.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuffer) Write(p []byte) (n int, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return bytes.Clone(b.buf.Bytes())
+}
+
+// writeFramed writes a Content-Length framed JSON-RPC message to w.
+func writeFramed(w io.Writer, body []byte) error {
+	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(body))
+	if _, err := io.WriteString(w, header); err != nil {
+		return err
+	}
+	_, err := w.Write(body)
+	return err
+}
+
+func TestACPClient_CallResponse(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	type callResult struct {
+		msg *rpcMessage
+		err error
+	}
+	ch := make(chan callResult, 1)
+	go func() {
+		msg, err := c.call(ctx, "test/method", map[string]string{"key": "value"})
+		ch <- callResult{msg, err}
+	}()
+
+	// Give the call a moment to send the request and register the channel.
+	time.Sleep(50 * time.Millisecond)
+
+	// Simulate server sending a response with id=1 (first auto-incremented ID).
+	resp := `{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}`
+	if err := writeFramed(serverW, []byte(resp)); err != nil {
+		t.Fatalf("writeFramed: %v", err)
+	}
+
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			t.Fatalf("call returned error: %v", r.err)
+		}
+		if r.msg.Result == nil {
+			t.Fatal("expected non-nil result")
+		}
+		var result map[string]string
+		if err := json.Unmarshal(r.msg.Result, &result); err != nil {
+			t.Fatalf("unmarshal result: %v", err)
+		}
+		if result["status"] != "ok" {
+			t.Errorf("expected status=ok, got %q", result["status"])
+		}
+	case <-ctx.Done():
+		t.Fatal("call timed out")
+	}
+}
+
+func TestACPClient_CallError(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	ch := make(chan error, 1)
+	go func() {
+		_, err := c.call(ctx, "test/error", nil)
+		ch <- err
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	resp := `{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid Request"}}`
+	if err := writeFramed(serverW, []byte(resp)); err != nil {
+		t.Fatalf("writeFramed: %v", err)
+	}
+
+	select {
+	case err := <-ch:
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "Invalid Request") {
+			t.Errorf("error should contain 'Invalid Request', got: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("call timed out")
+	}
+}
+
+func TestACPClient_NotificationDispatch(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	notif := `{"jsonrpc":"2.0","method":"session/notification","params":{"kind":"test"}}`
+	if err := writeFramed(serverW, []byte(notif)); err != nil {
+		t.Fatalf("writeFramed: %v", err)
+	}
+
+	select {
+	case msg := <-c.Notifications:
+		if msg.Method != "session/notification" {
+			t.Errorf("expected method session/notification, got %q", msg.Method)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("notification not received")
+	}
+}
+
+func TestACPClient_ReverseRequestDispatch(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	req := `{"jsonrpc":"2.0","id":99,"method":"session/request_permission","params":{"permission":"fs_write"}}`
+	if err := writeFramed(serverW, []byte(req)); err != nil {
+		t.Fatalf("writeFramed: %v", err)
+	}
+
+	select {
+	case msg := <-c.ReverseReqs:
+		if msg.Method != "session/request_permission" {
+			t.Errorf("expected method session/request_permission, got %q", msg.Method)
+		}
+		resp := newResponse(msg.ID, "allow_always")
+		if resp.JSONRPC != jsonrpcVersion {
+			t.Errorf("expected jsonrpc %q, got %q", jsonrpcVersion, resp.JSONRPC)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reverse request not received")
+	}
+}
+
+func TestACPClient_CallContextCancellation(t *testing.T) {
+	c, _, _, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ch := make(chan error, 1)
+	go func() {
+		_, err := c.call(ctx, "test/cancelled", nil)
+		ch <- err
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-ch:
+		if err != context.Canceled {
+			t.Errorf("expected context.Canceled, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("call did not return after context cancellation")
+	}
+}
+
+func TestACPClient_ConnectionClosed(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+	// Don't defer cleanup — we manually close serverW mid-test.
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	ch := make(chan error, 1)
+	go func() {
+		_, err := c.call(ctx, "test/closed", nil)
+		ch <- err
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	serverW.Close() // simulate kiro process exit
+
+	select {
+	case err := <-ch:
+		if err == nil {
+			t.Fatal("expected error on connection close, got nil")
+		}
+		if !strings.Contains(err.Error(), "connection closed") {
+			t.Errorf("error should mention 'connection closed', got: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("call did not return after connection close")
+	}
+
+	cleanup()
+}
+
+func TestACPClient_Notify(t *testing.T) {
+	c, _, drainBuf, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	if err := c.notify("initialized", nil); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+
+	// Give the drain goroutine a moment to capture the bytes.
+	time.Sleep(50 * time.Millisecond)
+
+	// Parse what was captured and verify it's a proper notification.
+	captured := drainBuf.Bytes()
+	codec := newRPCCodec(bytes.NewReader(captured), io.Discard)
+	msg, err := codec.readMessage()
+	if err != nil {
+		t.Fatalf("readMessage from captured bytes: %v", err)
+	}
+	if msg.Method != "initialized" {
+		t.Errorf("expected method 'initialized', got %q", msg.Method)
+	}
+	if msg.ID != nil {
+		t.Error("notification should not have an id")
+	}
+}

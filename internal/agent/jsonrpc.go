@@ -34,6 +34,14 @@ type rpcRequest struct {
 	Params  interface{} `json:"params,omitempty"`
 }
 
+// rpcNotification is an outgoing JSON-RPC 2.0 notification (no id, no
+// response expected). Used for messages like "initialized".
+type rpcNotification struct {
+	JSONRPC string      `json:"jsonrpc"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params,omitempty"`
+}
+
 // rpcResponse is an outgoing JSON-RPC 2.0 response (reply to a reverse request
 // initiated by the server, such as permission prompts).
 type rpcResponse struct {
