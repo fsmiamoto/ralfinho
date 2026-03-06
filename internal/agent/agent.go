@@ -9,7 +9,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/fsmiamoto/ralfinho/internal/runner"
+	"github.com/fsmiamoto/ralfinho/internal/events"
 )
 
 // Agent is the contract for a coding-agent backend.
@@ -17,7 +17,7 @@ import (
 // Implementations are responsible for:
 //   - Spawning and managing the underlying subprocess (or connection).
 //   - Sending the prompt text to the agent.
-//   - Parsing the agent's output into runner.Event values.
+//   - Parsing the agent's output into events.Event values.
 //   - Calling onEvent for each parsed event so the runner can persist and
 //     forward them in real time.
 //   - Returning the accumulated assistant text (used by the runner to detect
@@ -36,7 +36,7 @@ type Agent interface {
 	//
 	// Context cancellation should cause the agent to terminate its subprocess
 	// promptly. The returned error may wrap context.Canceled in that case.
-	RunIteration(ctx context.Context, prompt string, onEvent func(runner.Event)) (assistantText string, err error)
+	RunIteration(ctx context.Context, prompt string, onEvent func(events.Event)) (assistantText string, err error)
 }
 
 // Option configures optional agent behavior.
