@@ -49,7 +49,7 @@ that as the plan. Otherwise it runs with a minimal default prompt.
 ```
 --prompt <file>           Explicit prompt file
 --plan <file>             Plan file (generates prompt from template)
--a, --agent <name>        Agent executable (default: pi)
+-a, --agent <name>        Agent backend: "pi" or "kiro" (default: pi)
 -m, --max-iterations <n>  Max iterations, 0=unlimited (default: 0)
 --no-tui                  Disable TUI, plain stderr output
 --runs-dir <path>         Runs directory (default: .ralfinho/runs)
@@ -61,6 +61,50 @@ that as the plan. Otherwise it runs with a minimal default prompt.
 ralfinho view              # List all runs
 ralfinho view <run-id>     # View a specific run (supports prefix matching)
 ```
+
+## Agent Backends
+
+Ralfinho supports multiple AI agent backends via the `--agent` flag. Each
+backend communicates with its respective CLI tool and translates events into a
+common format for the TUI and run artifacts.
+
+### pi (default)
+
+The default backend. Uses the [pi](https://pi.dev) CLI tool, communicating via
+JSONL over stdout.
+
+```bash
+ralfinho --plan PLAN.md                # uses pi by default
+ralfinho --agent pi --plan PLAN.md     # explicit
+```
+
+**Prerequisites:** `pi` must be installed and available in your `PATH`.
+
+### kiro
+
+Uses [kiro-cli](https://kiro.dev) via the
+[Agent Communication Protocol (ACP)](https://kiro.dev/docs/cli/acp/) — a
+JSON-RPC 2.0 protocol over stdin/stdout.
+
+```bash
+ralfinho --agent kiro --plan PLAN.md
+```
+
+**Prerequisites:**
+- `kiro-cli` must be installed and available in your `PATH`. See
+  https://kiro.dev/cli/ for installation instructions.
+- You must be authenticated (`kiro-cli auth login`).
+
+**Behavioral differences from pi:**
+- Tool permissions are auto-approved (`allow_always`) — ralfinho assumes
+  sandboxing is handled externally.
+- Each iteration spawns a fresh `kiro-cli acp` subprocess (same one-shot model
+  as pi).
+- The model name in events is reported as `"kiro"` since the ACP protocol does
+  not expose the underlying model.
+- Run artifacts (`events.jsonl`, `session.log`, `meta.json`) are populated
+  identically to pi runs. `raw-output.log` contains raw JSON-RPC frames instead
+  of JSONL.
 
 ## Run Artifacts
 
