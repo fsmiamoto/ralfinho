@@ -617,6 +617,254 @@ func TestParseNotificationUpdates_RawPreserved(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Permission auto-approve tests
+// ---------------------------------------------------------------------------
+
+func TestACPClient_AutoApprovePermissions(t *testing.T) {
+	c, serverW, drainBuf, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Start the auto-approve handler.
+	go c.autoApprovePermissions(ctx)
+
+	// Simulate kiro sending a permission request.
+	req := `{"jsonrpc":"2.0","id":42,"method":"session/request_permission","params":{"permission":"fs_write","path":"/foo"}}`
+	if err := writeFramed(serverW, []byte(req)); err != nil {
+		t.Fatalf("writeFramed: %v", err)
+	}
+
+	// Give the handler time to process and respond.
+	time.Sleep(100 * time.Millisecond)
+
+	// Read the response from the drain buffer.
+	captured := drainBuf.Bytes()
+	codec := newRPCCodec(bytes.NewReader(captured), io.Discard)
+	msg, err := codec.readMessage()
+	if err != nil {
+		t.Fatalf("readMessage from captured bytes: %v", err)
+	}
+
+	// Verify the response has the correct ID (42).
+	id, ok := rpcIDInt(msg.ID)
+	if !ok {
+		t.Fatal("response should have a numeric ID")
+	}
+	if id != 42 {
+		t.Errorf("expected response ID 42, got %d", id)
+	}
+
+	// Verify the result is "allow_always".
+	var result string
+	if err := json.Unmarshal(msg.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if result != "allow_always" {
+		t.Errorf("expected result %q, got %q", "allow_always", result)
+	}
+}
+
+func TestACPClient_AutoApprovePermissions_Multiple(t *testing.T) {
+	c, serverW, drainBuf, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go c.autoApprovePermissions(ctx)
+
+	// Send three permission requests with different IDs.
+	for _, id := range []int{10, 20, 30} {
+		req := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"session/request_permission","params":{"permission":"bash"}}`, id)
+		if err := writeFramed(serverW, []byte(req)); err != nil {
+			t.Fatalf("writeFramed id=%d: %v", id, err)
+		}
+	}
+
+	// Give the handler time to process all three.
+	time.Sleep(150 * time.Millisecond)
+
+	// Read all three responses.
+	captured := drainBuf.Bytes()
+	codec := newRPCCodec(bytes.NewReader(captured), io.Discard)
+
+	gotIDs := make(map[int64]bool)
+	for i := 0; i < 3; i++ {
+		msg, err := codec.readMessage()
+		if err != nil {
+			t.Fatalf("readMessage %d: %v", i, err)
+		}
+		id, ok := rpcIDInt(msg.ID)
+		if !ok {
+			t.Fatalf("response %d: expected numeric ID", i)
+		}
+		gotIDs[id] = true
+
+		var result string
+		if err := json.Unmarshal(msg.Result, &result); err != nil {
+			t.Fatalf("response %d: unmarshal result: %v", i, err)
+		}
+		if result != "allow_always" {
+			t.Errorf("response %d: expected %q, got %q", i, "allow_always", result)
+		}
+	}
+
+	// Verify all three IDs were responded to.
+	for _, id := range []int64{10, 20, 30} {
+		if !gotIDs[id] {
+			t.Errorf("missing response for ID %d", id)
+		}
+	}
+}
+
+func TestACPClient_AutoApprovePermissions_IgnoresOtherMethods(t *testing.T) {
+	c, serverW, drainBuf, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go c.autoApprovePermissions(ctx)
+
+	// Send a reverse request that is NOT a permission request.
+	req := `{"jsonrpc":"2.0","id":99,"method":"session/some_other_thing","params":{}}`
+	if err := writeFramed(serverW, []byte(req)); err != nil {
+		t.Fatalf("writeFramed: %v", err)
+	}
+
+	// Give time for potential processing.
+	time.Sleep(100 * time.Millisecond)
+
+	// No response should have been sent.
+	captured := drainBuf.Bytes()
+	if len(captured) > 0 {
+		t.Errorf("expected no response for non-permission request, but got %d bytes: %s", len(captured), captured)
+	}
+}
+
+func TestACPClient_AutoApprovePermissions_ContextCancel(t *testing.T) {
+	c, _, _, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		c.autoApprovePermissions(ctx)
+		close(done)
+	}()
+
+	// Cancel the context and verify the handler exits promptly.
+	cancel()
+
+	select {
+	case <-done:
+		// Handler exited as expected.
+	case <-time.After(2 * time.Second):
+		t.Fatal("autoApprovePermissions did not exit after context cancellation")
+	}
+}
+
+func TestACPClient_AutoApprovePermissions_WithSessionPrompt(t *testing.T) {
+	c, serverW, drainBuf, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Start auto-approve handler concurrently.
+	go c.autoApprovePermissions(ctx)
+
+	var received []sessionUpdate
+	var mu sync.Mutex
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- c.sessionPrompt(ctx, "sess-perm", "do something", func(u sessionUpdate) {
+			mu.Lock()
+			received = append(received, u)
+			mu.Unlock()
+		})
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Simulate: kiro sends an agent message chunk.
+	notif1 := `{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"sess-perm","updates":[{"kind":"AgentMessageChunk","text":"Working..."}]}}`
+	if err := writeFramed(serverW, []byte(notif1)); err != nil {
+		t.Fatalf("writeFramed notif1: %v", err)
+	}
+
+	// Simulate: kiro sends a permission request mid-stream.
+	permReq := `{"jsonrpc":"2.0","id":77,"method":"session/request_permission","params":{"permission":"fs_write"}}`
+	if err := writeFramed(serverW, []byte(permReq)); err != nil {
+		t.Fatalf("writeFramed perm: %v", err)
+	}
+
+	// Give auto-approve time to respond.
+	time.Sleep(100 * time.Millisecond)
+
+	// Simulate: kiro continues with more output after permission was granted.
+	notif2 := `{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"sess-perm","updates":[{"kind":"AgentMessageChunk","text":"Done."},{"kind":"TurnEnd"}]}}`
+	if err := writeFramed(serverW, []byte(notif2)); err != nil {
+		t.Fatalf("writeFramed notif2: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("sessionPrompt returned error: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("sessionPrompt timed out")
+	}
+
+	// Verify the permission request was auto-approved.
+	captured := drainBuf.Bytes()
+	codec := newRPCCodec(bytes.NewReader(captured), io.Discard)
+
+	// Read messages from captured — first is the session/prompt request, then the permission response.
+	foundApproval := false
+	for {
+		msg, err := codec.readMessage()
+		if err != nil {
+			break
+		}
+		// Look for the permission response (id=77).
+		if msg.Result != nil {
+			id, ok := rpcIDInt(msg.ID)
+			if ok && id == 77 {
+				var result string
+				if err := json.Unmarshal(msg.Result, &result); err == nil && result == "allow_always" {
+					foundApproval = true
+				}
+			}
+		}
+	}
+
+	if !foundApproval {
+		t.Error("expected permission auto-approval response with id=77, not found in captured output")
+	}
+
+	// Verify all notification updates were received.
+	mu.Lock()
+	defer mu.Unlock()
+	if len(received) != 3 {
+		t.Fatalf("expected 3 updates, got %d", len(received))
+	}
+	if received[0].Kind != updateKindAgentMessage {
+		t.Errorf("update 0: expected %s, got %s", updateKindAgentMessage, received[0].Kind)
+	}
+	if received[1].Kind != updateKindAgentMessage {
+		t.Errorf("update 1: expected %s, got %s", updateKindAgentMessage, received[1].Kind)
+	}
+	if received[2].Kind != updateKindTurnEnd {
+		t.Errorf("update 2: expected %s, got %s", updateKindTurnEnd, received[2].Kind)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Existing tests
 // ---------------------------------------------------------------------------
 

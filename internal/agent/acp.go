@@ -500,6 +500,41 @@ func parseNotificationUpdates(msg *rpcMessage) ([]sessionUpdate, error) {
 }
 
 // ---------------------------------------------------------------------------
+// Permission auto-approve handler
+// ---------------------------------------------------------------------------
+
+// autoApprovePermissions consumes reverse requests from the server and
+// auto-approves all permission requests by responding with "allow_always".
+//
+// This should be run as a goroutine alongside sessionPrompt so that
+// permission requests are handled while the prompt is streaming. It returns
+// when ctx is cancelled or the connection is closed.
+//
+// Non-permission reverse requests are silently ignored (dropped). In
+// ralfinho's design, the only expected reverse request type is
+// session/request_permission.
+func (c *acpClient) autoApprovePermissions(ctx context.Context) {
+	for {
+		select {
+		case msg, ok := <-c.ReverseReqs:
+			if !ok {
+				return // channel closed
+			}
+			if msg.Method == "session/request_permission" {
+				resp := newResponse(msg.ID, "allow_always")
+				_ = c.codec.send(resp) // best-effort; if send fails, connection is dying
+			}
+
+		case <-ctx.Done():
+			return
+
+		case <-c.done:
+			return
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Teardown
 // ---------------------------------------------------------------------------
 
