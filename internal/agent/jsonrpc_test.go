@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"strconv"
 	"strings"
@@ -490,6 +491,82 @@ func TestCodec_Send_WireFormat(t *testing.T) {
 	}
 	if msg["method"] != "test" {
 		t.Errorf("body method = %v, want %q", msg["method"], "test")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// malformedError tests
+// ---------------------------------------------------------------------------
+
+func TestReadMessage_MalformedJSON_ReturnsMalformedError(t *testing.T) {
+	// Write a properly framed message with invalid JSON body.
+	var buf bytes.Buffer
+	badBody := []byte(`{not valid json}`)
+	header := "Content-Length: " + itoa(len(badBody)) + "\r\n\r\n"
+	buf.WriteString(header)
+	buf.Write(badBody)
+
+	codec := newRPCCodec(&buf, io.Discard)
+	_, err := codec.readMessage()
+
+	if err == nil {
+		t.Fatal("expected error for invalid JSON, got nil")
+	}
+
+	var me *malformedError
+	if !errors.As(err, &me) {
+		t.Errorf("expected *malformedError, got %T: %v", err, err)
+	}
+}
+
+func TestReadMessage_IOError_NotMalformedError(t *testing.T) {
+	// An empty reader should return an I/O error, not a malformedError.
+	codec := newRPCCodec(strings.NewReader(""), io.Discard)
+	_, err := codec.readMessage()
+
+	if err == nil {
+		t.Fatal("expected error for empty input, got nil")
+	}
+
+	var me *malformedError
+	if errors.As(err, &me) {
+		t.Error("I/O error should not be a *malformedError")
+	}
+}
+
+func TestReadMessage_MalformedJSON_StreamPositionValid(t *testing.T) {
+	// After a malformed message, the stream position should be valid for
+	// the next readMessage call.
+	var buf bytes.Buffer
+
+	// First: malformed JSON with correct framing.
+	badBody := []byte(`{"broken":`)
+	header1 := "Content-Length: " + itoa(len(badBody)) + "\r\n\r\n"
+	buf.WriteString(header1)
+	buf.Write(badBody)
+
+	// Second: valid JSON-RPC message.
+	goodBody := []byte(`{"jsonrpc":"2.0","method":"test/ok","params":{}}`)
+	header2 := "Content-Length: " + itoa(len(goodBody)) + "\r\n\r\n"
+	buf.WriteString(header2)
+	buf.Write(goodBody)
+
+	codec := newRPCCodec(&buf, io.Discard)
+
+	// First read should return malformedError.
+	_, err := codec.readMessage()
+	var me *malformedError
+	if !errors.As(err, &me) {
+		t.Fatalf("first read: expected *malformedError, got %T: %v", err, err)
+	}
+
+	// Second read should succeed.
+	msg, err := codec.readMessage()
+	if err != nil {
+		t.Fatalf("second read: unexpected error: %v", err)
+	}
+	if msg.Method != "test/ok" {
+		t.Errorf("expected method test/ok, got %q", msg.Method)
 	}
 }
 

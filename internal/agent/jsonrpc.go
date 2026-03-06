@@ -22,6 +22,18 @@ import (
 
 const jsonrpcVersion = "2.0"
 
+// malformedError indicates a JSON-RPC message that was successfully read from
+// the wire (Content-Length framing intact) but failed to parse as valid JSON.
+// The stream position is still valid — the next readMessage call will succeed.
+//
+// This is distinct from I/O errors (broken pipe, EOF) which leave the stream
+// in an unrecoverable state.
+type malformedError struct {
+	detail string
+}
+
+func (e *malformedError) Error() string { return e.detail }
+
 // ---------------------------------------------------------------------------
 // Outgoing message types
 // ---------------------------------------------------------------------------
@@ -206,9 +218,12 @@ func (c *rpcCodec) readMessage() (*rpcMessage, error) {
 	}
 
 	// Phase 3: Unmarshal into unified message type.
+	// A JSON parse failure here is recoverable — the stream position is still
+	// valid since we read exactly contentLength bytes. Return a malformedError
+	// so the caller can decide to skip rather than terminate.
 	var msg rpcMessage
 	if err := json.Unmarshal(body, &msg); err != nil {
-		return nil, fmt.Errorf("jsonrpc: unmarshal: %w", err)
+		return nil, &malformedError{detail: fmt.Sprintf("jsonrpc: unmarshal (%d bytes): %v", contentLength, err)}
 	}
 
 	return &msg, nil

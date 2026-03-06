@@ -865,6 +865,139 @@ func TestACPClient_AutoApprovePermissions_WithSessionPrompt(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Error handling tests
+// ---------------------------------------------------------------------------
+
+func TestACPClient_ReadLoop_SkipsMalformedJSON(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	// Send a properly framed message with invalid JSON body.
+	// The Content-Length framing is correct, but the JSON is garbage.
+	badBody := []byte(`{this is not valid json!!!}`)
+	if err := writeFramed(serverW, badBody); err != nil {
+		t.Fatalf("writeFramed (bad): %v", err)
+	}
+
+	// Send a valid notification after the malformed one.
+	validNotif := `{"jsonrpc":"2.0","method":"test/survived","params":{"ok":true}}`
+	if err := writeFramed(serverW, []byte(validNotif)); err != nil {
+		t.Fatalf("writeFramed (good): %v", err)
+	}
+
+	// The readLoop should have skipped the malformed message and delivered
+	// the valid notification.
+	select {
+	case msg := <-c.Notifications:
+		if msg.Method != "test/survived" {
+			t.Errorf("expected method test/survived, got %q", msg.Method)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("valid notification not received after malformed message — readLoop may have terminated")
+	}
+}
+
+func TestACPClient_ReadLoop_SkipsMultipleMalformed(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	// Send several malformed messages in a row.
+	for i := 0; i < 5; i++ {
+		badBody := []byte(fmt.Sprintf(`{bad json #%d}`, i))
+		if err := writeFramed(serverW, badBody); err != nil {
+			t.Fatalf("writeFramed bad %d: %v", i, err)
+		}
+	}
+
+	// Then send a valid notification.
+	validNotif := `{"jsonrpc":"2.0","method":"test/still-alive","params":{}}`
+	if err := writeFramed(serverW, []byte(validNotif)); err != nil {
+		t.Fatalf("writeFramed (good): %v", err)
+	}
+
+	select {
+	case msg := <-c.Notifications:
+		if msg.Method != "test/still-alive" {
+			t.Errorf("expected method test/still-alive, got %q", msg.Method)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("valid notification not received after multiple malformed messages")
+	}
+}
+
+func TestACPClient_ReadLoop_IOErrorStillTerminates(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+
+	// Close the server writer to trigger an I/O error (EOF) in readLoop.
+	serverW.Close()
+
+	// The readLoop should terminate (close c.done).
+	select {
+	case <-c.done:
+		// Good — I/O errors still terminate the readLoop.
+	case <-time.After(2 * time.Second):
+		t.Fatal("readLoop did not terminate on I/O error")
+	}
+
+	cleanup()
+}
+
+func TestNewACPClient_KiroNotFound(t *testing.T) {
+	// Verify that attempting to spawn a non-existent binary produces
+	// an actionable error message.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Temporarily override PATH so kiro-cli definitely won't be found,
+	// even if it happens to be installed on the test machine.
+	t.Setenv("PATH", "/nonexistent-dir-for-test")
+
+	_, err := newACPClient(ctx, nil)
+	if err == nil {
+		t.Fatal("expected error when kiro-cli is not in PATH, got nil")
+	}
+	if !strings.Contains(err.Error(), "kiro-cli not found") {
+		t.Errorf("expected error to contain 'kiro-cli not found', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "https://kiro.dev/cli/") {
+		t.Errorf("expected error to contain install URL, got: %v", err)
+	}
+}
+
+func TestACPClient_SessionPrompt_ProcessCrash(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Start a session prompt that will be interrupted by process crash.
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- c.sessionPrompt(ctx, "sess-crash", "hello", func(u sessionUpdate) {})
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Simulate process crash by closing the server writer (broken pipe/EOF).
+	serverW.Close()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected error on process crash, got nil")
+		}
+		// Should mention connection closed.
+		if !strings.Contains(err.Error(), "connection closed") {
+			t.Errorf("error should mention 'connection closed', got: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("sessionPrompt did not return after process crash")
+	}
+
+	cleanup()
+}
+
+// ---------------------------------------------------------------------------
 // Existing tests
 // ---------------------------------------------------------------------------
 

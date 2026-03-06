@@ -15,6 +15,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -111,6 +112,9 @@ func newACPClient(ctx context.Context, rawWriter io.Writer) (*acpClient, error) 
 	}
 
 	if err := cmd.Start(); err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, fmt.Errorf("kiro-cli not found in PATH. Install from https://kiro.dev/cli/")
+		}
 		return nil, fmt.Errorf("acp: start kiro-cli: %w", err)
 	}
 
@@ -156,6 +160,16 @@ func (c *acpClient) readLoop() {
 	for {
 		msg, err := c.codec.readMessage()
 		if err != nil {
+			// Malformed messages (valid framing but invalid JSON) are
+			// recoverable — the stream position is still correct. Skip
+			// the bad message and continue reading.
+			var me *malformedError
+			if errors.As(err, &me) {
+				continue
+			}
+
+			// I/O errors (EOF, broken pipe) are fatal — the stream is
+			// in an unknown state or the subprocess has exited.
 			c.readErr = err
 
 			// Unblock all pending callers by closing their channels.
