@@ -1,19 +1,19 @@
 package runner
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/fsmiamoto/ralfinho/internal/agent"
 )
 
 // Status describes the final outcome of a run.
@@ -47,6 +47,7 @@ type RunResult struct {
 	RunID      string
 	Iterations int
 	Status     Status
+	Agent      string
 }
 
 // Runner drives the agent iteration loop.
@@ -61,6 +62,7 @@ type Runner struct {
 	startedAt   time.Time
 	iteration   int             // current iteration number
 	sessionText strings.Builder // accumulates assistant text for session.log
+	iterAgent   agent.Agent     // agent implementation for running iterations
 }
 
 // New creates a Runner with the given config. Progress output goes to stderr.
@@ -81,6 +83,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 	result := RunResult{
 		RunID:  r.runID,
 		Status: StatusRunning,
+		Agent:  r.cfg.Agent,
 	}
 
 	r.logf("run %s started (agent=%s, max_iterations=%d)\n", r.runID, r.cfg.Agent, r.cfg.MaxIterations)
@@ -92,6 +95,21 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 
 	// Open persistence files.
 	r.openRunFiles()
+
+	// Construct the agent for this run.
+	var agentOpts []agent.Option
+	if r.rawFile != nil {
+		agentOpts = append(agentOpts, agent.WithRawWriter(r.rawFile))
+	}
+	resolved, err := agent.Resolve(r.cfg.Agent, agentOpts...)
+	if err != nil {
+		r.logf("error: %v\n", err)
+		result.Status = StatusFailed
+		r.writeMeta(result)
+		r.closeRunFiles()
+		return result
+	}
+	r.iterAgent = resolved
 
 	done := false
 	for !done {
@@ -152,34 +170,13 @@ const (
 
 // runIteration runs one invocation of the agent and processes its output.
 func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
-	// Write prompt to a temp file so we can use @file syntax for long prompts.
-	tmpFile, err := os.CreateTemp("", "ralfinho-prompt-*.md")
-	if err != nil {
-		return iterContinue, fmt.Errorf("creating temp file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-
-	if _, err := tmpFile.WriteString(r.cfg.Prompt); err != nil {
-		tmpFile.Close()
-		return iterContinue, fmt.Errorf("writing prompt: %w", err)
-	}
-	tmpFile.Close()
-
-	// Build command: pi --mode json -p --no-session @<tempfile>
-	cmdArgs := []string{"--mode", "json", "-p", "--no-session", "@" + tmpPath}
-	cmd := exec.CommandContext(ctx, r.cfg.Agent, cmdArgs...)
-	cmd.Stderr = nil // suppress agent stderr
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return iterContinue, fmt.Errorf("creating stdout pipe: %w", err)
-	}
-
-	// Set up signal handling: catch SIGINT, forward decision.
+	// Set up signal handling: catch SIGINT, cancel the agent's context.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT)
 	defer signal.Stop(sigCh)
+
+	iterCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	interrupted := false
 	var mu sync.Mutex
@@ -190,81 +187,46 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 			mu.Lock()
 			interrupted = true
 			mu.Unlock()
-			// Kill the child process.
-			if cmd.Process != nil {
-				_ = cmd.Process.Signal(syscall.SIGINT)
-			}
+			cancel()
 		}
 	}()
 
-	if err := cmd.Start(); err != nil {
-		return iterContinue, fmt.Errorf("starting agent: %w", err)
-	}
-
-	// Process JSONL output. Tee raw stdout to raw-output.log.
-	complete := false
-	var assistantText strings.Builder
-
-	var stdoutReader io.Reader = stdout
-	if r.rawFile != nil {
-		stdoutReader = io.TeeReader(stdout, r.rawFile)
-	}
-
-	scanner := bufio.NewScanner(stdoutReader)
-	// Allow large lines (pi can produce big JSON).
-	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-
-		var ev Event
-		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			r.logf("  [warn] skipping unparseable line: %.80s\n", line)
-			continue
-		}
-
-		// Persist: append raw line to events.jsonl.
+	// Delegate to the agent. The onEvent callback persists, stores, and
+	// processes each event as it arrives.
+	assistantText, err := r.iterAgent.RunIteration(iterCtx, r.cfg.Prompt, func(ev Event) {
+		// Persist to events.jsonl.
 		if r.eventsFile != nil {
-			if _, err := fmt.Fprintln(r.eventsFile, line); err != nil {
-				r.logf("  [warn] writing events.jsonl: %v\n", err)
+			if data, merr := json.Marshal(ev); merr == nil {
+				fmt.Fprintln(r.eventsFile, string(data))
 			}
 		}
 
 		// Store in memory.
 		r.events = append(r.events, ev)
 
-		r.handleEvent(&ev, &assistantText)
-	}
+		// Handle the event (logging, session log, TUI forwarding).
+		r.handleEvent(&ev)
+	})
 
-	if err := scanner.Err(); err != nil {
-		r.logf("  [warn] scanner error: %v\n", err)
-	}
-
-	// Wait for the process to finish.
-	_ = cmd.Wait()
-
-	// Check if the assistant text contains the completion marker.
-	if strings.Contains(assistantText.String(), completionMarker) {
-		complete = true
-	}
-
-	// Check if we were interrupted.
+	// Check if we were interrupted (takes priority over other outcomes).
 	mu.Lock()
 	wasInterrupted := interrupted
 	mu.Unlock()
 
 	if wasInterrupted {
-		// Ask user whether to continue.
 		if r.askContinue() {
 			return iterContinue, nil
 		}
 		return iterInterrupted, nil
 	}
 
-	if complete {
+	// Surface agent errors.
+	if err != nil {
+		return iterContinue, err
+	}
+
+	// Check if the assistant text contains the completion marker.
+	if strings.Contains(assistantText, completionMarker) {
 		return iterComplete, nil
 	}
 
@@ -292,7 +254,7 @@ func (r *Runner) sendSynthetic(evType EventType, id string) {
 
 // handleEvent processes a single parsed event, printing a summary to stderr,
 // accumulating assistant text, and writing to session.log.
-func (r *Runner) handleEvent(ev *Event, assistantText *strings.Builder) {
+func (r *Runner) handleEvent(ev *Event) {
 	// Forward to TUI if channel is set.
 	r.sendEvent(*ev)
 	switch ev.Type {
@@ -324,7 +286,6 @@ func (r *Runner) handleEvent(ev *Event, assistantText *strings.Builder) {
 			if err := json.Unmarshal(ev.AssistantMessageEvent, &ae); err == nil {
 				switch ae.Type {
 				case "text_delta":
-					assistantText.WriteString(ae.Delta)
 					r.sessionText.WriteString(ae.Delta)
 				}
 			}

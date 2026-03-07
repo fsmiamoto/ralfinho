@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/fsmiamoto/ralfinho/internal/agent"
 	"github.com/fsmiamoto/ralfinho/internal/cli"
 	"github.com/fsmiamoto/ralfinho/internal/prompt"
 	"github.com/fsmiamoto/ralfinho/internal/runner"
@@ -43,6 +44,12 @@ func main() {
 	if cfg.ViewRunID != "" {
 		runViewer(cfg)
 		return
+	}
+
+	// Validate agent name early (before creating run dirs / prompt resolution).
+	if _, err := agent.Resolve(cfg.Agent); err != nil {
+		fmt.Fprintf(os.Stderr, "ralfinho: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Resolve the prompt text.
@@ -80,6 +87,7 @@ func runPlain(cfg *cli.Config, promptText string) {
 
 	fmt.Fprintf(os.Stderr, "\n=== run summary ===\n")
 	fmt.Fprintf(os.Stderr, "run-id:     %s\n", result.RunID)
+	fmt.Fprintf(os.Stderr, "agent:      %s\n", result.Agent)
 	fmt.Fprintf(os.Stderr, "iterations: %d\n", result.Iterations)
 	fmt.Fprintf(os.Stderr, "status:     %s\n", result.Status)
 
@@ -129,6 +137,7 @@ func runTUI(cfg *cli.Config, promptText string) {
 		if r := m.RunResult(); r != nil {
 			fmt.Fprintf(os.Stderr, "\n=== run summary ===\n")
 			fmt.Fprintf(os.Stderr, "run-id:     %s\n", r.RunID)
+			fmt.Fprintf(os.Stderr, "agent:      %s\n", r.Agent)
 			fmt.Fprintf(os.Stderr, "iterations: %d\n", r.Iterations)
 			fmt.Fprintf(os.Stderr, "status:     %s\n", r.Status)
 			exitForStatus(r.Status)
@@ -138,6 +147,7 @@ func runTUI(cfg *cli.Config, promptText string) {
 			case result := <-resultCh:
 				fmt.Fprintf(os.Stderr, "\n=== run summary ===\n")
 				fmt.Fprintf(os.Stderr, "run-id:     %s\n", result.RunID)
+				fmt.Fprintf(os.Stderr, "agent:      %s\n", result.Agent)
 				fmt.Fprintf(os.Stderr, "iterations: %d\n", result.Iterations)
 				fmt.Fprintf(os.Stderr, "status:     %s\n", result.Status)
 				exitForStatus(result.Status)
@@ -202,12 +212,16 @@ func listRuns(cfg *cli.Config) {
 			id = id[:8]
 		}
 		date := formatMetaDate(meta.StartedAt)
+		agentName := meta.Agent
+		if agentName == "" {
+			agentName = "pi"
+		}
 		source := meta.PromptSource
 		if source == "" {
 			source = "unknown"
 		}
-		fmt.Printf("  %s  %s  %-22s %d iterations  (%s)\n",
-			id, date, meta.Status, meta.IterationsCompleted, source)
+		fmt.Printf("  %s  %s  %-5s %-22s %d iterations  (%s)\n",
+			id, date, agentName, meta.Status, meta.IterationsCompleted, source)
 	}
 }
 
