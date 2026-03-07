@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -202,9 +201,9 @@ func TestCodec_RoundTrip_LargePayload(t *testing.T) {
 // Content-Length framing: read raw wire-format messages
 // ---------------------------------------------------------------------------
 
-func TestCodec_ReadMessage_ValidFrame(t *testing.T) {
+func TestCodec_ReadMessage_ValidLine(t *testing.T) {
 	body := `{"jsonrpc":"2.0","method":"test","params":{"a":1}}`
-	wire := "Content-Length: " + itoa(len(body)) + "\r\n\r\n" + body
+	wire := body + "\n"
 
 	codec := newRPCCodec(strings.NewReader(wire), io.Discard)
 	msg, err := codec.readMessage()
@@ -216,12 +215,9 @@ func TestCodec_ReadMessage_ValidFrame(t *testing.T) {
 	}
 }
 
-func TestCodec_ReadMessage_ExtraHeaders(t *testing.T) {
-	// Content-Type header should be silently ignored.
-	body := `{"jsonrpc":"2.0","id":1,"result":"ok"}`
-	wire := "Content-Length: " + itoa(len(body)) + "\r\n" +
-		"Content-Type: application/json\r\n" +
-		"\r\n" + body
+func TestCodec_ReadMessage_SkipsBlankLines(t *testing.T) {
+	// Blank lines between messages should be skipped.
+	wire := "\n\n" + `{"jsonrpc":"2.0","id":1,"result":"ok"}` + "\n\n"
 
 	codec := newRPCCodec(strings.NewReader(wire), io.Discard)
 	msg, err := codec.readMessage()
@@ -234,50 +230,11 @@ func TestCodec_ReadMessage_ExtraHeaders(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Content-Length framing: error cases
+// Newline-delimited JSON: error cases
 // ---------------------------------------------------------------------------
 
-func TestCodec_ReadMessage_MissingContentLength(t *testing.T) {
-	// Headers present but no Content-Length.
-	wire := "Content-Type: application/json\r\n\r\n{}"
-
-	codec := newRPCCodec(strings.NewReader(wire), io.Discard)
-	_, err := codec.readMessage()
-	if err == nil {
-		t.Fatal("expected error for missing Content-Length")
-	}
-	if !strings.Contains(err.Error(), "Content-Length") {
-		t.Errorf("error should mention Content-Length, got: %v", err)
-	}
-}
-
-func TestCodec_ReadMessage_BadContentLength(t *testing.T) {
-	wire := "Content-Length: abc\r\n\r\n{}"
-
-	codec := newRPCCodec(strings.NewReader(wire), io.Discard)
-	_, err := codec.readMessage()
-	if err == nil {
-		t.Fatal("expected error for bad Content-Length")
-	}
-	if !strings.Contains(err.Error(), "Content-Length") {
-		t.Errorf("error should mention Content-Length, got: %v", err)
-	}
-}
-
-func TestCodec_ReadMessage_TruncatedBody(t *testing.T) {
-	// Content-Length says 100 but body is only 5 bytes.
-	wire := "Content-Length: 100\r\n\r\nhello"
-
-	codec := newRPCCodec(strings.NewReader(wire), io.Discard)
-	_, err := codec.readMessage()
-	if err == nil {
-		t.Fatal("expected error for truncated body")
-	}
-}
-
 func TestCodec_ReadMessage_MalformedJSON(t *testing.T) {
-	body := `{not json}`
-	wire := "Content-Length: " + itoa(len(body)) + "\r\n\r\n" + body
+	wire := "{not json}\n"
 
 	codec := newRPCCodec(strings.NewReader(wire), io.Discard)
 	_, err := codec.readMessage()
@@ -467,22 +424,16 @@ func TestCodec_Send_WireFormat(t *testing.T) {
 
 	wire := buf.String()
 
-	// Must start with Content-Length header.
-	if !strings.HasPrefix(wire, "Content-Length: ") {
-		t.Errorf("wire should start with Content-Length header, got: %q", wire[:min(50, len(wire))])
+	// Must end with a newline.
+	if !strings.HasSuffix(wire, "\n") {
+		t.Errorf("wire should end with newline, got: %q", wire)
 	}
 
-	// Must have \r\n\r\n separator between header and body.
-	if !strings.Contains(wire, "\r\n\r\n") {
-		t.Error("wire should contain \\r\\n\\r\\n header separator")
+	// Must be a single JSON line (no Content-Length framing).
+	body := strings.TrimSuffix(wire, "\n")
+	if strings.Contains(body, "\n") {
+		t.Errorf("wire should be a single JSON line, got: %q", wire)
 	}
-
-	// Extract body after the separator.
-	parts := strings.SplitN(wire, "\r\n\r\n", 2)
-	if len(parts) != 2 {
-		t.Fatalf("expected header + body, got %d parts", len(parts))
-	}
-	body := parts[1]
 
 	// Body must be valid JSON.
 	var msg map[string]interface{}
@@ -499,14 +450,9 @@ func TestCodec_Send_WireFormat(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestReadMessage_MalformedJSON_ReturnsMalformedError(t *testing.T) {
-	// Write a properly framed message with invalid JSON body.
-	var buf bytes.Buffer
-	badBody := []byte(`{not valid json}`)
-	header := "Content-Length: " + itoa(len(badBody)) + "\r\n\r\n"
-	buf.WriteString(header)
-	buf.Write(badBody)
+	wire := "{not valid json}\n"
 
-	codec := newRPCCodec(&buf, io.Discard)
+	codec := newRPCCodec(strings.NewReader(wire), io.Discard)
 	_, err := codec.readMessage()
 
 	if err == nil {
@@ -537,21 +483,10 @@ func TestReadMessage_IOError_NotMalformedError(t *testing.T) {
 func TestReadMessage_MalformedJSON_StreamPositionValid(t *testing.T) {
 	// After a malformed message, the stream position should be valid for
 	// the next readMessage call.
-	var buf bytes.Buffer
+	wire := "{\"broken\":\n" +
+		`{"jsonrpc":"2.0","method":"test/ok","params":{}}` + "\n"
 
-	// First: malformed JSON with correct framing.
-	badBody := []byte(`{"broken":`)
-	header1 := "Content-Length: " + itoa(len(badBody)) + "\r\n\r\n"
-	buf.WriteString(header1)
-	buf.Write(badBody)
-
-	// Second: valid JSON-RPC message.
-	goodBody := []byte(`{"jsonrpc":"2.0","method":"test/ok","params":{}}`)
-	header2 := "Content-Length: " + itoa(len(goodBody)) + "\r\n\r\n"
-	buf.WriteString(header2)
-	buf.Write(goodBody)
-
-	codec := newRPCCodec(&buf, io.Discard)
+	codec := newRPCCodec(strings.NewReader(wire), io.Discard)
 
 	// First read should return malformedError.
 	_, err := codec.readMessage()
@@ -570,10 +505,4 @@ func TestReadMessage_MalformedJSON_StreamPositionValid(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
 
-func itoa(n int) string {
-	return strconv.Itoa(n)
-}

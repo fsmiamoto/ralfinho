@@ -72,13 +72,12 @@ func (b *safeBuffer) Bytes() []byte {
 	return bytes.Clone(b.buf.Bytes())
 }
 
-// writeFramed writes a Content-Length framed JSON-RPC message to w.
-func writeFramed(w io.Writer, body []byte) error {
-	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(body))
-	if _, err := io.WriteString(w, header); err != nil {
+// writeJSONLine writes a newline-delimited JSON-RPC message to w.
+func writeJSONLine(w io.Writer, body []byte) error {
+	if _, err := w.Write(body); err != nil {
 		return err
 	}
-	_, err := w.Write(body)
+	_, err := w.Write([]byte("\n"))
 	return err
 }
 
@@ -104,8 +103,8 @@ func TestACPClient_CallResponse(t *testing.T) {
 
 	// Simulate server sending a response with id=1 (first auto-incremented ID).
 	resp := `{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}`
-	if err := writeFramed(serverW, []byte(resp)); err != nil {
-		t.Fatalf("writeFramed: %v", err)
+	if err := writeJSONLine(serverW, []byte(resp)); err != nil {
+		t.Fatalf("writeJSONLine: %v", err)
 	}
 
 	select {
@@ -144,8 +143,8 @@ func TestACPClient_CallError(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	resp := `{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid Request"}}`
-	if err := writeFramed(serverW, []byte(resp)); err != nil {
-		t.Fatalf("writeFramed: %v", err)
+	if err := writeJSONLine(serverW, []byte(resp)); err != nil {
+		t.Fatalf("writeJSONLine: %v", err)
 	}
 
 	select {
@@ -166,8 +165,8 @@ func TestACPClient_NotificationDispatch(t *testing.T) {
 	defer cleanup()
 
 	notif := `{"jsonrpc":"2.0","method":"session/notification","params":{"kind":"test"}}`
-	if err := writeFramed(serverW, []byte(notif)); err != nil {
-		t.Fatalf("writeFramed: %v", err)
+	if err := writeJSONLine(serverW, []byte(notif)); err != nil {
+		t.Fatalf("writeJSONLine: %v", err)
 	}
 
 	select {
@@ -185,8 +184,8 @@ func TestACPClient_ReverseRequestDispatch(t *testing.T) {
 	defer cleanup()
 
 	req := `{"jsonrpc":"2.0","id":99,"method":"session/request_permission","params":{"permission":"fs_write"}}`
-	if err := writeFramed(serverW, []byte(req)); err != nil {
-		t.Fatalf("writeFramed: %v", err)
+	if err := writeJSONLine(serverW, []byte(req)); err != nil {
+		t.Fatalf("writeJSONLine: %v", err)
 	}
 
 	select {
@@ -285,8 +284,8 @@ func TestACPClient_SessionNew(t *testing.T) {
 
 	// Server responds with a session ID.
 	resp := `{"jsonrpc":"2.0","id":1,"result":{"sessionId":"sess-abc-123"}}`
-	if err := writeFramed(serverW, []byte(resp)); err != nil {
-		t.Fatalf("writeFramed: %v", err)
+	if err := writeJSONLine(serverW, []byte(resp)); err != nil {
+		t.Fatalf("writeJSONLine: %v", err)
 	}
 
 	select {
@@ -319,8 +318,8 @@ func TestACPClient_SessionNew_EmptyID(t *testing.T) {
 
 	// Server responds with an empty session ID.
 	resp := `{"jsonrpc":"2.0","id":1,"result":{"sessionId":""}}`
-	if err := writeFramed(serverW, []byte(resp)); err != nil {
-		t.Fatalf("writeFramed: %v", err)
+	if err := writeJSONLine(serverW, []byte(resp)); err != nil {
+		t.Fatalf("writeJSONLine: %v", err)
 	}
 
 	select {
@@ -357,75 +356,22 @@ func TestACPClient_SessionPrompt(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Send AgentMessageChunk notification.
-	notif1 := `{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"sess-123","updates":[{"kind":"AgentMessageChunk","text":"Hello "}]}}`
-	if err := writeFramed(serverW, []byte(notif1)); err != nil {
-		t.Fatalf("writeFramed notif1: %v", err)
+	// Send agent_message_chunk update.
+	notif1 := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-123","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello "}}}}`
+	if err := writeJSONLine(serverW, []byte(notif1)); err != nil {
+		t.Fatalf("writeJSONLine notif1: %v", err)
 	}
 
-	// Send ToolCall notification.
-	notif2 := `{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"sess-123","updates":[{"kind":"ToolCall","toolName":"read_file","status":"completed"}]}}`
-	if err := writeFramed(serverW, []byte(notif2)); err != nil {
-		t.Fatalf("writeFramed notif2: %v", err)
+	// Send tool_call update.
+	notif2 := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-123","update":{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"read_file","status":"completed"}}}`
+	if err := writeJSONLine(serverW, []byte(notif2)); err != nil {
+		t.Fatalf("writeJSONLine notif2: %v", err)
 	}
 
-	// Send TurnEnd notification.
-	notif3 := `{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"sess-123","updates":[{"kind":"TurnEnd"}]}}`
-	if err := writeFramed(serverW, []byte(notif3)); err != nil {
-		t.Fatalf("writeFramed notif3: %v", err)
-	}
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("sessionPrompt returned error: %v", err)
-		}
-	case <-ctx.Done():
-		t.Fatal("sessionPrompt timed out")
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	if len(received) != 3 {
-		t.Fatalf("expected 3 updates, got %d", len(received))
-	}
-	if received[0].Kind != updateKindAgentMessage {
-		t.Errorf("update 0: expected %s, got %s", updateKindAgentMessage, received[0].Kind)
-	}
-	if received[1].Kind != updateKindToolCall {
-		t.Errorf("update 1: expected %s, got %s", updateKindToolCall, received[1].Kind)
-	}
-	if received[2].Kind != updateKindTurnEnd {
-		t.Errorf("update 2: expected %s, got %s", updateKindTurnEnd, received[2].Kind)
-	}
-}
-
-func TestACPClient_SessionPrompt_MultipleUpdatesPerNotification(t *testing.T) {
-	c, serverW, _, cleanup := mockACPClient(t)
-	defer cleanup()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	var received []sessionUpdate
-	var mu sync.Mutex
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- c.sessionPrompt(ctx, "sess-123", "test", func(u sessionUpdate) {
-			mu.Lock()
-			received = append(received, u)
-			mu.Unlock()
-		})
-	}()
-
-	time.Sleep(50 * time.Millisecond)
-
-	// Send a single notification with multiple updates including TurnEnd.
-	notif := `{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"sess-123","updates":[{"kind":"AgentMessageChunk","text":"done"},{"kind":"TurnEnd"}]}}`
-	if err := writeFramed(serverW, []byte(notif)); err != nil {
-		t.Fatalf("writeFramed: %v", err)
+	// Send prompt response to signal turn completion.
+	resp := `{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}`
+	if err := writeJSONLine(serverW, []byte(resp)); err != nil {
+		t.Fatalf("writeJSONLine resp: %v", err)
 	}
 
 	select {
@@ -446,8 +392,63 @@ func TestACPClient_SessionPrompt_MultipleUpdatesPerNotification(t *testing.T) {
 	if received[0].Kind != updateKindAgentMessage {
 		t.Errorf("update 0: expected %s, got %s", updateKindAgentMessage, received[0].Kind)
 	}
-	if received[1].Kind != updateKindTurnEnd {
-		t.Errorf("update 1: expected %s, got %s", updateKindTurnEnd, received[1].Kind)
+	if received[1].Kind != updateKindToolCall {
+		t.Errorf("update 1: expected %s, got %s", updateKindToolCall, received[1].Kind)
+	}
+}
+
+func TestACPClient_SessionPrompt_ResponseCompletesPrompt(t *testing.T) {
+	c, serverW, _, cleanup := mockACPClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var received []sessionUpdate
+	var mu sync.Mutex
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- c.sessionPrompt(ctx, "sess-123", "test", func(u sessionUpdate) {
+			mu.Lock()
+			received = append(received, u)
+			mu.Unlock()
+		})
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Send an update followed immediately by the prompt response.
+	notif := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-123","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}}}`
+	if err := writeJSONLine(serverW, []byte(notif)); err != nil {
+		t.Fatalf("writeJSONLine: %v", err)
+	}
+
+	// Small delay so the notification is consumed before the response arrives.
+	time.Sleep(50 * time.Millisecond)
+
+	resp := `{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}`
+	if err := writeJSONLine(serverW, []byte(resp)); err != nil {
+		t.Fatalf("writeJSONLine resp: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("sessionPrompt returned error: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("sessionPrompt timed out")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(received) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(received))
+	}
+	if received[0].Kind != updateKindAgentMessage {
+		t.Errorf("update 0: expected %s, got %s", updateKindAgentMessage, received[0].Kind)
 	}
 }
 
@@ -467,8 +468,8 @@ func TestACPClient_SessionPromptError(t *testing.T) {
 
 	// Server responds with an error to the session/prompt request.
 	resp := `{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"session not found"}}`
-	if err := writeFramed(serverW, []byte(resp)); err != nil {
-		t.Fatalf("writeFramed: %v", err)
+	if err := writeJSONLine(serverW, []byte(resp)); err != nil {
+		t.Fatalf("writeJSONLine: %v", err)
 	}
 
 	select {
@@ -516,30 +517,25 @@ func TestACPClient_SessionPrompt_ConnectionClose(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// parseNotificationUpdates tests
+// parseSessionUpdate tests
 // ---------------------------------------------------------------------------
 
-func TestParseNotificationUpdates(t *testing.T) {
+func TestParseSessionUpdate(t *testing.T) {
 	tests := []struct {
-		name      string
-		params    string
-		wantKinds []string
-		wantErr   bool
+		name     string
+		params   string
+		wantKind string
+		wantErr  bool
 	}{
 		{
-			name:      "single update",
-			params:    `{"updates":[{"kind":"TurnEnd"}]}`,
-			wantKinds: []string{"TurnEnd"},
+			name:     "agent_message_chunk",
+			params:   `{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}`,
+			wantKind: "agent_message_chunk",
 		},
 		{
-			name:      "multiple updates",
-			params:    `{"updates":[{"kind":"AgentMessageChunk","text":"hi"},{"kind":"TurnEnd"}]}`,
-			wantKinds: []string{"AgentMessageChunk", "TurnEnd"},
-		},
-		{
-			name:      "empty updates array",
-			params:    `{"updates":[]}`,
-			wantKinds: []string{},
+			name:     "tool_call",
+			params:   `{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"ls","status":"in_progress"}}`,
+			wantKind: "tool_call",
 		},
 		{
 			name:    "nil params",
@@ -547,19 +543,14 @@ func TestParseNotificationUpdates(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:      "skip invalid JSON element",
-			params:    `{"updates":[{"kind":"Good"},42,{"kind":"AlsoGood"}]}`,
-			wantKinds: []string{"Good", "AlsoGood"},
+			name:    "no update field",
+			params:  `{"sessionId":"s1"}`,
+			wantErr: true,
 		},
 		{
-			name:      "skip empty kind",
-			params:    `{"updates":[{"kind":""},{"kind":"Valid"}]}`,
-			wantKinds: []string{"Valid"},
-		},
-		{
-			name:      "no updates field",
-			params:    `{"sessionId":"s1"}`,
-			wantKinds: []string{},
+			name:    "empty sessionUpdate",
+			params:  `{"sessionId":"s1","update":{"sessionUpdate":""}}`,
+			wantErr: true,
 		},
 	}
 
@@ -569,7 +560,7 @@ func TestParseNotificationUpdates(t *testing.T) {
 			if tt.params != "" {
 				msg.Params = json.RawMessage(tt.params)
 			}
-			updates, err := parseNotificationUpdates(msg)
+			u, err := parseSessionUpdate(msg)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -579,40 +570,32 @@ func TestParseNotificationUpdates(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if len(updates) != len(tt.wantKinds) {
-				t.Fatalf("expected %d updates, got %d", len(tt.wantKinds), len(updates))
-			}
-			for i, want := range tt.wantKinds {
-				if updates[i].Kind != want {
-					t.Errorf("update %d: expected kind %q, got %q", i, want, updates[i].Kind)
-				}
+			if u.Kind != tt.wantKind {
+				t.Errorf("expected kind %q, got %q", tt.wantKind, u.Kind)
 			}
 		})
 	}
 }
 
-func TestParseNotificationUpdates_RawPreserved(t *testing.T) {
-	params := `{"updates":[{"kind":"ToolCall","toolName":"bash","input":{"command":"ls"}}]}`
+func TestParseSessionUpdate_RawPreserved(t *testing.T) {
+	params := `{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"bash","rawInput":{"command":"ls"}}}`
 	msg := &rpcMessage{Params: json.RawMessage(params)}
 
-	updates, err := parseNotificationUpdates(msg)
+	u, err := parseSessionUpdate(msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(updates) != 1 {
-		t.Fatalf("expected 1 update, got %d", len(updates))
-	}
 
-	// Verify the Raw field contains the full JSON of the update element.
+	// Verify the Raw field contains the full JSON of the update object.
 	var raw map[string]interface{}
-	if err := json.Unmarshal(updates[0].Raw, &raw); err != nil {
+	if err := json.Unmarshal(u.Raw, &raw); err != nil {
 		t.Fatalf("unmarshal raw: %v", err)
 	}
-	if raw["toolName"] != "bash" {
-		t.Errorf("expected toolName=bash, got %v", raw["toolName"])
+	if raw["title"] != "bash" {
+		t.Errorf("expected title=bash, got %v", raw["title"])
 	}
-	if raw["kind"] != "ToolCall" {
-		t.Errorf("expected kind=ToolCall in raw, got %v", raw["kind"])
+	if raw["sessionUpdate"] != "tool_call" {
+		t.Errorf("expected sessionUpdate=tool_call in raw, got %v", raw["sessionUpdate"])
 	}
 }
 
@@ -632,8 +615,8 @@ func TestACPClient_AutoApprovePermissions(t *testing.T) {
 
 	// Simulate kiro sending a permission request.
 	req := `{"jsonrpc":"2.0","id":42,"method":"session/request_permission","params":{"permission":"fs_write","path":"/foo"}}`
-	if err := writeFramed(serverW, []byte(req)); err != nil {
-		t.Fatalf("writeFramed: %v", err)
+	if err := writeJSONLine(serverW, []byte(req)); err != nil {
+		t.Fatalf("writeJSONLine: %v", err)
 	}
 
 	// Give the handler time to process and respond.
@@ -678,8 +661,8 @@ func TestACPClient_AutoApprovePermissions_Multiple(t *testing.T) {
 	// Send three permission requests with different IDs.
 	for _, id := range []int{10, 20, 30} {
 		req := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"session/request_permission","params":{"permission":"bash"}}`, id)
-		if err := writeFramed(serverW, []byte(req)); err != nil {
-			t.Fatalf("writeFramed id=%d: %v", id, err)
+		if err := writeJSONLine(serverW, []byte(req)); err != nil {
+			t.Fatalf("writeJSONLine id=%d: %v", id, err)
 		}
 	}
 
@@ -730,8 +713,8 @@ func TestACPClient_AutoApprovePermissions_IgnoresOtherMethods(t *testing.T) {
 
 	// Send a reverse request that is NOT a permission request.
 	req := `{"jsonrpc":"2.0","id":99,"method":"session/some_other_thing","params":{}}`
-	if err := writeFramed(serverW, []byte(req)); err != nil {
-		t.Fatalf("writeFramed: %v", err)
+	if err := writeJSONLine(serverW, []byte(req)); err != nil {
+		t.Fatalf("writeJSONLine: %v", err)
 	}
 
 	// Give time for potential processing.
@@ -791,24 +774,30 @@ func TestACPClient_AutoApprovePermissions_WithSessionPrompt(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Simulate: kiro sends an agent message chunk.
-	notif1 := `{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"sess-perm","updates":[{"kind":"AgentMessageChunk","text":"Working..."}]}}`
-	if err := writeFramed(serverW, []byte(notif1)); err != nil {
-		t.Fatalf("writeFramed notif1: %v", err)
+	notif1 := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-perm","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Working..."}}}}`
+	if err := writeJSONLine(serverW, []byte(notif1)); err != nil {
+		t.Fatalf("writeJSONLine notif1: %v", err)
 	}
 
 	// Simulate: kiro sends a permission request mid-stream.
 	permReq := `{"jsonrpc":"2.0","id":77,"method":"session/request_permission","params":{"permission":"fs_write"}}`
-	if err := writeFramed(serverW, []byte(permReq)); err != nil {
-		t.Fatalf("writeFramed perm: %v", err)
+	if err := writeJSONLine(serverW, []byte(permReq)); err != nil {
+		t.Fatalf("writeJSONLine perm: %v", err)
 	}
 
 	// Give auto-approve time to respond.
 	time.Sleep(100 * time.Millisecond)
 
 	// Simulate: kiro continues with more output after permission was granted.
-	notif2 := `{"jsonrpc":"2.0","method":"session/notification","params":{"sessionId":"sess-perm","updates":[{"kind":"AgentMessageChunk","text":"Done."},{"kind":"TurnEnd"}]}}`
-	if err := writeFramed(serverW, []byte(notif2)); err != nil {
-		t.Fatalf("writeFramed notif2: %v", err)
+	notif2 := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-perm","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Done."}}}}`
+	if err := writeJSONLine(serverW, []byte(notif2)); err != nil {
+		t.Fatalf("writeJSONLine notif2: %v", err)
+	}
+
+	// Send prompt response to signal turn completion.
+	promptResp := `{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}`
+	if err := writeJSONLine(serverW, []byte(promptResp)); err != nil {
+		t.Fatalf("writeJSONLine resp: %v", err)
 	}
 
 	select {
@@ -850,17 +839,14 @@ func TestACPClient_AutoApprovePermissions_WithSessionPrompt(t *testing.T) {
 	// Verify all notification updates were received.
 	mu.Lock()
 	defer mu.Unlock()
-	if len(received) != 3 {
-		t.Fatalf("expected 3 updates, got %d", len(received))
+	if len(received) != 2 {
+		t.Fatalf("expected 2 updates, got %d", len(received))
 	}
 	if received[0].Kind != updateKindAgentMessage {
 		t.Errorf("update 0: expected %s, got %s", updateKindAgentMessage, received[0].Kind)
 	}
 	if received[1].Kind != updateKindAgentMessage {
 		t.Errorf("update 1: expected %s, got %s", updateKindAgentMessage, received[1].Kind)
-	}
-	if received[2].Kind != updateKindTurnEnd {
-		t.Errorf("update 2: expected %s, got %s", updateKindTurnEnd, received[2].Kind)
 	}
 }
 
@@ -875,14 +861,14 @@ func TestACPClient_ReadLoop_SkipsMalformedJSON(t *testing.T) {
 	// Send a properly framed message with invalid JSON body.
 	// The Content-Length framing is correct, but the JSON is garbage.
 	badBody := []byte(`{this is not valid json!!!}`)
-	if err := writeFramed(serverW, badBody); err != nil {
-		t.Fatalf("writeFramed (bad): %v", err)
+	if err := writeJSONLine(serverW, badBody); err != nil {
+		t.Fatalf("writeJSONLine (bad): %v", err)
 	}
 
 	// Send a valid notification after the malformed one.
 	validNotif := `{"jsonrpc":"2.0","method":"test/survived","params":{"ok":true}}`
-	if err := writeFramed(serverW, []byte(validNotif)); err != nil {
-		t.Fatalf("writeFramed (good): %v", err)
+	if err := writeJSONLine(serverW, []byte(validNotif)); err != nil {
+		t.Fatalf("writeJSONLine (good): %v", err)
 	}
 
 	// The readLoop should have skipped the malformed message and delivered
@@ -904,15 +890,15 @@ func TestACPClient_ReadLoop_SkipsMultipleMalformed(t *testing.T) {
 	// Send several malformed messages in a row.
 	for i := 0; i < 5; i++ {
 		badBody := []byte(fmt.Sprintf(`{bad json #%d}`, i))
-		if err := writeFramed(serverW, badBody); err != nil {
-			t.Fatalf("writeFramed bad %d: %v", i, err)
+		if err := writeJSONLine(serverW, badBody); err != nil {
+			t.Fatalf("writeJSONLine bad %d: %v", i, err)
 		}
 	}
 
 	// Then send a valid notification.
 	validNotif := `{"jsonrpc":"2.0","method":"test/still-alive","params":{}}`
-	if err := writeFramed(serverW, []byte(validNotif)); err != nil {
-		t.Fatalf("writeFramed (good): %v", err)
+	if err := writeJSONLine(serverW, []byte(validNotif)); err != nil {
+		t.Fatalf("writeJSONLine (good): %v", err)
 	}
 
 	select {

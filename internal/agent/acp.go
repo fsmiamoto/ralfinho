@@ -20,6 +20,7 @@ import (
 	"io"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -42,8 +43,8 @@ type initializeParams struct {
 }
 
 type clientCapabilities struct {
-	FS       *struct{} `json:"fs"`
-	Terminal *struct{} `json:"terminal"`
+	FS       *struct{} `json:"fs"`       // empty struct → {} (kiro expects a FileSystemCapability object)
+	Terminal bool      `json:"terminal"` // kiro expects a boolean
 }
 
 type clientInfo struct {
@@ -100,6 +101,9 @@ type acpClient struct {
 func newACPClient(ctx context.Context, rawWriter io.Writer) (*acpClient, error) {
 	cmd := exec.CommandContext(ctx, "kiro-cli", "acp")
 	cmd.Stderr = io.Discard // don't mix kiro stderr with ralfinho output
+	// Use a process group so we can kill kiro-cli and all its children.
+	// Without this, child processes keep the stdout pipe open after kill.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -293,7 +297,6 @@ func (c *acpClient) notify(method string, params interface{}) error {
 // initialize performs the ACP initialize handshake:
 //  1. Send "initialize" request with protocol version, capabilities, client info.
 //  2. Wait for the server's "initialize" response.
-//  3. Send "initialized" notification to signal the handshake is complete.
 func (c *acpClient) initialize(ctx context.Context) error {
 	initCtx, cancel := context.WithTimeout(ctx, initializeTimeout)
 	defer cancel()
@@ -302,7 +305,7 @@ func (c *acpClient) initialize(ctx context.Context) error {
 		ProtocolVersion: acpProtocolVersion,
 		ClientCapabilities: clientCapabilities{
 			FS:       &struct{}{},
-			Terminal: &struct{}{},
+			Terminal: true,
 		},
 		ClientInfo: clientInfo{
 			Name:    "ralfinho",
@@ -315,11 +318,6 @@ func (c *acpClient) initialize(ctx context.Context) error {
 		return fmt.Errorf("acp: initialize handshake failed: %w", err)
 	}
 
-	// Complete the handshake by sending the "initialized" notification.
-	if err := c.notify("initialized", nil); err != nil {
-		return fmt.Errorf("acp: initialized notification failed: %w", err)
-	}
-
 	return nil
 }
 
@@ -329,16 +327,13 @@ func (c *acpClient) initialize(ctx context.Context) error {
 
 const (
 	// updateKindAgentMessage is emitted when the agent produces a text chunk.
-	updateKindAgentMessage = "AgentMessageChunk"
+	updateKindAgentMessage = "agent_message_chunk"
 
 	// updateKindToolCall is emitted when a tool call is created or completes.
-	updateKindToolCall = "ToolCall"
+	updateKindToolCall = "tool_call"
 
 	// updateKindToolCallUpdate is emitted for tool call progress updates.
-	updateKindToolCallUpdate = "ToolCallUpdate"
-
-	// updateKindTurnEnd signals the end of the agent's turn.
-	updateKindTurnEnd = "TurnEnd"
+	updateKindToolCallUpdate = "tool_call_update"
 )
 
 // ---------------------------------------------------------------------------
@@ -346,7 +341,8 @@ const (
 // ---------------------------------------------------------------------------
 
 type sessionNewParams struct {
-	CWD string `json:"cwd"`
+	CWD        string        `json:"cwd"`
+	MCPServers []interface{} `json:"mcpServers"`
 }
 
 type sessionNewResult struct {
@@ -354,12 +350,8 @@ type sessionNewResult struct {
 }
 
 type sessionPromptParams struct {
-	SessionID string        `json:"sessionId"`
-	Prompt    promptContent `json:"prompt"`
-}
-
-type promptContent struct {
-	Content []contentBlock `json:"content"`
+	SessionID string         `json:"sessionId"`
+	Prompt    []contentBlock `json:"prompt"`
 }
 
 type contentBlock struct {
@@ -367,7 +359,7 @@ type contentBlock struct {
 	Text string `json:"text,omitempty"`
 }
 
-// sessionUpdate represents a single update from a session/notification.
+// sessionUpdate represents a single update from a session/update notification.
 // Kind identifies the update type (see updateKind* constants). Raw holds the
 // full JSON of the update object for downstream parsing of kind-specific fields.
 type sessionUpdate struct {
@@ -382,7 +374,7 @@ type sessionUpdate struct {
 // sessionNew creates a new ACP session with the given working directory.
 // Returns the session ID assigned by the server.
 func (c *acpClient) sessionNew(ctx context.Context, cwd string) (string, error) {
-	resp, err := c.call(ctx, "session/new", sessionNewParams{CWD: cwd})
+	resp, err := c.call(ctx, "session/new", sessionNewParams{CWD: cwd, MCPServers: []interface{}{}})
 	if err != nil {
 		return "", fmt.Errorf("session/new: %w", err)
 	}
@@ -397,8 +389,9 @@ func (c *acpClient) sessionNew(ctx context.Context, cwd string) (string, error) 
 }
 
 // sessionPrompt sends a prompt to the given session and streams updates
-// back to the caller via onUpdate. Blocks until a TurnEnd update is received,
-// the context is cancelled, or the connection is closed.
+// back to the caller via onUpdate. Blocks until the prompt response arrives
+// (signaling turn completion), the context is cancelled, or the connection
+// is closed.
 //
 // The onUpdate callback is called synchronously for each update — it should
 // not block.
@@ -409,10 +402,8 @@ func (c *acpClient) sessionNew(ctx context.Context, cwd string) (string, error) 
 func (c *acpClient) sessionPrompt(ctx context.Context, sessionID, prompt string, onUpdate func(sessionUpdate)) error {
 	params := sessionPromptParams{
 		SessionID: sessionID,
-		Prompt: promptContent{
-			Content: []contentBlock{
-				{Type: "text", Text: prompt},
-			},
+		Prompt: []contentBlock{
+			{Type: "text", Text: prompt},
 		},
 	}
 
@@ -443,23 +434,20 @@ func (c *acpClient) sessionPrompt(ctx context.Context, sessionID, prompt string,
 		return fmt.Errorf("acp: send session/prompt: %w", err)
 	}
 
-	// Read events until TurnEnd, an error response, or cancellation.
+	// Read events until prompt response, an error, or cancellation.
+	// Turn completion is signaled by the prompt response (with stopReason),
+	// not by a TurnEnd update.
 	for {
 		select {
 		case msg := <-c.Notifications:
-			if msg.Method != "session/notification" {
-				continue // ignore unrelated notifications
+			if msg.Method != "session/update" {
+				continue // ignore unrelated notifications (_kiro.dev/*, etc.)
 			}
-			updates, err := parseNotificationUpdates(msg)
+			u, err := parseSessionUpdate(msg)
 			if err != nil {
-				continue // skip malformed notifications
+				continue // skip malformed updates
 			}
-			for _, u := range updates {
-				onUpdate(u)
-				if u.Kind == updateKindTurnEnd {
-					return nil
-				}
-			}
+			onUpdate(u)
 
 		case msg, ok := <-respCh:
 			if !ok {
@@ -469,9 +457,20 @@ func (c *acpClient) sessionPrompt(ctx context.Context, sessionID, prompt string,
 			if msg.Error != nil {
 				return fmt.Errorf("acp: session/prompt error %d: %s", msg.Error.Code, msg.Error.Message)
 			}
-			// Success response arrived (typically after TurnEnd, but handle
-			// the case where the response arrives first).
-			return nil
+			// Drain any remaining notifications that arrived before/with the response.
+			for {
+				select {
+				case pending := <-c.Notifications:
+					if pending.Method != "session/update" {
+						continue
+					}
+					if u, err := parseSessionUpdate(pending); err == nil {
+						onUpdate(u)
+					}
+				default:
+					return nil
+				}
+			}
 
 		case <-ctx.Done():
 			return ctx.Err()
@@ -482,35 +481,35 @@ func (c *acpClient) sessionPrompt(ctx context.Context, sessionID, prompt string,
 	}
 }
 
-// parseNotificationUpdates extracts the updates array from a
-// session/notification's params. Returns one sessionUpdate per element,
-// each carrying its Kind and the full Raw JSON for downstream parsing.
-func parseNotificationUpdates(msg *rpcMessage) ([]sessionUpdate, error) {
+// parseSessionUpdate extracts the single update object from a session/update
+// notification's params. The update has a "sessionUpdate" field identifying
+// the kind (e.g. "agent_message_chunk", "tool_call").
+func parseSessionUpdate(msg *rpcMessage) (sessionUpdate, error) {
 	if msg.Params == nil {
-		return nil, fmt.Errorf("notification has no params")
+		return sessionUpdate{}, fmt.Errorf("notification has no params")
 	}
 
 	var params struct {
-		Updates []json.RawMessage `json:"updates"`
+		Update json.RawMessage `json:"update"`
 	}
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
-		return nil, fmt.Errorf("unmarshal notification params: %w", err)
+		return sessionUpdate{}, fmt.Errorf("unmarshal notification params: %w", err)
+	}
+	if params.Update == nil {
+		return sessionUpdate{}, fmt.Errorf("notification has no update field")
 	}
 
-	updates := make([]sessionUpdate, 0, len(params.Updates))
-	for _, raw := range params.Updates {
-		var header struct {
-			Kind string `json:"kind"`
-		}
-		if err := json.Unmarshal(raw, &header); err != nil {
-			continue // skip malformed updates
-		}
-		if header.Kind == "" {
-			continue // skip updates with no kind
-		}
-		updates = append(updates, sessionUpdate{Kind: header.Kind, Raw: raw})
+	var header struct {
+		SessionUpdate string `json:"sessionUpdate"`
 	}
-	return updates, nil
+	if err := json.Unmarshal(params.Update, &header); err != nil {
+		return sessionUpdate{}, fmt.Errorf("unmarshal update header: %w", err)
+	}
+	if header.SessionUpdate == "" {
+		return sessionUpdate{}, fmt.Errorf("update has no sessionUpdate field")
+	}
+
+	return sessionUpdate{Kind: header.SessionUpdate, Raw: params.Update}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -552,15 +551,21 @@ func (c *acpClient) autoApprovePermissions(ctx context.Context) {
 // Teardown
 // ---------------------------------------------------------------------------
 
-// Close terminates the kiro-cli subprocess and waits for the read goroutine
-// to drain. Safe to call multiple times.
+// Close terminates the kiro-cli subprocess (and all its children) and waits
+// for cleanup. Safe to call multiple times.
 func (c *acpClient) Close() error {
-	if c.cmd.Process != nil {
-		_ = c.cmd.Process.Kill()
+	if c.cmd != nil && c.cmd.Process != nil {
+		// Kill the entire process group. kiro-cli spawns child processes
+		// that inherit the stdout pipe; killing only the parent leaves
+		// the pipe open and cmd.Wait() hangs.
+		_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
 	}
-	// Wait collects the process exit status (may return "signal: killed").
-	err := c.cmd.Wait()
-	// Block until the read goroutine has fully exited.
+	// Collect the process exit status (may return "signal: killed").
+	var err error
+	if c.cmd != nil {
+		err = c.cmd.Wait()
+	}
+	// Wait for the read goroutine to fully exit.
 	<-c.done
 	return err
 }

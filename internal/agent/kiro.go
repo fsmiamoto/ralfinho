@@ -131,36 +131,41 @@ func (m *kiroEventMapper) handleUpdate(u sessionUpdate) {
 		m.mapToolCall(u)
 	case updateKindToolCallUpdate:
 		m.mapToolCallUpdate(u)
-	case updateKindTurnEnd:
-		m.mapTurnEnd()
 	}
 }
 
 // finalize ensures proper event lifecycle closure. Called after sessionPrompt
-// returns (whether normally or on error) to handle cases where the stream
-// ended without a clean TurnEnd (e.g. process crash, context cancel).
+// returns. Kiro signals turn completion via the prompt response (not a
+// TurnEnd update), so finalize always closes the message block and emits
+// TurnEnd.
 func (m *kiroEventMapper) finalize() {
-	if !m.turnEnded && m.inMessage {
+	if m.inMessage {
 		m.emitMessageEnd()
 	}
-	// Don't synthesize TurnEnd on error — the runner handles incomplete
-	// iterations via error propagation.
+	if !m.turnEnded {
+		m.onEvent(events.Event{Type: events.EventTurnEnd})
+		m.turnEnded = true
+	}
 }
 
 // ---------------------------------------------------------------------------
 // Mapping methods
 // ---------------------------------------------------------------------------
 
-// mapAgentMessage translates an AgentMessageChunk update into
+// mapAgentMessage translates an agent_message_chunk update into
 // EventMessageUpdate with a text_delta AssistantEvent payload.
+//
+// Kiro sends: {"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"..."}}
 //
 // If no message block is currently open, a synthetic MessageStart(assistant)
 // is emitted first to satisfy the TUI's event lifecycle expectations.
 func (m *kiroEventMapper) mapAgentMessage(u sessionUpdate) {
 	var chunk struct {
-		Text string `json:"text"`
+		Content struct {
+			Text string `json:"text"`
+		} `json:"content"`
 	}
-	if err := json.Unmarshal(u.Raw, &chunk); err != nil || chunk.Text == "" {
+	if err := json.Unmarshal(u.Raw, &chunk); err != nil || chunk.Content.Text == "" {
 		return
 	}
 
@@ -170,13 +175,13 @@ func (m *kiroEventMapper) mapAgentMessage(u sessionUpdate) {
 	}
 
 	// Accumulate for the return value.
-	m.text.WriteString(chunk.Text)
+	m.text.WriteString(chunk.Content.Text)
 
 	// Build the text_delta AssistantEvent payload.
 	ae := events.AssistantEvent{
 		Type:         "text_delta",
 		ContentIndex: 0,
-		Delta:        chunk.Text,
+		Delta:        chunk.Content.Text,
 	}
 	aeJSON, _ := json.Marshal(ae)
 
@@ -186,26 +191,30 @@ func (m *kiroEventMapper) mapAgentMessage(u sessionUpdate) {
 	})
 }
 
-// mapToolCall translates a ToolCall update into tool execution events.
+// mapToolCall translates a tool_call update into tool execution events.
+//
+// Kiro sends tool_call updates with fields: toolCallId, title, kind, status,
+// rawInput, rawOutput. Multiple tool_call updates may arrive for the same
+// toolCallId as its status progresses.
 //
 // Status mapping:
-//   - "pending" or "running" → EventToolExecutionStart (close message block first)
+//   - "in_progress" → EventToolExecutionStart (close message block first)
 //   - "completed" → EventToolExecutionEnd with isError=false
 //   - "error" → EventToolExecutionEnd with isError=true
 func (m *kiroEventMapper) mapToolCall(u sessionUpdate) {
 	var tc struct {
-		ToolName   string          `json:"toolName"`
 		ToolCallID string          `json:"toolCallId"`
-		Input      json.RawMessage `json:"input"`
-		Output     json.RawMessage `json:"output"`
+		Title      string          `json:"title"`
 		Status     string          `json:"status"`
+		RawInput   json.RawMessage `json:"rawInput"`
+		RawOutput  json.RawMessage `json:"rawOutput"`
 	}
 	if err := json.Unmarshal(u.Raw, &tc); err != nil {
 		return
 	}
 
 	switch tc.Status {
-	case "pending", "running":
+	case "in_progress":
 		// Close any open message block before tool use.
 		if m.inMessage {
 			m.emitMessageEnd()
@@ -213,8 +222,8 @@ func (m *kiroEventMapper) mapToolCall(u sessionUpdate) {
 		m.onEvent(events.Event{
 			Type:       events.EventToolExecutionStart,
 			ToolCallID: tc.ToolCallID,
-			ToolName:   tc.ToolName,
-			Args:       tc.Input,
+			ToolName:   tc.Title,
+			Args:       tc.RawInput,
 		})
 
 	case "completed":
@@ -222,8 +231,8 @@ func (m *kiroEventMapper) mapToolCall(u sessionUpdate) {
 		m.onEvent(events.Event{
 			Type:       events.EventToolExecutionEnd,
 			ToolCallID: tc.ToolCallID,
-			ToolName:   tc.ToolName,
-			Result:     tc.Output,
+			ToolName:   tc.Title,
+			Result:     tc.RawOutput,
 			IsError:    &isErr,
 		})
 
@@ -232,8 +241,8 @@ func (m *kiroEventMapper) mapToolCall(u sessionUpdate) {
 		m.onEvent(events.Event{
 			Type:       events.EventToolExecutionEnd,
 			ToolCallID: tc.ToolCallID,
-			ToolName:   tc.ToolName,
-			Result:     tc.Output,
+			ToolName:   tc.Title,
+			Result:     tc.RawOutput,
 			IsError:    &isErr,
 		})
 	}
@@ -258,15 +267,6 @@ func (m *kiroEventMapper) mapToolCallUpdate(u sessionUpdate) {
 		ToolName:      tc.ToolName,
 		PartialResult: tc.PartialResult,
 	})
-}
-
-// mapTurnEnd closes any open message block and emits EventTurnEnd.
-func (m *kiroEventMapper) mapTurnEnd() {
-	if m.inMessage {
-		m.emitMessageEnd()
-	}
-	m.onEvent(events.Event{Type: events.EventTurnEnd})
-	m.turnEnded = true
 }
 
 // ---------------------------------------------------------------------------

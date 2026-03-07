@@ -1,9 +1,9 @@
-// jsonrpc.go implements JSON-RPC 2.0 message types and Content-Length framing
-// for the ACP (Agent Communication Protocol) transport.
+// jsonrpc.go implements JSON-RPC 2.0 message types and newline-delimited
+// framing for the ACP (Agent Communication Protocol) transport.
 //
-// ACP uses LSP-style framing over stdio: each message is prefixed with
-// "Content-Length: N\r\n\r\n" followed by N bytes of JSON. This file provides
-// the low-level codec for reading and writing these framed messages.
+// Kiro-cli ACP uses plain newline-delimited JSON over stdio: each message
+// is a single JSON object terminated by a newline. This file provides the
+// low-level codec for reading and writing these messages.
 //
 // The codec is intentionally transport-agnostic — it operates on an io.Reader
 // and io.Writer which are typically connected to a subprocess's stdout/stdin.
@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -149,14 +148,13 @@ func newRPCCodec(r io.Reader, w io.Writer) *rpcCodec {
 	}
 }
 
-// send writes a JSON-RPC 2.0 message with Content-Length framing.
+// send writes a JSON-RPC 2.0 message as a single newline-delimited JSON line.
 // The msg can be any JSON-marshalable value (rpcRequest, rpcResponse, etc.).
 //
-// Wire format:
+// Wire format: <json>\n
 //
-//	Content-Length: <N>\r\n
-//	\r\n
-//	<N bytes of JSON>
+// Kiro-cli ACP uses plain newline-delimited JSON (not LSP-style
+// Content-Length framing).
 //
 // Thread-safe: concurrent calls are serialized via mutex.
 func (c *rpcCodec) send(msg interface{}) error {
@@ -168,65 +166,51 @@ func (c *rpcCodec) send(msg interface{}) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(body))
-	if _, err := io.WriteString(c.writer, header); err != nil {
-		return fmt.Errorf("jsonrpc: write header: %w", err)
-	}
+	// Write JSON followed by newline.
 	if _, err := c.writer.Write(body); err != nil {
-		return fmt.Errorf("jsonrpc: write body: %w", err)
+		return fmt.Errorf("jsonrpc: write: %w", err)
+	}
+	if _, err := c.writer.Write([]byte("\n")); err != nil {
+		return fmt.Errorf("jsonrpc: write newline: %w", err)
 	}
 
 	return nil
 }
 
-// readMessage reads and parses a single Content-Length framed JSON-RPC 2.0
-// message. Blocks until a complete message is available or an error occurs
+// readMessage reads and parses a single newline-delimited JSON-RPC 2.0
+// message. Blocks until a complete line is available or an error occurs
 // (including io.EOF when the remote process exits).
+//
+// Kiro-cli ACP uses plain newline-delimited JSON (not LSP-style
+// Content-Length framing). Each message is a single JSON object per line.
 //
 // NOT thread-safe: must be called from a single goroutine.
 func (c *rpcCodec) readMessage() (*rpcMessage, error) {
-	// Phase 1: Read headers until the blank-line separator.
-	// Headers follow HTTP-style format: "Key: Value\r\n", terminated by "\r\n".
-	contentLength := -1
 	for {
 		line, err := c.reader.ReadString('\n')
 		if err != nil {
-			return nil, fmt.Errorf("jsonrpc: read header: %w", err)
-		}
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
-			break // blank line = end of headers
-		}
-		if strings.HasPrefix(line, "Content-Length: ") {
-			n, err := strconv.Atoi(strings.TrimPrefix(line, "Content-Length: "))
-			if err != nil {
-				return nil, fmt.Errorf("jsonrpc: bad Content-Length %q: %w", line, err)
+			if len(strings.TrimSpace(line)) > 0 {
+				// Partial line before EOF — try to parse it.
+				var msg rpcMessage
+				if jsonErr := json.Unmarshal([]byte(strings.TrimSpace(line)), &msg); jsonErr == nil {
+					return &msg, nil
+				}
 			}
-			contentLength = n
+			return nil, fmt.Errorf("jsonrpc: read: %w", err)
 		}
-		// Other headers (e.g. Content-Type) are silently ignored.
-	}
 
-	if contentLength < 0 {
-		return nil, fmt.Errorf("jsonrpc: missing Content-Length header")
-	}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue // skip blank lines
+		}
 
-	// Phase 2: Read exactly contentLength bytes of JSON body.
-	body := make([]byte, contentLength)
-	if _, err := io.ReadFull(c.reader, body); err != nil {
-		return nil, fmt.Errorf("jsonrpc: read body (%d bytes): %w", contentLength, err)
-	}
+		var msg rpcMessage
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			return nil, &malformedError{detail: fmt.Sprintf("jsonrpc: unmarshal: %v", err)}
+		}
 
-	// Phase 3: Unmarshal into unified message type.
-	// A JSON parse failure here is recoverable — the stream position is still
-	// valid since we read exactly contentLength bytes. Return a malformedError
-	// so the caller can decide to skip rather than terminate.
-	var msg rpcMessage
-	if err := json.Unmarshal(body, &msg); err != nil {
-		return nil, &malformedError{detail: fmt.Sprintf("jsonrpc: unmarshal (%d bytes): %v", contentLength, err)}
+		return &msg, nil
 	}
-
-	return &msg, nil
 }
 
 // newRequest creates an rpcRequest with an auto-incremented ID.

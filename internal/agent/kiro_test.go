@@ -28,7 +28,7 @@ func collectEvents() (func(events.Event), func() []events.Event) {
 }
 
 // ---------------------------------------------------------------------------
-// AgentMessageChunk → EventMessageUpdate mapping
+// agent_message_chunk → EventMessageUpdate mapping
 // ---------------------------------------------------------------------------
 
 func TestKiroMapper_AgentMessage_EmitsMessageStart(t *testing.T) {
@@ -37,7 +37,7 @@ func TestKiroMapper_AgentMessage_EmitsMessageStart(t *testing.T) {
 
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindAgentMessage,
-		Raw:  json.RawMessage(`{"kind":"AgentMessageChunk","text":"Hello"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello"}}`),
 	})
 
 	evts := get()
@@ -82,11 +82,11 @@ func TestKiroMapper_AgentMessage_AccumulatesText(t *testing.T) {
 
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindAgentMessage,
-		Raw:  json.RawMessage(`{"kind":"AgentMessageChunk","text":"Hello "}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello "}}`),
 	})
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindAgentMessage,
-		Raw:  json.RawMessage(`{"kind":"AgentMessageChunk","text":"world"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"world"}}`),
 	})
 
 	if got := m.assistantText(); got != "Hello world" {
@@ -100,11 +100,11 @@ func TestKiroMapper_AgentMessage_NoDoubleMessageStart(t *testing.T) {
 
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindAgentMessage,
-		Raw:  json.RawMessage(`{"kind":"AgentMessageChunk","text":"a"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"a"}}`),
 	})
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindAgentMessage,
-		Raw:  json.RawMessage(`{"kind":"AgentMessageChunk","text":"b"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"b"}}`),
 	})
 
 	evts := get()
@@ -130,7 +130,7 @@ func TestKiroMapper_AgentMessage_SkipsEmptyText(t *testing.T) {
 
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindAgentMessage,
-		Raw:  json.RawMessage(`{"kind":"AgentMessageChunk","text":""}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":""}}`),
 	})
 
 	if len(get()) != 0 {
@@ -139,16 +139,16 @@ func TestKiroMapper_AgentMessage_SkipsEmptyText(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ToolCall → EventToolExecutionStart/End mapping
+// tool_call → EventToolExecutionStart/End mapping
 // ---------------------------------------------------------------------------
 
-func TestKiroMapper_ToolCall_PendingEmitsStart(t *testing.T) {
+func TestKiroMapper_ToolCall_InProgressEmitsStart(t *testing.T) {
 	onEvent, get := collectEvents()
 	m := newKiroEventMapper(onEvent)
 
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindToolCall,
-		Raw:  json.RawMessage(`{"kind":"ToolCall","toolName":"bash","toolCallId":"tc-1","input":{"command":"ls"},"status":"pending"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"bash","toolCallId":"tc-1","rawInput":{"command":"ls"},"status":"in_progress"}`),
 	})
 
 	evts := get()
@@ -172,7 +172,7 @@ func TestKiroMapper_ToolCall_CompletedEmitsEnd(t *testing.T) {
 
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindToolCall,
-		Raw:  json.RawMessage(`{"kind":"ToolCall","toolName":"read","toolCallId":"tc-2","output":"file contents","status":"completed"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"read","toolCallId":"tc-2","rawOutput":"file contents","status":"completed"}`),
 	})
 
 	evts := get()
@@ -193,7 +193,7 @@ func TestKiroMapper_ToolCall_ErrorEmitsEndWithError(t *testing.T) {
 
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindToolCall,
-		Raw:  json.RawMessage(`{"kind":"ToolCall","toolName":"bash","toolCallId":"tc-3","output":"command failed","status":"error"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"bash","toolCallId":"tc-3","rawOutput":"command failed","status":"error"}`),
 	})
 
 	evts := get()
@@ -215,13 +215,13 @@ func TestKiroMapper_ToolCall_ClosesMessageBlock(t *testing.T) {
 	// Start a message block.
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindAgentMessage,
-		Raw:  json.RawMessage(`{"kind":"AgentMessageChunk","text":"thinking..."}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"thinking..."}}`),
 	})
 
 	// Tool call should close the message block first.
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindToolCall,
-		Raw:  json.RawMessage(`{"kind":"ToolCall","toolName":"bash","toolCallId":"tc-4","status":"pending"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"bash","toolCallId":"tc-4","status":"in_progress"}`),
 	})
 
 	evts := get()
@@ -238,7 +238,7 @@ func TestKiroMapper_ToolCall_ClosesMessageBlock(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ToolCallUpdate → EventToolExecutionUpdate mapping
+// tool_call_update → EventToolExecutionUpdate mapping
 // ---------------------------------------------------------------------------
 
 func TestKiroMapper_ToolCallUpdate(t *testing.T) {
@@ -247,7 +247,7 @@ func TestKiroMapper_ToolCallUpdate(t *testing.T) {
 
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindToolCallUpdate,
-		Raw:  json.RawMessage(`{"kind":"ToolCallUpdate","toolCallId":"tc-5","toolName":"bash","partialResult":"partial output"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call_update","toolCallId":"tc-5","toolName":"bash","partialResult":"partial output"}`),
 	})
 
 	evts := get()
@@ -263,55 +263,7 @@ func TestKiroMapper_ToolCallUpdate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TurnEnd → EventTurnEnd mapping
-// ---------------------------------------------------------------------------
-
-func TestKiroMapper_TurnEnd(t *testing.T) {
-	onEvent, get := collectEvents()
-	m := newKiroEventMapper(onEvent)
-
-	m.handleUpdate(sessionUpdate{
-		Kind: updateKindTurnEnd,
-		Raw:  json.RawMessage(`{"kind":"TurnEnd"}`),
-	})
-
-	evts := get()
-	if len(evts) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(evts))
-	}
-	if evts[0].Type != events.EventTurnEnd {
-		t.Errorf("expected %s, got %s", events.EventTurnEnd, evts[0].Type)
-	}
-}
-
-func TestKiroMapper_TurnEnd_ClosesMessageBlock(t *testing.T) {
-	onEvent, get := collectEvents()
-	m := newKiroEventMapper(onEvent)
-
-	m.handleUpdate(sessionUpdate{
-		Kind: updateKindAgentMessage,
-		Raw:  json.RawMessage(`{"kind":"AgentMessageChunk","text":"done"}`),
-	})
-	m.handleUpdate(sessionUpdate{
-		Kind: updateKindTurnEnd,
-		Raw:  json.RawMessage(`{"kind":"TurnEnd"}`),
-	})
-
-	evts := get()
-	// Expected: MessageStart, MessageUpdate, MessageEnd, TurnEnd
-	if len(evts) != 4 {
-		t.Fatalf("expected 4 events, got %d", len(evts))
-	}
-	if evts[2].Type != events.EventMessageEnd {
-		t.Errorf("event 2: expected %s, got %s", events.EventMessageEnd, evts[2].Type)
-	}
-	if evts[3].Type != events.EventTurnEnd {
-		t.Errorf("event 3: expected %s, got %s", events.EventTurnEnd, evts[3].Type)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Finalize behavior
+// Finalize behavior (replaces TurnEnd update handling)
 // ---------------------------------------------------------------------------
 
 func TestKiroMapper_Finalize_ClosesOpenMessage(t *testing.T) {
@@ -320,40 +272,40 @@ func TestKiroMapper_Finalize_ClosesOpenMessage(t *testing.T) {
 
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindAgentMessage,
-		Raw:  json.RawMessage(`{"kind":"AgentMessageChunk","text":"interrupted"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"interrupted"}}`),
 	})
-	// No TurnEnd — simulate an error/cancel scenario.
+	// Finalize closes the message block and emits TurnEnd.
 	m.finalize()
 
 	evts := get()
-	// Expected: MessageStart, MessageUpdate, MessageEnd (from finalize)
-	if len(evts) != 3 {
-		t.Fatalf("expected 3 events, got %d", len(evts))
+	// Expected: MessageStart, MessageUpdate, MessageEnd, TurnEnd
+	if len(evts) != 4 {
+		t.Fatalf("expected 4 events, got %d", len(evts))
 	}
 	if evts[2].Type != events.EventMessageEnd {
 		t.Errorf("event 2: expected %s (from finalize), got %s", events.EventMessageEnd, evts[2].Type)
 	}
+	if evts[3].Type != events.EventTurnEnd {
+		t.Errorf("event 3: expected %s (from finalize), got %s", events.EventTurnEnd, evts[3].Type)
+	}
 }
 
-func TestKiroMapper_Finalize_NoopAfterTurnEnd(t *testing.T) {
+func TestKiroMapper_Finalize_Idempotent(t *testing.T) {
 	onEvent, get := collectEvents()
 	m := newKiroEventMapper(onEvent)
 
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindAgentMessage,
-		Raw:  json.RawMessage(`{"kind":"AgentMessageChunk","text":"done"}`),
-	})
-	m.handleUpdate(sessionUpdate{
-		Kind: updateKindTurnEnd,
-		Raw:  json.RawMessage(`{"kind":"TurnEnd"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}`),
 	})
 
-	countBefore := len(get())
 	m.finalize()
-	countAfter := len(get())
+	countAfterFirst := len(get())
+	m.finalize()
+	countAfterSecond := len(get())
 
-	if countAfter != countBefore {
-		t.Errorf("finalize should be a no-op after TurnEnd, but emitted %d extra events", countAfter-countBefore)
+	if countAfterSecond != countAfterFirst {
+		t.Errorf("second finalize should be a no-op, but emitted %d extra events", countAfterSecond-countAfterFirst)
 	}
 }
 
@@ -363,13 +315,18 @@ func TestKiroMapper_Finalize_NoopWhenNoEvents(t *testing.T) {
 
 	m.finalize()
 
-	if len(get()) != 0 {
-		t.Error("finalize should emit nothing when no events were processed")
+	// Even with no events, finalize emits TurnEnd.
+	evts := get()
+	if len(evts) != 1 {
+		t.Fatalf("expected 1 event (TurnEnd), got %d", len(evts))
+	}
+	if evts[0].Type != events.EventTurnEnd {
+		t.Errorf("expected %s, got %s", events.EventTurnEnd, evts[0].Type)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Full lifecycle: text → tool → text → TurnEnd
+// Full lifecycle: text → tool → text → finalize
 // ---------------------------------------------------------------------------
 
 func TestKiroMapper_FullLifecycle(t *testing.T) {
@@ -379,32 +336,29 @@ func TestKiroMapper_FullLifecycle(t *testing.T) {
 	// Agent writes some text.
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindAgentMessage,
-		Raw:  json.RawMessage(`{"kind":"AgentMessageChunk","text":"Let me check..."}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Let me check..."}}`),
 	})
 
 	// Agent calls a tool.
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindToolCall,
-		Raw:  json.RawMessage(`{"kind":"ToolCall","toolName":"bash","toolCallId":"tc-1","input":{"command":"ls"},"status":"running"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"bash","toolCallId":"tc-1","rawInput":{"command":"ls"},"status":"in_progress"}`),
 	})
 
 	// Tool completes.
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindToolCall,
-		Raw:  json.RawMessage(`{"kind":"ToolCall","toolName":"bash","toolCallId":"tc-1","output":"file1.go\nfile2.go","status":"completed"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"bash","toolCallId":"tc-1","rawOutput":"file1.go\nfile2.go","status":"completed"}`),
 	})
 
 	// Agent writes more text.
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindAgentMessage,
-		Raw:  json.RawMessage(`{"kind":"AgentMessageChunk","text":"Found 2 files."}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Found 2 files."}}`),
 	})
 
-	// Turn ends.
-	m.handleUpdate(sessionUpdate{
-		Kind: updateKindTurnEnd,
-		Raw:  json.RawMessage(`{"kind":"TurnEnd"}`),
-	})
+	// Turn ends (via finalize, since kiro signals completion via prompt response).
+	m.finalize()
 
 	evts := get()
 
@@ -453,16 +407,15 @@ func TestKiroMapper_ToolCallWithoutPrecedingText(t *testing.T) {
 	// Tool call before any text — no MessageStart/End needed.
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindToolCall,
-		Raw:  json.RawMessage(`{"kind":"ToolCall","toolName":"read","toolCallId":"tc-1","status":"pending"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"read","toolCallId":"tc-1","status":"in_progress"}`),
 	})
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindToolCall,
-		Raw:  json.RawMessage(`{"kind":"ToolCall","toolName":"read","toolCallId":"tc-1","output":"contents","status":"completed"}`),
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"read","toolCallId":"tc-1","rawOutput":"contents","status":"completed"}`),
 	})
-	m.handleUpdate(sessionUpdate{
-		Kind: updateKindTurnEnd,
-		Raw:  json.RawMessage(`{"kind":"TurnEnd"}`),
-	})
+
+	// Turn ends via finalize.
+	m.finalize()
 
 	evts := get()
 	// Expected: ToolStart, ToolEnd, TurnEnd (no MessageStart/End).
