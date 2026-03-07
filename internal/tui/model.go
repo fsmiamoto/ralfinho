@@ -281,6 +281,15 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			ToolArgs:   formatToolArgs(de.ToolName, de.RawArgs),
 		})
 		m.activeToolIdx = len(m.blocks) - 1
+	case "tool_update":
+		// Intermediate update — kiro sends the actual args in a follow-up.
+		// Find the matching tool block and update its args.
+		for i := len(m.blocks) - 1; i >= 0; i-- {
+			if m.blocks[i].Kind == BlockToolCall && m.blocks[i].ToolCallID == de.ToolCallID {
+				m.blocks[i].ToolArgs = formatToolArgs(de.ToolName, de.RawArgs)
+				break
+			}
+		}
 	case "tool_end":
 		// Find the matching tool_start block by ToolCallID.
 		for i := len(m.blocks) - 1; i >= 0; i-- {

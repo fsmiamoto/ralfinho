@@ -263,6 +263,85 @@ func TestKiroMapper_ToolCallUpdate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// tool_call without status → EventToolExecutionUpdate (intermediate args)
+// ---------------------------------------------------------------------------
+
+func TestKiroMapper_ToolCall_IntermediateUpdateForwardsArgs(t *testing.T) {
+	onEvent, get := collectEvents()
+	m := newKiroEventMapper(onEvent)
+
+	// First: in_progress with no rawInput (kiro's initial signal).
+	m.handleUpdate(sessionUpdate{
+		Kind: updateKindToolCall,
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"shell","toolCallId":"tc-6","kind":"execute","status":"in_progress"}`),
+	})
+
+	// Second: follow-up without status carrying the actual rawInput.
+	m.handleUpdate(sessionUpdate{
+		Kind: updateKindToolCall,
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"Running: git status","toolCallId":"tc-6","kind":"execute","rawInput":{"command":"git status"}}`),
+	})
+
+	evts := get()
+	if len(evts) != 2 {
+		t.Fatalf("expected 2 events (ToolExecutionStart + ToolExecutionUpdate), got %d", len(evts))
+	}
+
+	// First event: ToolExecutionStart with minimal info.
+	if evts[0].Type != events.EventToolExecutionStart {
+		t.Errorf("event 0: expected %s, got %s", events.EventToolExecutionStart, evts[0].Type)
+	}
+	if evts[0].ToolName != "shell" {
+		t.Errorf("event 0: expected toolName=shell, got %q", evts[0].ToolName)
+	}
+
+	// Second event: ToolExecutionUpdate with the actual args.
+	if evts[1].Type != events.EventToolExecutionUpdate {
+		t.Errorf("event 1: expected %s, got %s", events.EventToolExecutionUpdate, evts[1].Type)
+	}
+	if evts[1].ToolCallID != "tc-6" {
+		t.Errorf("event 1: expected toolCallId=tc-6, got %q", evts[1].ToolCallID)
+	}
+	if evts[1].Args == nil {
+		t.Fatal("event 1: expected non-nil Args")
+	}
+	var args struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(evts[1].Args, &args); err != nil {
+		t.Fatalf("unmarshal args: %v", err)
+	}
+	if args.Command != "git status" {
+		t.Errorf("expected command=%q, got %q", "git status", args.Command)
+	}
+}
+
+func TestKiroMapper_ToolCall_IntermediateUpdateNoArgsIgnored(t *testing.T) {
+	onEvent, get := collectEvents()
+	m := newKiroEventMapper(onEvent)
+
+	// in_progress first.
+	m.handleUpdate(sessionUpdate{
+		Kind: updateKindToolCall,
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"shell","toolCallId":"tc-7","status":"in_progress"}`),
+	})
+
+	// Follow-up without status AND without rawInput — should be ignored.
+	m.handleUpdate(sessionUpdate{
+		Kind: updateKindToolCall,
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"shell","toolCallId":"tc-7"}`),
+	})
+
+	evts := get()
+	if len(evts) != 1 {
+		t.Fatalf("expected 1 event (only ToolExecutionStart), got %d", len(evts))
+	}
+	if evts[0].Type != events.EventToolExecutionStart {
+		t.Errorf("expected %s, got %s", events.EventToolExecutionStart, evts[0].Type)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Finalize behavior (replaces TurnEnd update handling)
 // ---------------------------------------------------------------------------
 

@@ -152,7 +152,7 @@ func formatToolArgs(toolName string, rawArgs json.RawMessage) string {
 	}
 
 	switch toolName {
-	case "bash", "Bash":
+	case "bash", "Bash", "shell":
 		var args struct {
 			Command string `json:"command"`
 		}
