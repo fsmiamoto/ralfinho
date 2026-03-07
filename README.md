@@ -83,7 +83,7 @@ ralfinho --agent pi --plan PLAN.md     # explicit
 ### kiro
 
 Uses [kiro-cli](https://kiro.dev) via the
-[Agent Communication Protocol (ACP)](https://kiro.dev/docs/cli/acp/) — a
+[Agent Client Protocol (ACP)](https://kiro.dev/docs/cli/acp/) — a
 JSON-RPC 2.0 protocol over stdin/stdout.
 
 ```bash
