@@ -245,6 +245,20 @@ func (m *kiroEventMapper) mapToolCall(u sessionUpdate) {
 			Result:     tc.RawOutput,
 			IsError:    &isErr,
 		})
+
+	default:
+		// Intermediate update — kiro sends a follow-up tool_call without
+		// a status field that carries the actual rawInput and an updated
+		// title (e.g. "Running: git status"). Forward as a tool execution
+		// update so the TUI can display the real arguments.
+		if tc.RawInput != nil {
+			m.onEvent(events.Event{
+				Type:       events.EventToolExecutionUpdate,
+				ToolCallID: tc.ToolCallID,
+				ToolName:   tc.Title,
+				Args:       tc.RawInput,
+			})
+		}
 	}
 }
 

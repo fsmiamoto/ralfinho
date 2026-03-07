@@ -212,6 +212,20 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			RawArgs:    ev.Args,
 		}}
 
+	case runner.EventToolExecutionUpdate:
+		// Intermediate tool update — carries the actual arguments for a tool
+		// that was previously started with minimal info (common with kiro-cli).
+		return []DisplayEvent{{
+			Type:       "tool_update",
+			Summary:    fmt.Sprintf("⚙ %s", ev.ToolName),
+			Detail:     fmt.Sprintf("Tool: %s\nCall ID: %s", ev.ToolName, ev.ToolCallID),
+			Timestamp:  now,
+			Iteration:  c.iteration,
+			ToolCallID: ev.ToolCallID,
+			ToolName:   ev.ToolName,
+			RawArgs:    ev.Args,
+		}}
+
 	case runner.EventToolExecutionEnd:
 		isErr := ev.IsError != nil && *ev.IsError
 		var summary string
