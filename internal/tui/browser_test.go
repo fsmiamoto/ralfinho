@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -1187,4 +1188,812 @@ func updateBrowserModel(t *testing.T, model BrowserModel, key tea.KeyMsg) Browse
 		t.Fatalf("updated model has type %T, want BrowserModel", updated)
 	}
 	return next
+}
+
+// updateBrowserModelWithCmd returns both the updated model and the tea.Cmd so
+// tests can verify whether tea.Quit was returned.
+func updateBrowserModelWithCmd(t *testing.T, model BrowserModel, key tea.KeyMsg) (BrowserModel, tea.Cmd) {
+	t.Helper()
+	updated, cmd := model.Update(key)
+	next, ok := updated.(BrowserModel)
+	if !ok {
+		t.Fatalf("updated model has type %T, want BrowserModel", updated)
+	}
+	return next, cmd
+}
+
+func isQuitCmd(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	msg := cmd()
+	_, ok := msg.(tea.QuitMsg)
+	return ok
+}
+
+// --- Phase 4 task 2: focused model-level tests ---
+
+// ===== Selection movement =====
+
+func TestBrowserCursorClampAtEnd(t *testing.T) {
+	summaries := makeSummaries(3)
+	m := initBrowserModel(summaries, 100, 40)
+
+	// Move to last row.
+	m = pressKey(t, m, "j")
+	m = pressKey(t, m, "j")
+	if m.cursor != 2 {
+		t.Fatalf("cursor = %d, want 2", m.cursor)
+	}
+
+	// j again should clamp at 2.
+	m = pressKey(t, m, "j")
+	if m.cursor != 2 {
+		t.Fatalf("cursor = %d after j past end, want 2", m.cursor)
+	}
+}
+
+func TestBrowserCursorClampAtStart(t *testing.T) {
+	summaries := makeSummaries(3)
+	m := initBrowserModel(summaries, 100, 40)
+
+	// Cursor starts at 0. k should keep it there.
+	if m.cursor != 0 {
+		t.Fatalf("initial cursor = %d, want 0", m.cursor)
+	}
+	m = pressKey(t, m, "k")
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d after k at start, want 0", m.cursor)
+	}
+}
+
+func TestBrowserGoToTop(t *testing.T) {
+	summaries := makeSummaries(5)
+	m := initBrowserModel(summaries, 100, 40)
+
+	// Move to row 3.
+	m = pressKey(t, m, "j")
+	m = pressKey(t, m, "j")
+	m = pressKey(t, m, "j")
+	if m.cursor != 3 {
+		t.Fatalf("cursor = %d, want 3", m.cursor)
+	}
+
+	// g should go to top.
+	m = pressKey(t, m, "g")
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d after g, want 0", m.cursor)
+	}
+	if m.scroll != 0 {
+		t.Fatalf("scroll = %d after g, want 0", m.scroll)
+	}
+}
+
+func TestBrowserGoToBottom(t *testing.T) {
+	summaries := makeSummaries(10)
+	m := initBrowserModel(summaries, 100, 40)
+
+	// G should go to last row.
+	m = pressKey(t, m, "G")
+	if m.cursor != 9 {
+		t.Fatalf("cursor = %d after G, want 9", m.cursor)
+	}
+	if m.selectedRunID != summaries[9].RunID {
+		t.Fatalf("selectedRunID = %q, want %q", m.selectedRunID, summaries[9].RunID)
+	}
+}
+
+func TestBrowserHalfPageDown(t *testing.T) {
+	summaries := makeSummaries(20)
+	m := initBrowserModel(summaries, 100, 40)
+
+	half := m.visibleSessionRows() / 2
+	m = pressKeyMsg(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlD}))
+	if m.cursor != half {
+		t.Fatalf("cursor = %d after Ctrl+D, want %d", m.cursor, half)
+	}
+}
+
+func TestBrowserHalfPageUp(t *testing.T) {
+	summaries := makeSummaries(20)
+	m := initBrowserModel(summaries, 100, 40)
+
+	// Go to bottom first.
+	m = pressKey(t, m, "G")
+	lastCursor := m.cursor
+
+	half := m.visibleSessionRows() / 2
+	m = pressKeyMsg(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlU}))
+	want := lastCursor - half
+	if want < 0 {
+		want = 0
+	}
+	if m.cursor != want {
+		t.Fatalf("cursor = %d after Ctrl+U from bottom, want %d", m.cursor, want)
+	}
+}
+
+func TestBrowserScrollFollowsCursor(t *testing.T) {
+	summaries := makeSummaries(30)
+	m := initBrowserModel(summaries, 100, 20)
+
+	visible := m.visibleSessionRows()
+	if visible < 2 {
+		t.Skip("terminal too small for scroll test")
+	}
+
+	// Move cursor past the visible area.
+	for i := 0; i < visible+2; i++ {
+		m = pressKey(t, m, "j")
+	}
+
+	// Scroll must have advanced so cursor is visible.
+	if m.cursor < m.scroll || m.cursor >= m.scroll+visible {
+		t.Fatalf("cursor %d not in visible range [%d, %d)", m.cursor, m.scroll, m.scroll+visible)
+	}
+
+	// Now go back up past scroll.
+	for i := 0; i < visible+2; i++ {
+		m = pressKey(t, m, "k")
+	}
+	if m.cursor < m.scroll || m.cursor >= m.scroll+visible {
+		t.Fatalf("cursor %d not in visible range after scrolling up [%d, %d)", m.cursor, m.scroll, m.scroll+visible)
+	}
+}
+
+func TestBrowserPreviewScrollInPreviewPane(t *testing.T) {
+	summaries := makeSummaries(3)
+	m := initBrowserModel(summaries, 100, 20)
+
+	initialCursor := m.cursor
+
+	// Switch to preview pane.
+	m = pressKey(t, m, "tab")
+	if m.focusedPane != 1 {
+		t.Fatalf("focusedPane = %d after Tab, want 1", m.focusedPane)
+	}
+
+	// j/k in preview should scroll preview, not move cursor.
+	m = pressKey(t, m, "j")
+	if m.cursor != initialCursor {
+		t.Fatalf("cursor moved in preview pane: got %d, want %d", m.cursor, initialCursor)
+	}
+	if m.previewScroll < 0 {
+		t.Fatalf("previewScroll = %d, want >= 0", m.previewScroll)
+	}
+}
+
+func TestBrowserTabTogglesFocus(t *testing.T) {
+	summaries := makeSummaries(1)
+	m := initBrowserModel(summaries, 100, 30)
+
+	if m.focusedPane != 0 {
+		t.Fatalf("initial focusedPane = %d, want 0", m.focusedPane)
+	}
+	m = pressKey(t, m, "tab")
+	if m.focusedPane != 1 {
+		t.Fatalf("focusedPane = %d after 1st Tab, want 1", m.focusedPane)
+	}
+	m = pressKey(t, m, "tab")
+	if m.focusedPane != 0 {
+		t.Fatalf("focusedPane = %d after 2nd Tab, want 0", m.focusedPane)
+	}
+}
+
+func TestBrowserMoveCursorResetsPreviewScroll(t *testing.T) {
+	summaries := makeSummaries(5)
+	m := initBrowserModel(summaries, 100, 20)
+
+	// Switch to preview, scroll it.
+	m = pressKey(t, m, "tab")
+	m = pressKey(t, m, "j")
+	m = pressKey(t, m, "j")
+	if m.previewScroll == 0 {
+		// Preview content may be short — that's okay, test still valid.
+	}
+
+	// Switch back to sessions and move cursor.
+	m = pressKey(t, m, "tab")
+	m = pressKey(t, m, "j")
+
+	// Preview scroll should reset when cursor changes.
+	if m.previewScroll != 0 {
+		t.Fatalf("previewScroll = %d after cursor move, want 0", m.previewScroll)
+	}
+}
+
+func TestBrowserArrowKeysMoveCursor(t *testing.T) {
+	summaries := makeSummaries(5)
+	m := initBrowserModel(summaries, 100, 40)
+
+	m = pressKey(t, m, "down")
+	if m.cursor != 1 {
+		t.Fatalf("cursor = %d after down, want 1", m.cursor)
+	}
+	m = pressKey(t, m, "up")
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d after up, want 0", m.cursor)
+	}
+}
+
+// ===== Sort state =====
+
+func TestBrowserSortCycleAllModes(t *testing.T) {
+	summaries := makeSummaries(3)
+	m := initBrowserModel(summaries, 100, 40)
+
+	expected := []browserSortMode{
+		browserSortOldest,
+		browserSortRunID,
+		browserSortAgent,
+		browserSortStatus,
+		browserSortPrompt,
+		browserSortNewest, // wraps back
+	}
+	for _, want := range expected {
+		m = pressKey(t, m, "s")
+		if m.sortMode != want {
+			t.Fatalf("after s: sortMode = %q, want %q", m.sortMode, want)
+		}
+	}
+}
+
+func TestBrowserSortOrderNewest(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("run-c", time.Date(2026, 3, 6, 0, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+		browserTestSummary("run-a", time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+		browserTestSummary("run-b", time.Date(2026, 3, 7, 0, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+	}
+	m := NewBrowserModel(summaries)
+
+	// Default is newest-first.
+	got := browserRunIDs(m.summaries)
+	want := []string{"run-a", "run-b", "run-c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("newest order = %v, want %v", got, want)
+	}
+}
+
+func TestBrowserSortOrderOldest(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("run-c", time.Date(2026, 3, 6, 0, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+		browserTestSummary("run-a", time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+		browserTestSummary("run-b", time.Date(2026, 3, 7, 0, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 40
+
+	// Cycle to oldest.
+	m = pressKey(t, m, "s")
+	got := browserRunIDs(m.summaries)
+	want := []string{"run-c", "run-b", "run-a"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("oldest order = %v, want %v", got, want)
+	}
+}
+
+func TestBrowserSortOrderByRunID(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("gamma", time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+		browserTestSummary("alpha", time.Date(2026, 3, 7, 0, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+		browserTestSummary("beta", time.Date(2026, 3, 6, 0, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+	}
+	m := NewBrowserModel(summaries)
+	m.sortMode = browserSortRunID
+	m.applyBrowserView()
+
+	got := browserRunIDs(m.summaries)
+	want := []string{"alpha", "beta", "gamma"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runID order = %v, want %v", got, want)
+	}
+}
+
+func TestBrowserSortOrderByAgent(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+		browserTestSummary("r2", time.Date(2026, 3, 7, 0, 0, 0, 0, time.UTC), "kiro", "completed", "default"),
+		browserTestSummary("r3", time.Date(2026, 3, 6, 0, 0, 0, 0, time.UTC), "aider", "completed", "default"),
+	}
+	m := NewBrowserModel(summaries)
+	m.sortMode = browserSortAgent
+	m.applyBrowserView()
+
+	got := browserRunIDs(m.summaries)
+	want := []string{"r3", "r2", "r1"} // aider < kiro < pi
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("agent order = %v, want %v", got, want)
+	}
+}
+
+func TestBrowserSortOrderByStatus(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC), "pi", "interrupted", "default"),
+		browserTestSummary("r2", time.Date(2026, 3, 7, 0, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+		browserTestSummary("r3", time.Date(2026, 3, 6, 0, 0, 0, 0, time.UTC), "pi", "failed", "default"),
+	}
+	m := NewBrowserModel(summaries)
+	m.sortMode = browserSortStatus
+	m.applyBrowserView()
+
+	got := browserRunIDs(m.summaries)
+	want := []string{"r2", "r3", "r1"} // completed < failed < interrupted
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("status order = %v, want %v", got, want)
+	}
+}
+
+func TestBrowserSortOrderByPrompt(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC), "pi", "completed", "prompt"),
+		browserTestSummary("r2", time.Date(2026, 3, 7, 0, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+		browserTestSummary("r3", time.Date(2026, 3, 6, 0, 0, 0, 0, time.UTC), "pi", "completed", "plan"),
+	}
+	m := NewBrowserModel(summaries)
+	m.sortMode = browserSortPrompt
+	m.applyBrowserView()
+
+	got := browserRunIDs(m.summaries)
+	want := []string{"r2", "r3", "r1"} // default < plan < prompt
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("prompt order = %v, want %v", got, want)
+	}
+}
+
+// ===== Filter/search state =====
+
+func TestBrowserFilterCycleAgentKey(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+		browserTestSummary("r2", time.Now().Add(-time.Hour), "kiro", "completed", "default"),
+		browserTestSummary("r3", time.Now().Add(-2*time.Hour), "pi", "failed", "plan"),
+	}
+	m := initBrowserModel(summaries, 100, 40)
+
+	// First press: cycles to first agent option.
+	m = pressKey(t, m, "a")
+	if m.agentFilter == "" {
+		t.Fatal("agentFilter still empty after a")
+	}
+	first := m.agentFilter
+
+	// Keep pressing until back to empty.
+	for i := 0; i < len(m.agentOptions); i++ {
+		m = pressKey(t, m, "a")
+	}
+	if m.agentFilter != "" {
+		t.Fatalf("agentFilter = %q after full cycle, want empty", m.agentFilter)
+	}
+
+	// Filter should actually reduce visible rows.
+	m = pressKey(t, m, "a")
+	if m.agentFilter != first {
+		t.Fatalf("agentFilter = %q, want %q", m.agentFilter, first)
+	}
+	for _, s := range m.summaries {
+		if !strings.EqualFold(s.Agent, first) {
+			t.Fatalf("visible run %q has agent %q, want %q", s.RunID, s.Agent, first)
+		}
+	}
+}
+
+func TestBrowserFilterCycleDateKey(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Date(2026, 3, 8, 10, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+		browserTestSummary("r2", time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+	}
+	m := initBrowserModel(summaries, 100, 40)
+
+	// First d: filters to one date.
+	m = pressKey(t, m, "d")
+	if m.dateFilter == "" {
+		t.Fatal("dateFilter still empty after d")
+	}
+	if len(m.summaries) != 1 {
+		t.Fatalf("visible after date filter = %d, want 1", len(m.summaries))
+	}
+}
+
+func TestBrowserFilterCycleStatusKey(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+		browserTestSummary("r2", time.Now().Add(-time.Hour), "pi", "failed", "default"),
+	}
+	m := initBrowserModel(summaries, 100, 40)
+
+	m = pressKey(t, m, "t")
+	if m.statusFilter == "" {
+		t.Fatal("statusFilter still empty after t")
+	}
+	if len(m.summaries) != 1 {
+		t.Fatalf("visible after status filter = %d, want 1", len(m.summaries))
+	}
+}
+
+func TestBrowserFilterCyclePromptKey(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "prompt"),
+		browserTestSummary("r2", time.Now().Add(-time.Hour), "pi", "completed", "plan"),
+	}
+	m := initBrowserModel(summaries, 100, 40)
+
+	m = pressKey(t, m, "p")
+	if m.promptFilter == "" {
+		t.Fatal("promptFilter still empty after p")
+	}
+	if len(m.summaries) != 1 {
+		t.Fatalf("visible after prompt filter = %d, want 1", len(m.summaries))
+	}
+}
+
+func TestBrowserSearchEnterPreservesQuery(t *testing.T) {
+	summaries := makeSummaries(3)
+	m := initBrowserModel(summaries, 100, 40)
+
+	m = pressKey(t, m, "/")
+	m = pressRune(t, m, 't')
+	m = pressRune(t, m, 'e')
+	m = pressRune(t, m, 's')
+	m = pressRune(t, m, 't')
+
+	if m.searchQuery != "test" {
+		t.Fatalf("searchQuery = %q, want %q", m.searchQuery, "test")
+	}
+
+	// Enter exits search mode but keeps the query.
+	m = pressKeyMsg(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+	if m.searching {
+		t.Fatal("searching = true after Enter, want false")
+	}
+	if m.searchQuery != "test" {
+		t.Fatalf("searchQuery = %q after Enter, want %q", m.searchQuery, "test")
+	}
+}
+
+func TestBrowserSearchEscPreservesQuery(t *testing.T) {
+	summaries := makeSummaries(3)
+	m := initBrowserModel(summaries, 100, 40)
+
+	m = pressKey(t, m, "/")
+	m = pressRune(t, m, 'q')
+	m = pressRune(t, m, 'r')
+	m = pressRune(t, m, 'y')
+
+	// Esc exits search mode but preserves what was typed.
+	m = pressKeyMsg(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEsc}))
+	if m.searching {
+		t.Fatal("searching = true after Esc, want false")
+	}
+	if m.searchQuery != "qry" {
+		t.Fatalf("searchQuery = %q after Esc, want %q", m.searchQuery, "qry")
+	}
+}
+
+func TestBrowserSearchCtrlUClearsText(t *testing.T) {
+	summaries := makeSummaries(3)
+	m := initBrowserModel(summaries, 100, 40)
+
+	m = pressKey(t, m, "/")
+	m = pressRune(t, m, 'a')
+	m = pressRune(t, m, 'b')
+	m = pressRune(t, m, 'c')
+
+	m = pressKeyMsg(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlU}))
+	if m.searchQuery != "" {
+		t.Fatalf("searchQuery = %q after Ctrl+U, want empty", m.searchQuery)
+	}
+	if !m.searching {
+		t.Fatal("searching = false after Ctrl+U, want true (still in search mode)")
+	}
+}
+
+func TestBrowserSearchDeleteClearsText(t *testing.T) {
+	summaries := makeSummaries(3)
+	m := initBrowserModel(summaries, 100, 40)
+
+	m = pressKey(t, m, "/")
+	m = pressRune(t, m, 'x')
+	m = pressRune(t, m, 'y')
+
+	m = pressKeyMsg(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyDelete}))
+	if m.searchQuery != "" {
+		t.Fatalf("searchQuery = %q after Delete, want empty", m.searchQuery)
+	}
+}
+
+func TestBrowserSearchSpaceInQuery(t *testing.T) {
+	summaries := makeSummaries(3)
+	m := initBrowserModel(summaries, 100, 40)
+
+	m = pressKey(t, m, "/")
+	m = pressRune(t, m, 'a')
+	m = pressKeyMsg(t, m, tea.KeyMsg(tea.Key{Type: tea.KeySpace}))
+	m = pressRune(t, m, 'b')
+
+	if m.searchQuery != "a b" {
+		t.Fatalf("searchQuery = %q, want %q", m.searchQuery, "a b")
+	}
+}
+
+func TestBrowserClearAllFiltersKey(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+		browserTestSummary("r2", time.Now().Add(-time.Hour), "kiro", "failed", "plan"),
+	}
+	m := initBrowserModel(summaries, 100, 40)
+
+	// Set filters.
+	m = pressKey(t, m, "a") // agent filter
+	m = pressKey(t, m, "/") // enter search
+	m = pressRune(t, m, 'z')
+	m = pressKeyMsg(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter})) // exit search
+
+	// Verify filters are set.
+	if m.agentFilter == "" {
+		t.Fatal("agentFilter not set")
+	}
+	if m.searchQuery == "" {
+		t.Fatal("searchQuery not set")
+	}
+
+	// c should clear everything.
+	m = pressKey(t, m, "c")
+	if m.agentFilter != "" {
+		t.Fatalf("agentFilter = %q after c, want empty", m.agentFilter)
+	}
+	if m.searchQuery != "" {
+		t.Fatalf("searchQuery = %q after c, want empty", m.searchQuery)
+	}
+	if m.searching {
+		t.Fatal("searching = true after c, want false")
+	}
+	if len(m.summaries) != 2 {
+		t.Fatalf("visible summaries = %d after clear, want 2", len(m.summaries))
+	}
+}
+
+func TestBrowserHeaderShowsStateTokens(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+		browserTestSummary("r2", time.Now().Add(-time.Hour), "kiro", "failed", "plan"),
+	}
+	m := initBrowserModel(summaries, 200, 40) // wide enough for all tokens
+
+	tokens := m.browserStateTokens()
+	if len(tokens) == 0 || tokens[0] != "sort:newest" {
+		t.Fatalf("first token = %v, want sort:newest", tokens)
+	}
+
+	// Set an agent filter and search.
+	m.agentFilter = "pi"
+	m.searchQuery = "test"
+	tokens = m.browserStateTokens()
+
+	found := map[string]bool{"sort:newest": false, "agent:pi": false, "/test": false}
+	for _, tok := range tokens {
+		for k := range found {
+			if tok == k {
+				found[k] = true
+			}
+		}
+	}
+	for k, v := range found {
+		if !v {
+			t.Errorf("token %q not found in %v", k, tokens)
+		}
+	}
+}
+
+// ===== Confirmation flows =====
+
+func TestBrowserDeleteConfirmCtrlCQuits(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("del-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := initBrowserModel(summaries, 100, 30)
+
+	// Enter confirmation.
+	m = pressKey(t, m, "x")
+	if !m.confirmingDelete {
+		t.Fatal("not in confirmation mode after x")
+	}
+
+	// Ctrl+C during confirmation should quit without performing delete.
+	m, cmd := updateBrowserModelWithCmd(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlC}))
+	if !isQuitCmd(cmd) {
+		t.Fatal("Ctrl+C during confirmation did not emit tea.Quit")
+	}
+	if m.Result().Action != BrowserActionNone {
+		t.Fatalf("Result().Action = %q after Ctrl+C, want %q", m.Result().Action, BrowserActionNone)
+	}
+	if m.confirmingDelete {
+		t.Fatal("confirmingDelete still true after Ctrl+C")
+	}
+}
+
+func TestBrowserConfirmDeleteViewShowsPrompt(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("del-target", time.Now(), "pi", "completed", "default", true),
+	}
+	m := initBrowserModel(summaries, 100, 30)
+
+	m = pressKey(t, m, "x")
+
+	view := m.View()
+	if !strings.Contains(view, "del-target") {
+		t.Error("confirmation view does not contain the run ID")
+	}
+}
+
+// ===== Action results emitted back to main =====
+
+func TestBrowserResultDefaultNone(t *testing.T) {
+	m := NewBrowserModel(makeSummaries(3))
+	result := m.Result()
+	if result.Action != BrowserActionNone {
+		t.Fatalf("default Result().Action = %q, want %q", result.Action, BrowserActionNone)
+	}
+	if result.RunID != "" {
+		t.Fatalf("default Result().RunID = %q, want empty", result.RunID)
+	}
+}
+
+func TestBrowserQuitOnQ(t *testing.T) {
+	m := initBrowserModel(makeSummaries(3), 100, 40)
+
+	m, cmd := updateBrowserModelWithCmd(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'q'}}))
+	if !isQuitCmd(cmd) {
+		t.Fatal("q did not emit tea.Quit")
+	}
+	if m.Result().Action != BrowserActionNone {
+		t.Fatalf("Result().Action after q = %q, want %q", m.Result().Action, BrowserActionNone)
+	}
+}
+
+func TestBrowserQuitOnEsc(t *testing.T) {
+	m := initBrowserModel(makeSummaries(3), 100, 40)
+
+	m, cmd := updateBrowserModelWithCmd(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEsc}))
+	if !isQuitCmd(cmd) {
+		t.Fatal("Esc did not emit tea.Quit")
+	}
+	if m.Result().Action != BrowserActionNone {
+		t.Fatalf("Result().Action after Esc = %q, want %q", m.Result().Action, BrowserActionNone)
+	}
+}
+
+func TestBrowserQuitOnCtrlC(t *testing.T) {
+	m := initBrowserModel(makeSummaries(3), 100, 40)
+
+	m, cmd := updateBrowserModelWithCmd(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlC}))
+	if !isQuitCmd(cmd) {
+		t.Fatal("Ctrl+C did not emit tea.Quit")
+	}
+	if m.Result().Action != BrowserActionNone {
+		t.Fatalf("Result().Action after Ctrl+C = %q, want %q", m.Result().Action, BrowserActionNone)
+	}
+}
+
+func TestBrowserOpenResultPreservesRunID(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("run-one", time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC), "pi", "completed", "default", true),
+		browserTestSummaryWithActions("run-two", time.Date(2026, 3, 7, 0, 0, 0, 0, time.UTC), "kiro", "completed", "plan", true),
+	}
+	m := initBrowserModel(summaries, 100, 40)
+
+	// Select second row and open.
+	m = pressKey(t, m, "j")
+	m, cmd := updateBrowserModelWithCmd(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+	if !isQuitCmd(cmd) {
+		t.Fatal("Enter did not emit tea.Quit")
+	}
+	result := m.Result()
+	if result.Action != BrowserActionOpen {
+		t.Fatalf("Action = %q, want %q", result.Action, BrowserActionOpen)
+	}
+	if result.RunID != "run-two" {
+		t.Fatalf("RunID = %q, want %q", result.RunID, "run-two")
+	}
+}
+
+func TestBrowserDeleteResultIncludesAllFields(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("del-first", time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC), "pi", "completed", "default", true),
+		browserTestSummaryWithActions("del-second", time.Date(2026, 3, 7, 0, 0, 0, 0, time.UTC), "pi", "completed", "default", true),
+	}
+	m := initBrowserModel(summaries, 100, 40)
+
+	// Confirm delete of first row.
+	m = pressKey(t, m, "x")
+	m, cmd := updateBrowserModelWithCmd(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'y'}}))
+	if !isQuitCmd(cmd) {
+		t.Fatal("confirm did not emit tea.Quit")
+	}
+
+	result := m.Result()
+	if result.Action != BrowserActionDelete {
+		t.Fatalf("Action = %q, want %q", result.Action, BrowserActionDelete)
+	}
+	if result.RunID != "del-first" {
+		t.Fatalf("RunID = %q, want %q", result.RunID, "del-first")
+	}
+	if result.DeleteDir != "/tmp/del-first" {
+		t.Fatalf("DeleteDir = %q, want %q", result.DeleteDir, "/tmp/del-first")
+	}
+	if result.DeleteNextRunID != "del-second" {
+		t.Fatalf("DeleteNextRunID = %q, want %q", result.DeleteNextRunID, "del-second")
+	}
+}
+
+func TestBrowserResumeResultIncludesAllFields(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryResumable("res-run", time.Now(), "kiro", "interrupted", "plan",
+			viewer.ResumeSourcePlanFile, "/path/to/plan.md"),
+	}
+	m := initBrowserModel(summaries, 100, 40)
+
+	m, cmd := updateBrowserModelWithCmd(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'r'}}))
+	if !isQuitCmd(cmd) {
+		t.Fatal("r did not emit tea.Quit")
+	}
+
+	result := m.Result()
+	if result.Action != BrowserActionResume {
+		t.Fatalf("Action = %q, want %q", result.Action, BrowserActionResume)
+	}
+	if result.RunID != "res-run" {
+		t.Fatalf("RunID = %q, want %q", result.RunID, "res-run")
+	}
+	if result.ResumeAgent != "kiro" {
+		t.Fatalf("ResumeAgent = %q, want %q", result.ResumeAgent, "kiro")
+	}
+	if result.ResumeSource != viewer.ResumeSourcePlanFile {
+		t.Fatalf("ResumeSource = %q, want %q", result.ResumeSource, viewer.ResumeSourcePlanFile)
+	}
+	if result.ResumePath != "/path/to/plan.md" {
+		t.Fatalf("ResumePath = %q, want %q", result.ResumePath, "/path/to/plan.md")
+	}
+}
+
+// ===== Test helpers =====
+
+// makeSummaries creates N test summaries ordered by decreasing time.
+func makeSummaries(n int) []viewer.RunSummary {
+	base := time.Date(2026, 3, 8, 12, 0, 0, 0, time.UTC)
+	summaries := make([]viewer.RunSummary, n)
+	for i := 0; i < n; i++ {
+		summaries[i] = browserTestSummaryWithActions(
+			fmt.Sprintf("run-%03d", i),
+			base.Add(-time.Duration(i)*time.Hour),
+			"pi", "completed", "default", true,
+		)
+	}
+	return summaries
+}
+
+// initBrowserModel creates a browser model with the given window size applied.
+func initBrowserModel(summaries []viewer.RunSummary, width, height int) BrowserModel {
+	m := NewBrowserModel(summaries)
+	m.width = width
+	m.height = height
+	return m
+}
+
+// pressKey sends a string-keyed message (for simple keys like "j", "k", "s").
+func pressKey(t *testing.T, m BrowserModel, key string) BrowserModel {
+	t.Helper()
+	return updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune(key)}))
+}
+
+// pressRune sends a single rune keypress.
+func pressRune(t *testing.T, m BrowserModel, r rune) BrowserModel {
+	t.Helper()
+	return updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{r}}))
+}
+
+// pressKeyMsg sends a tea.KeyMsg directly.
+func pressKeyMsg(t *testing.T, m BrowserModel, msg tea.KeyMsg) BrowserModel {
+	t.Helper()
+	return updateBrowserModel(t, m, msg)
 }
