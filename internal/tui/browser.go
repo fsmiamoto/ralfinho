@@ -49,6 +49,11 @@ var browserSortModes = []browserSortMode{
 	browserSortPrompt,
 }
 
+type browserHint struct {
+	Key   string
+	Label string
+}
+
 // BrowserModel renders the saved-session browser for `ralfinho view`.
 type BrowserModel struct {
 	allSummaries []viewer.RunSummary
@@ -423,13 +428,31 @@ func (m BrowserModel) matchesBrowserFilters(summary viewer.RunSummary) bool {
 
 func (m BrowserModel) View() string {
 	if m.width == 0 || m.height == 0 {
-		return "Loading session browser..."
+		return m.renderBrowserLoading()
 	}
 
 	header := m.renderBrowserHeader()
-	body := lipgloss.JoinHorizontal(lipgloss.Top, m.renderSessionsPane(), m.renderPreviewPane())
+	body := m.renderBrowserBody()
 	status := m.renderBrowserStatus()
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, status)
+}
+
+func (m BrowserModel) renderBrowserLoading() string {
+	lines := []string{"Opening session browser...", "Waiting for terminal size..."}
+	if total := len(m.allSummaries); total > 0 {
+		lines[1] = fmt.Sprintf("Loaded %d saved sessions.", total)
+	}
+	if issues := m.browserVisibleIssueCount(); issues > 0 {
+		lines = append(lines, fmt.Sprintf("%d session(s) have artifact warnings.", issues))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m BrowserModel) renderBrowserBody() string {
+	if m.useStackedBrowserLayout() {
+		return lipgloss.JoinVertical(lipgloss.Left, m.renderSessionsPane(), m.renderPreviewPane())
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, m.renderSessionsPane(), m.renderPreviewPane())
 }
 
 func (m BrowserModel) renderBrowserHeader() string {
@@ -440,7 +463,11 @@ func (m BrowserModel) renderBrowserHeader() string {
 
 	bar := fmt.Sprintf("ralfinho view │ %d/%d sessions", len(m.summaries), len(m.allSummaries))
 	for _, token := range m.browserStateTokens() {
-		bar += " │ " + token
+		candidate := bar + " │ " + token
+		if lipgloss.Width(candidate) > maxWidth {
+			break
+		}
+		bar = candidate
 	}
 	if lipgloss.Width(bar) > maxWidth {
 		bar = truncateToWidth(bar, maxWidth)
@@ -451,16 +478,10 @@ func (m BrowserModel) renderBrowserHeader() string {
 
 func (m BrowserModel) renderSessionsPane() string {
 	w := m.sessionsWidth()
-	ph := m.browserPaneHeight()
+	ph := m.sessionsPaneHeight()
 	contentWidth := w - 2
 	if contentWidth < 12 {
 		contentWidth = 12
-	}
-
-	indicatorWidth := lipgloss.Width(selectedIndicator.Render("▌"))
-	lineWidth := contentWidth - indicatorWidth
-	if lineWidth < 8 {
-		lineWidth = 8
 	}
 
 	visibleLines := ph - 1
@@ -468,15 +489,23 @@ func (m BrowserModel) renderSessionsPane() string {
 		visibleLines = 1
 	}
 
-	visibleRows := m.visibleSessionRows()
-	var lines []string
+	title := fmt.Sprintf(" SESSIONS (%d/%d) ", len(m.summaries), len(m.allSummaries))
+	if len(m.summaries) > 0 {
+		title = fmt.Sprintf(" SESSIONS (%d/%d) [%d/%d] ", len(m.summaries), len(m.allSummaries), m.cursor+1, len(m.summaries))
+	}
+
+	var content string
 	if len(m.summaries) == 0 {
-		primary, secondary := m.browserEmptySessionRows(lineWidth)
-		lines = append(lines,
-			" "+browserRowStyle.Render(primary),
-			" "+browserSubtleStyle.Render(secondary),
-		)
+		content = m.renderBrowserSessionsEmpty(contentWidth, visibleLines)
 	} else {
+		indicatorWidth := lipgloss.Width(selectedIndicator.Render("▌"))
+		lineWidth := contentWidth - indicatorWidth
+		if lineWidth < 8 {
+			lineWidth = 8
+		}
+
+		visibleRows := m.visibleSessionRows()
+		var lines []string
 		for i := m.scroll; i < len(m.summaries) && i < m.scroll+visibleRows; i++ {
 			summary := m.summaries[i]
 			primary := padToWidth(browserPrimaryRow(summary, lineWidth), lineWidth)
@@ -494,19 +523,14 @@ func (m BrowserModel) renderSessionsPane() string {
 				)
 			}
 		}
-	}
 
-	for len(lines) < visibleLines {
-		lines = append(lines, strings.Repeat(" ", contentWidth))
-	}
-	if len(lines) > visibleLines {
-		lines = lines[:visibleLines]
-	}
-
-	content := strings.Join(lines, "\n")
-	title := fmt.Sprintf(" SESSIONS (%d/%d) ", len(m.summaries), len(m.allSummaries))
-	if len(m.summaries) > 0 {
-		title = fmt.Sprintf(" SESSIONS (%d/%d) [%d/%d] ", len(m.summaries), len(m.allSummaries), m.cursor+1, len(m.summaries))
+		for len(lines) < visibleLines {
+			lines = append(lines, strings.Repeat(" ", contentWidth))
+		}
+		if len(lines) > visibleLines {
+			lines = lines[:visibleLines]
+		}
+		content = strings.Join(lines, "\n")
 	}
 
 	border := unfocusedBorder
@@ -522,49 +546,64 @@ func (m BrowserModel) renderSessionsPane() string {
 
 func (m BrowserModel) renderPreviewPane() string {
 	w := m.previewWidth()
-	ph := m.browserPaneHeight()
+	ph := m.previewPaneHeight()
 	contentWidth := w - 2
 	if contentWidth < 20 {
 		contentWidth = 20
 	}
 
-	raw := m.browserPreviewText()
-	wrapped := WrapText(raw, contentWidth)
-	allLines := strings.Split(wrapped, "\n")
 	visibleLines := m.visiblePreviewLines()
-
-	maxScroll := len(allLines) - visibleLines
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	scroll := m.previewScroll
-	if scroll > maxScroll {
-		scroll = maxScroll
-	}
-	if scroll < 0 {
-		scroll = 0
-	}
-
-	end := scroll + visibleLines
-	if end > len(allLines) {
-		end = len(allLines)
-	}
-
-	lines := make([]string, 0, visibleLines)
-	for i := scroll; i < end; i++ {
-		line := allLines[i]
-		if runewidth.StringWidth(line) > contentWidth {
-			line = truncateToWidth(line, contentWidth)
-		}
-		lines = append(lines, line)
-	}
-	for len(lines) < visibleLines {
-		lines = append(lines, "")
-	}
-
 	title := " PREVIEW "
-	if len(allLines) > visibleLines {
-		title = fmt.Sprintf(" PREVIEW [%d/%d] ", scroll+1, len(allLines))
+	content := ""
+
+	summary := m.currentSummary()
+	if summary == nil {
+		content = m.renderBrowserPreviewEmpty(contentWidth, visibleLines)
+	} else {
+		raw := m.browserPreviewText()
+		wrapped := WrapText(raw, contentWidth)
+		allLines := strings.Split(wrapped, "\n")
+
+		maxScroll := len(allLines) - visibleLines
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		scroll := m.previewScroll
+		if scroll > maxScroll {
+			scroll = maxScroll
+		}
+		if scroll < 0 {
+			scroll = 0
+		}
+
+		end := scroll + visibleLines
+		if end > len(allLines) {
+			end = len(allLines)
+		}
+
+		lines := make([]string, 0, visibleLines)
+		for i := scroll; i < end; i++ {
+			line := allLines[i]
+			if runewidth.StringWidth(line) > contentWidth {
+				line = truncateToWidth(line, contentWidth)
+			}
+			lines = append(lines, line)
+		}
+		for len(lines) < visibleLines {
+			lines = append(lines, "")
+		}
+		content = strings.Join(lines, "\n")
+
+		if browserHasArtifactIssues(*summary) {
+			title = " PREVIEW ⚠ "
+		}
+		if len(allLines) > visibleLines {
+			if browserHasArtifactIssues(*summary) {
+				title = fmt.Sprintf(" PREVIEW ⚠ [%d/%d] ", scroll+1, len(allLines))
+			} else {
+				title = fmt.Sprintf(" PREVIEW [%d/%d] ", scroll+1, len(allLines))
+			}
+		}
 	}
 
 	border := unfocusedBorder
@@ -575,7 +614,7 @@ func (m BrowserModel) renderPreviewPane() string {
 	return border.
 		Width(w - 2).
 		Height(ph).
-		Render(titleStyle.Render(title) + "\n" + strings.Join(lines, "\n"))
+		Render(titleStyle.Render(title) + "\n" + content)
 }
 
 func (m BrowserModel) renderBrowserStatus() string {
@@ -585,18 +624,22 @@ func (m BrowserModel) renderBrowserStatus() string {
 	}
 
 	left := m.browserStatusLeft()
-	right := m.browserStatusRight(maxWidth)
+	right := ""
+	for _, candidate := range m.browserStatusRightVariants() {
+		if lipgloss.Width(left)+1+lipgloss.Width(candidate) <= maxWidth {
+			right = candidate
+			break
+		}
+	}
+	if right == "" {
+		variants := m.browserStatusRightVariants()
+		if len(variants) > 0 {
+			right = variants[len(variants)-1]
+		}
+	}
 
 	leftW := lipgloss.Width(left)
 	rightW := lipgloss.Width(right)
-	if rightW > 0 && leftW+1+rightW > maxWidth {
-		right = browserCompactStatusRight(m.searching)
-		rightW = lipgloss.Width(right)
-	}
-	if rightW > 0 && leftW+1+rightW > maxWidth {
-		right = statusKeyStyle.Render("q") + ":quit"
-		rightW = lipgloss.Width(right)
-	}
 	if leftW+1+rightW > maxWidth {
 		if rightW > 0 {
 			left = truncateToWidth(left, maxWidth-rightW-1)
@@ -617,37 +660,130 @@ func (m BrowserModel) renderBrowserStatus() string {
 
 func (m BrowserModel) browserStatusLeft() string {
 	if len(m.allSummaries) == 0 {
-		return "No saved runs"
+		return "No saved runs │ run ralfinho to create a session"
 	}
 	if len(m.summaries) == 0 {
-		return fmt.Sprintf("0/%d runs │ no matches", len(m.allSummaries))
+		return fmt.Sprintf("0/%d runs │ search/filter hid all matches", len(m.allSummaries))
 	}
-	return fmt.Sprintf("%d/%d runs │ focus:%s │ %s", len(m.summaries), len(m.allSummaries), m.focusedPaneLabel(), browserSelectionStatus(m.summaries[m.cursor]))
+
+	left := fmt.Sprintf("%d/%d runs │ focus:%s │ %s", len(m.summaries), len(m.allSummaries), m.focusedPaneLabel(), browserSelectionStatus(m.summaries[m.cursor]))
+	if browserHasArtifactIssues(m.summaries[m.cursor]) {
+		left += " │ artifact warnings"
+	}
+	if m.useStackedBrowserLayout() {
+		left += " │ stacked"
+	}
+	return left
 }
 
-func (m BrowserModel) browserStatusRight(maxWidth int) string {
-	sep := statusSepStyle.Render(" │ ")
+func (m BrowserModel) browserStatusRightVariants() []string {
+	render := func(hints ...browserHint) string {
+		parts := make([]string, 0, len(hints))
+		for _, hint := range hints {
+			parts = append(parts, statusKeyStyle.Render(hint.Key)+":"+hint.Label)
+		}
+		return strings.Join(parts, statusSepStyle.Render(" │ "))
+	}
+
 	if m.searching {
-		return statusKeyStyle.Render("type") + ":search" +
-			sep + statusKeyStyle.Render("Enter") + ":done" +
-			sep + statusKeyStyle.Render("Bksp") + ":del" +
-			sep + statusKeyStyle.Render("Ctrl+u") + ":clear"
+		return []string{
+			render(
+				browserHint{Key: "type", Label: "search"},
+				browserHint{Key: "Enter", Label: "done"},
+				browserHint{Key: "Esc", Label: "cancel"},
+				browserHint{Key: "Bksp", Label: "del"},
+				browserHint{Key: "Ctrl+u", Label: "clear"},
+				browserHint{Key: "q", Label: "quit"},
+			),
+			render(
+				browserHint{Key: "Enter", Label: "done"},
+				browserHint{Key: "Esc", Label: "cancel"},
+				browserHint{Key: "Ctrl+u", Label: "clear"},
+				browserHint{Key: "q", Label: "quit"},
+			),
+			render(
+				browserHint{Key: "Esc", Label: "cancel"},
+				browserHint{Key: "q", Label: "quit"},
+			),
+			render(browserHint{Key: "q", Label: "quit"}),
+		}
 	}
-	return statusKeyStyle.Render("↑↓") + ":move" +
-		sep + statusKeyStyle.Render("/") + ":search" +
-		sep + statusKeyStyle.Render("s") + ":sort" +
-		sep + statusKeyStyle.Render("a/t/p/d") + ":filter" +
-		sep + statusKeyStyle.Render("c") + ":clear" +
-		sep + statusKeyStyle.Render("Tab") + ":pane" +
-		sep + statusKeyStyle.Render("q") + ":quit"
-}
 
-func browserCompactStatusRight(searching bool) string {
-	sep := statusSepStyle.Render(" │ ")
-	if searching {
-		return statusKeyStyle.Render("Enter") + ":done" + sep + statusKeyStyle.Render("Esc") + ":close"
+	if len(m.allSummaries) == 0 {
+		return []string{render(browserHint{Key: "q", Label: "quit"})}
 	}
-	return statusKeyStyle.Render("/") + ":search" + sep + statusKeyStyle.Render("s") + ":sort" + sep + statusKeyStyle.Render("q") + ":quit"
+
+	if len(m.summaries) == 0 {
+		return []string{
+			render(
+				browserHint{Key: "c", Label: "clear"},
+				browserHint{Key: "/", Label: "search"},
+				browserHint{Key: "s", Label: "sort"},
+				browserHint{Key: "q", Label: "quit"},
+			),
+			render(
+				browserHint{Key: "c", Label: "clear"},
+				browserHint{Key: "/", Label: "search"},
+				browserHint{Key: "q", Label: "quit"},
+			),
+			render(
+				browserHint{Key: "/", Label: "search"},
+				browserHint{Key: "q", Label: "quit"},
+			),
+			render(browserHint{Key: "q", Label: "quit"}),
+		}
+	}
+
+	if m.focusedPane == 1 {
+		return []string{
+			render(
+				browserHint{Key: "↑↓", Label: "scroll"},
+				browserHint{Key: "g/G", Label: "top/end"},
+				browserHint{Key: "/", Label: "search"},
+				browserHint{Key: "Tab", Label: "sessions"},
+				browserHint{Key: "q", Label: "quit"},
+			),
+			render(
+				browserHint{Key: "↑↓", Label: "scroll"},
+				browserHint{Key: "Tab", Label: "sessions"},
+				browserHint{Key: "q", Label: "quit"},
+			),
+			render(
+				browserHint{Key: "Tab", Label: "sessions"},
+				browserHint{Key: "q", Label: "quit"},
+			),
+			render(browserHint{Key: "q", Label: "quit"}),
+		}
+	}
+
+	return []string{
+		render(
+			browserHint{Key: "↑↓", Label: "move"},
+			browserHint{Key: "g/G", Label: "top/end"},
+			browserHint{Key: "Ctrl+u/d", Label: "page"},
+			browserHint{Key: "/", Label: "search"},
+			browserHint{Key: "s", Label: "sort"},
+			browserHint{Key: "a/t/p/d", Label: "filter"},
+			browserHint{Key: "c", Label: "clear"},
+			browserHint{Key: "Tab", Label: "preview"},
+			browserHint{Key: "q", Label: "quit"},
+		),
+		render(
+			browserHint{Key: "↑↓", Label: "move"},
+			browserHint{Key: "/", Label: "search"},
+			browserHint{Key: "s", Label: "sort"},
+			browserHint{Key: "a/t/p/d", Label: "filter"},
+			browserHint{Key: "Tab", Label: "preview"},
+			browserHint{Key: "q", Label: "quit"},
+		),
+		render(
+			browserHint{Key: "/", Label: "search"},
+			browserHint{Key: "s", Label: "sort"},
+			browserHint{Key: "Tab", Label: "preview"},
+			browserHint{Key: "q", Label: "quit"},
+		),
+		render(browserHint{Key: "q", Label: "quit"}),
+	}
 }
 
 func (m BrowserModel) browserStateTokens() []string {
@@ -703,11 +839,73 @@ func (m BrowserModel) browserPreviewText() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m BrowserModel) browserEmptySessionRows(width int) (string, string) {
+func (m BrowserModel) renderBrowserSessionsEmpty(contentWidth, visibleLines int) string {
 	if len(m.allSummaries) == 0 {
-		return padToWidth("No saved runs found", width), padToWidth("Run ralfinho to create the first session.", width)
+		return renderBrowserStateCard(contentWidth, visibleLines, "NO SAVED RUNS", []string{
+			"Run ralfinho to create the first saved session.",
+			"When runs exist, this list opens newest-first for browsing.",
+			"Press q to close the browser.",
+		}, false)
 	}
-	return padToWidth("No sessions match current filters", width), padToWidth("Press c to clear filters or / to search again.", width)
+
+	return renderBrowserStateCard(contentWidth, visibleLines, "NO MATCHES", []string{
+		fmt.Sprintf("Visible: %d/%d", len(m.summaries), len(m.allSummaries)),
+		fmt.Sprintf("Search: %s", browserSearchLabel(m.searchQuery, m.searching)),
+		fmt.Sprintf("Filters: agent=%s status=%s prompt=%s date=%s", browserFilterLabel(m.agentFilter), browserFilterLabel(m.statusFilter), browserFilterLabel(m.promptFilter), browserFilterLabel(m.dateFilter)),
+		"Press c to clear filters or / to refine the search.",
+	}, false)
+}
+
+func (m BrowserModel) renderBrowserPreviewEmpty(contentWidth, visibleLines int) string {
+	if len(m.allSummaries) == 0 {
+		return renderBrowserStateCard(contentWidth, visibleLines, "NO SAVED RUNS", []string{
+			"Saved sessions appear here after you run ralfinho.",
+			"Once they exist, move through the list to inspect metadata and artifact health.",
+		}, false)
+	}
+
+	return renderBrowserStateCard(contentWidth, visibleLines, "NO MATCHES", []string{
+		fmt.Sprintf("Sort: %s", m.sortMode),
+		fmt.Sprintf("Search: %s", browserSearchLabel(m.searchQuery, m.searching)),
+		fmt.Sprintf("Filters: agent=%s status=%s prompt=%s date=%s", browserFilterLabel(m.agentFilter), browserFilterLabel(m.statusFilter), browserFilterLabel(m.promptFilter), browserFilterLabel(m.dateFilter)),
+		"Press c to clear filters, or change /, a, t, p, or d.",
+	}, false)
+}
+
+func renderBrowserStateCard(contentWidth, visibleLines int, title string, body []string, warning bool) string {
+	if contentWidth < 12 {
+		return strings.Join(body, "\n")
+	}
+
+	cardWidth := contentWidth - 2
+	if cardWidth > 68 {
+		cardWidth = 68
+	}
+	if cardWidth < 18 {
+		cardWidth = contentWidth
+	}
+
+	cardBorder := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
+	titleRenderer := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
+	if warning {
+		cardBorder = cardBorder.BorderForeground(colorTool)
+		titleRenderer = titleRenderer.Foreground(colorTool)
+	} else {
+		cardBorder = cardBorder.BorderForeground(colorDim)
+	}
+
+	bodyWidth := cardWidth - 4
+	if bodyWidth < 10 {
+		bodyWidth = 10
+	}
+
+	renderedBody := make([]string, 0, len(body))
+	for _, line := range body {
+		renderedBody = append(renderedBody, WrapText(line, bodyWidth))
+	}
+
+	card := cardBorder.Width(cardWidth).Render(titleRenderer.Render(title) + "\n\n" + strings.Join(renderedBody, "\n"))
+	return lipgloss.Place(contentWidth, visibleLines, lipgloss.Center, lipgloss.Center, card)
 }
 
 func browserFilterOptions(summaries []viewer.RunSummary, valueFn func(viewer.RunSummary) string) []string {
@@ -857,6 +1055,9 @@ func (m BrowserModel) browserPaneHeight() int {
 }
 
 func (m BrowserModel) sessionsWidth() int {
+	if m.useStackedBrowserLayout() {
+		return m.width
+	}
 	w := int(float64(m.width) * 0.38)
 	if w < 34 {
 		w = 34
@@ -875,6 +1076,9 @@ func (m BrowserModel) sessionsWidth() int {
 }
 
 func (m BrowserModel) previewWidth() int {
+	if m.useStackedBrowserLayout() {
+		return m.width
+	}
 	w := m.width - m.sessionsWidth()
 	if w < 26 {
 		w = 26
@@ -883,7 +1087,7 @@ func (m BrowserModel) previewWidth() int {
 }
 
 func (m BrowserModel) visibleSessionRows() int {
-	rows := (m.browserPaneHeight() - 1) / 2
+	rows := (m.sessionsPaneHeight() - 1) / 2
 	if rows < 1 {
 		rows = 1
 	}
@@ -891,7 +1095,7 @@ func (m BrowserModel) visibleSessionRows() int {
 }
 
 func (m BrowserModel) visiblePreviewLines() int {
-	lines := m.browserPaneHeight() - 1
+	lines := m.previewPaneHeight() - 1
 	if lines < 1 {
 		lines = 1
 	}
@@ -906,6 +1110,60 @@ func (m BrowserModel) previewLineCount() int {
 	return len(strings.Split(WrapText(m.browserPreviewText(), contentWidth), "\n"))
 }
 
+// browserHasArtifactIssues reports whether a summary has any artifact errors
+// (missing/corrupt meta.json, events.jsonl, or effective-prompt.md).
+func browserHasArtifactIssues(summary viewer.RunSummary) bool {
+	return summary.ArtifactError != "" || summary.EventsError != "" || summary.EffectivePromptError != ""
+}
+
+// browserVisibleIssueCount returns the number of currently visible summaries
+// that have artifact issues.
+func (m BrowserModel) browserVisibleIssueCount() int {
+	count := 0
+	for _, s := range m.summaries {
+		if browserHasArtifactIssues(s) {
+			count++
+		}
+	}
+	return count
+}
+
+// useStackedBrowserLayout returns true when the terminal is too narrow for a
+// side-by-side sessions/preview layout; the browser switches to a stacked
+// vertical layout instead so both panes remain usable.
+func (m BrowserModel) useStackedBrowserLayout() bool {
+	return m.width < 80
+}
+
+// sessionsPaneHeight returns the sessions pane height, accounting for whether
+// the layout is stacked (sessions and preview split the vertical space) or
+// side-by-side (both panes share the full browser pane height).
+func (m BrowserModel) sessionsPaneHeight() int {
+	h := m.browserPaneHeight()
+	if m.useStackedBrowserLayout() {
+		// In stacked mode, give 40% to sessions and the rest to preview.
+		sh := int(float64(h) * 0.40)
+		if sh < 4 {
+			sh = 4
+		}
+		if sh > h-4 {
+			sh = h - 4
+		}
+		return sh
+	}
+	return h
+}
+
+// previewPaneHeight returns the preview pane height, accounting for stacked vs
+// side-by-side layout.
+func (m BrowserModel) previewPaneHeight() int {
+	h := m.browserPaneHeight()
+	if m.useStackedBrowserLayout() {
+		return h - m.sessionsPaneHeight()
+	}
+	return h
+}
+
 var (
 	browserRowStyle    = lipgloss.NewStyle().Foreground(colorBright)
 	browserSubtleStyle = lipgloss.NewStyle().Foreground(colorDim)
@@ -913,7 +1171,11 @@ var (
 
 func browserPrimaryRow(summary viewer.RunSummary, width int) string {
 	date := browserCompactDate(summary)
-	row := fmt.Sprintf("%s  %s", shortID(summary.RunID), date)
+	prefix := shortID(summary.RunID)
+	if browserHasArtifactIssues(summary) {
+		prefix += " ⚠"
+	}
+	row := fmt.Sprintf("%s  %s", prefix, date)
 	return truncateToWidth(row, width)
 }
 

@@ -120,6 +120,350 @@ func TestBrowserModelSearchEditingAndSortCyclePreserveSelection(t *testing.T) {
 	}
 }
 
+func TestBrowserHasArtifactIssues(t *testing.T) {
+	tests := []struct {
+		name string
+		s    viewer.RunSummary
+		want bool
+	}{
+		{"clean summary", browserTestSummary("r1", time.Now(), "pi", "completed", "default"), false},
+		{"meta error", viewer.RunSummary{ArtifactError: "meta.json missing"}, true},
+		{"events error", viewer.RunSummary{EventsError: "events.jsonl missing"}, true},
+		{"prompt error", viewer.RunSummary{EffectivePromptError: "effective-prompt.md missing"}, true},
+		{"all errors", viewer.RunSummary{ArtifactError: "x", EventsError: "y", EffectivePromptError: "z"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := browserHasArtifactIssues(tt.s); got != tt.want {
+				t.Errorf("browserHasArtifactIssues() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBrowserVisibleIssueCount(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+		{RunID: "r2", ArtifactError: "meta.json missing", SearchText: "r2"},
+		{RunID: "r3", EventsError: "events.jsonl missing", SearchText: "r3"},
+		browserTestSummary("r4", time.Now().Add(-time.Hour), "kiro", "completed", "plan"),
+	}
+	m := NewBrowserModel(summaries)
+	if got, want := m.browserVisibleIssueCount(), 2; got != want {
+		t.Fatalf("browserVisibleIssueCount() = %d, want %d", got, want)
+	}
+}
+
+func TestBrowserStackedLayoutThreshold(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+	}
+	m := NewBrowserModel(summaries)
+
+	// Wide terminal: side-by-side layout.
+	m.width = 120
+	m.height = 40
+	if m.useStackedBrowserLayout() {
+		t.Error("useStackedBrowserLayout() = true at width 120, want false")
+	}
+
+	// Narrow terminal: stacked layout.
+	m.width = 60
+	if !m.useStackedBrowserLayout() {
+		t.Error("useStackedBrowserLayout() = false at width 60, want true")
+	}
+
+	// Boundary: 80 is the cutoff.
+	m.width = 80
+	if m.useStackedBrowserLayout() {
+		t.Error("useStackedBrowserLayout() = true at width 80, want false")
+	}
+	m.width = 79
+	if !m.useStackedBrowserLayout() {
+		t.Error("useStackedBrowserLayout() = false at width 79, want true")
+	}
+}
+
+func TestBrowserPaneHeightsInStackedLayout(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+	}
+	m := NewBrowserModel(summaries)
+
+	// Side-by-side: both panes share the full browser pane height.
+	m.width = 120
+	m.height = 40
+	sideH := m.browserPaneHeight()
+	if got := m.sessionsPaneHeight(); got != sideH {
+		t.Errorf("side-by-side sessionsPaneHeight = %d, want %d", got, sideH)
+	}
+	if got := m.previewPaneHeight(); got != sideH {
+		t.Errorf("side-by-side previewPaneHeight = %d, want %d", got, sideH)
+	}
+
+	// Stacked: sessions + preview split the height.
+	m.width = 60
+	sessH := m.sessionsPaneHeight()
+	prevH := m.previewPaneHeight()
+	if sessH+prevH != sideH {
+		t.Errorf("stacked heights sum %d+%d=%d, want %d", sessH, prevH, sessH+prevH, sideH)
+	}
+	if sessH < 4 {
+		t.Errorf("stacked sessionsPaneHeight = %d, want >= 4", sessH)
+	}
+	if prevH < 4 {
+		t.Errorf("stacked previewPaneHeight = %d, want >= 4", prevH)
+	}
+}
+
+func TestBrowserWidthsInStackedLayout(t *testing.T) {
+	m := NewBrowserModel(nil)
+
+	// Side-by-side: sessions is a fraction of width.
+	m.width = 120
+	m.height = 40
+	sessW := m.sessionsWidth()
+	prevW := m.previewWidth()
+	if sessW+prevW != 120 {
+		t.Errorf("side-by-side widths: %d+%d=%d, want 120", sessW, prevW, sessW+prevW)
+	}
+
+	// Stacked: both panes are full terminal width.
+	m.width = 60
+	if got := m.sessionsWidth(); got != 60 {
+		t.Errorf("stacked sessionsWidth = %d, want 60", got)
+	}
+	if got := m.previewWidth(); got != 60 {
+		t.Errorf("stacked previewWidth = %d, want 60", got)
+	}
+}
+
+func TestBrowserEmptyRunsView(t *testing.T) {
+	m := NewBrowserModel(nil)
+	m.width = 100
+	m.height = 30
+
+	// Status bar should indicate no saved runs.
+	statusLeft := m.browserStatusLeft()
+	if !strings.Contains(statusLeft, "No saved runs") {
+		t.Errorf("empty status left = %q, want it to contain 'No saved runs'", statusLeft)
+	}
+
+	// View should render without panic.
+	view := m.View()
+	if !strings.Contains(view, "SESSIONS") {
+		t.Error("empty view does not contain SESSIONS pane")
+	}
+	if !strings.Contains(view, "PREVIEW") {
+		t.Error("empty view does not contain PREVIEW pane")
+	}
+
+	// Status hints should only show quit.
+	hints := m.browserStatusRightVariants()
+	if len(hints) == 0 {
+		t.Fatal("no status right variants for empty model")
+	}
+	if !strings.Contains(hints[0], "quit") {
+		t.Errorf("empty hints = %q, want quit", hints[0])
+	}
+}
+
+func TestBrowserNoMatchesView(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+	m.searchQuery = "zzznotfound"
+	m.applyBrowserView()
+
+	// Should have zero visible summaries but allSummaries > 0.
+	if len(m.summaries) != 0 {
+		t.Fatalf("visible summaries = %d, want 0", len(m.summaries))
+	}
+
+	statusLeft := m.browserStatusLeft()
+	if !strings.Contains(statusLeft, "0/1") {
+		t.Errorf("no-matches status left = %q, want it to contain '0/1'", statusLeft)
+	}
+
+	// Should render without panic and show NO MATCHES state.
+	view := m.View()
+	if !strings.Contains(view, "SESSIONS") {
+		t.Error("no-matches view does not contain SESSIONS pane")
+	}
+
+	// Hints should include clear option.
+	hints := m.browserStatusRightVariants()
+	if len(hints) == 0 {
+		t.Fatal("no status right variants for no-matches")
+	}
+	found := false
+	for _, h := range hints {
+		if strings.Contains(h, "clear") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("no-matches hints do not include 'clear'")
+	}
+}
+
+func TestBrowserLoadingStateBeforeWindowSize(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+	}
+	m := NewBrowserModel(summaries)
+	// width/height are zero before first WindowSizeMsg.
+	view := m.View()
+	if !strings.Contains(view, "Opening session browser") {
+		t.Errorf("loading view = %q, want 'Opening session browser'", view)
+	}
+	if !strings.Contains(view, "Loaded 1 saved sessions") {
+		t.Errorf("loading view = %q, want 'Loaded 1 saved sessions'", view)
+	}
+}
+
+func TestBrowserLoadingStateShowsArtifactWarnings(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+		{RunID: "r2", ArtifactError: "meta.json missing", SortTime: time.Now(), SearchText: "r2"},
+	}
+	m := NewBrowserModel(summaries)
+	view := m.View()
+	if !strings.Contains(view, "artifact warnings") {
+		t.Errorf("loading view = %q, want 'artifact warnings'", view)
+	}
+}
+
+func TestBrowserArtifactWarningInPrimaryRow(t *testing.T) {
+	clean := browserTestSummary("clean-run", time.Now(), "pi", "completed", "default")
+	broken := viewer.RunSummary{
+		RunID:         "broken-run",
+		Dir:           "/tmp/broken-run",
+		SortTime:      time.Now(),
+		Agent:         "pi",
+		Status:        "unknown",
+		ArtifactError: "meta.json missing",
+		SearchText:    "broken-run",
+	}
+
+	cleanRow := browserPrimaryRow(clean, 60)
+	brokenRow := browserPrimaryRow(broken, 60)
+
+	if strings.Contains(cleanRow, "⚠") {
+		t.Errorf("clean row contains warning indicator: %q", cleanRow)
+	}
+	if !strings.Contains(brokenRow, "⚠") {
+		t.Errorf("broken row missing warning indicator: %q", brokenRow)
+	}
+}
+
+func TestBrowserPreviewShowsArtifactWarningTitle(t *testing.T) {
+	m := NewBrowserModel([]viewer.RunSummary{
+		{
+			RunID:         "warn-run",
+			Dir:           "/tmp/warn-run",
+			SortTime:      time.Now(),
+			Agent:         "pi",
+			Status:        "unknown",
+			ArtifactError: "meta.json missing",
+			SearchText:    "warn-run",
+		},
+	})
+	m.width = 100
+	m.height = 30
+	preview := m.renderPreviewPane()
+	if !strings.Contains(preview, "⚠") {
+		t.Error("preview pane for run with artifact issues does not show ⚠ indicator")
+	}
+}
+
+func TestBrowserStatusHintsForSearchMode(t *testing.T) {
+	m := NewBrowserModel([]viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+	})
+	m.width = 100
+	m.height = 30
+	m.searching = true
+
+	hints := m.browserStatusRightVariants()
+	if len(hints) == 0 {
+		t.Fatal("no search-mode hints")
+	}
+	first := hints[0]
+	for _, keyword := range []string{"search", "done", "cancel"} {
+		if !strings.Contains(first, keyword) {
+			t.Errorf("search hint %q missing keyword %q", first, keyword)
+		}
+	}
+}
+
+func TestBrowserStatusHintsForPreviewFocus(t *testing.T) {
+	m := NewBrowserModel([]viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+	})
+	m.width = 100
+	m.height = 30
+	m.focusedPane = 1
+
+	hints := m.browserStatusRightVariants()
+	if len(hints) == 0 {
+		t.Fatal("no preview-focus hints")
+	}
+	first := hints[0]
+	if !strings.Contains(first, "scroll") {
+		t.Errorf("preview hint %q missing 'scroll'", first)
+	}
+	if !strings.Contains(first, "sessions") {
+		t.Errorf("preview hint %q missing 'sessions'", first)
+	}
+}
+
+func TestBrowserStatusLeftShowsStackedIndicator(t *testing.T) {
+	m := NewBrowserModel([]viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+	})
+	m.height = 30
+
+	m.width = 120
+	if strings.Contains(m.browserStatusLeft(), "stacked") {
+		t.Error("wide-terminal status left contains 'stacked'")
+	}
+
+	m.width = 60
+	if !strings.Contains(m.browserStatusLeft(), "stacked") {
+		t.Error("narrow-terminal status left does not contain 'stacked'")
+	}
+}
+
+func TestBrowserViewRendersWithSmallTerminal(t *testing.T) {
+	m := NewBrowserModel([]viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+	})
+	// Very small terminal — should not panic.
+	m.width = 40
+	m.height = 12
+	view := m.View()
+	if view == "" {
+		t.Error("small-terminal view is empty")
+	}
+}
+
+func TestBrowserViewRendersWithVeryNarrowTerminal(t *testing.T) {
+	m := NewBrowserModel([]viewer.RunSummary{
+		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
+	})
+	m.width = 20
+	m.height = 10
+	view := m.View()
+	if view == "" {
+		t.Error("very-narrow-terminal view is empty")
+	}
+}
+
 func browserTestSummary(runID string, startedAt time.Time, agent, status, promptSource string) viewer.RunSummary {
 	searchParts := []string{runID, agent, status, promptSource}
 	if !startedAt.IsZero() {
