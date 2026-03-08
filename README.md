@@ -55,12 +55,39 @@ that as the plan. Otherwise it runs with a minimal default prompt.
 --runs-dir <path>         Runs directory (default: .ralfinho/runs)
 ```
 
-### View past runs
+### Browse and manage past runs
 
 ```bash
-ralfinho view              # List all runs
-ralfinho view <run-id>     # View a specific run (supports prefix matching)
+ralfinho view              # Open session browser TUI (interactive terminals)
+ralfinho view <run-id>     # Replay a specific run (supports prefix matching)
+ralfinho view --no-tui     # Plain text listing (also used in non-TTY environments)
 ```
+
+On interactive terminals, `ralfinho view` opens a full-screen session browser
+with a sessions list and a metadata preview pane. Sessions are shown newest-first
+by default. Runs with missing or corrupt artifacts are included but marked with a
+⚠ warning indicator.
+
+**Session browser keybindings:**
+
+| Key | Action |
+|-----|--------|
+| `j`/`k`, arrows | Navigate sessions |
+| `Enter`, `o` | Open selected session in the replay viewer |
+| `r` | Resume: start a new run from the session's saved prompt |
+| `x` | Delete selected session (requires confirmation) |
+| `Tab` | Switch focus between sessions and preview panes |
+| `s` | Cycle sort: newest → oldest → run ID → agent → status → prompt |
+| `/` | Search sessions (free text across all fields) |
+| `a`/`t`/`p`/`d` | Cycle filter by agent / status / prompt source / date |
+| `c` | Clear all active filters and search |
+| `g`/`G` | Jump to first / last session |
+| `Ctrl+d`/`Ctrl+u` | Half-page down / up |
+| `q`, `Esc` | Quit browser |
+
+**Non-TTY fallback:** When stdin or stdout is not a terminal (e.g. piped output
+or CI), or when `--no-tui` is passed, `ralfinho view` falls back to a plain text
+listing of all runs.
 
 ## Agent Backends
 

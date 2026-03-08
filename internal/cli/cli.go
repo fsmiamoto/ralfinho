@@ -54,8 +54,23 @@ Flags:
   -h, --help              Show this help
 
 Subcommands:
-  view                    Browse saved runs on TTYs, or list them otherwise
-  view <run-id>           View a past run
+  view                    Open the session browser TUI (interactive terminals)
+                          or list saved runs (non-TTY / --no-tui)
+  view <run-id>           Replay a specific run (supports prefix matching)
+
+Session browser keybindings:
+  j/k, arrows             Navigate sessions
+  Enter, o                Open selected session in replay viewer
+  r                       Resume: start a new run from saved prompt artifacts
+  x                       Delete selected session (with confirmation)
+  Tab                     Switch focus between sessions and preview panes
+  s                       Cycle sort mode (newest/oldest/run id/agent/status/prompt)
+  /                       Search sessions by text
+  a/t/p/d                 Filter by agent/status/prompt source/date
+  c                       Clear all filters and search
+  g/G                     Jump to first/last session
+  Ctrl+d/u, PgDn/PgUp    Half-page scroll
+  q, Esc                  Quit browser
 `
 
 // ResolveViewMode returns the concrete execution mode for the "view"
