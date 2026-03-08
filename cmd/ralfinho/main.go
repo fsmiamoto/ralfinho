@@ -195,11 +195,21 @@ func runViewer(cfg *cli.Config) {
 	}
 }
 
-// runBrowser is the interactive entrypoint for `ralfinho view` on TTYs.
-// Phase 1 wires the routing here; Phase 2 will replace the plain fallback
-// output with a dedicated browser TUI.
+// runBrowser loads saved runs and opens the interactive session browser.
 func runBrowser(cfg *cli.Config) {
-	listRuns(cfg)
+	summaries, err := viewer.ListRunSummaries(cfg.RunsDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ralfinho view: %v\n", err)
+		os.Exit(1)
+	}
+
+	model := tui.NewBrowserModel(summaries)
+	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "ralfinho: TUI error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // listRuns prints a readable summary of all available runs.
