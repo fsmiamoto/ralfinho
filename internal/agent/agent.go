@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/fsmiamoto/ralfinho/internal/events"
 )
@@ -51,6 +52,10 @@ type Options struct {
 	// RawWriter, when non-nil, receives a copy of the raw agent output
 	// (e.g. JSONL lines from pi, JSON-RPC frames from kiro) for debugging.
 	RawWriter io.Writer
+
+	// LogWriter receives diagnostic/warning messages from the agent backend.
+	// Defaults to os.Stderr if not set.
+	LogWriter io.Writer
 }
 
 // WithRawWriter returns an Option that sets the raw output writer.
@@ -60,11 +65,21 @@ func WithRawWriter(w io.Writer) Option {
 	}
 }
 
+// WithLogWriter returns an Option that sets the diagnostic log writer.
+func WithLogWriter(w io.Writer) Option {
+	return func(o *Options) {
+		o.LogWriter = w
+	}
+}
+
 // applyOptions applies the given options to an Options struct and returns it.
 func applyOptions(opts []Option) Options {
 	var o Options
 	for _, fn := range opts {
 		fn(&o)
+	}
+	if o.LogWriter == nil {
+		o.LogWriter = os.Stderr
 	}
 	return o
 }

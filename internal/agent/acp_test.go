@@ -63,6 +63,7 @@ func mockACPClient(t *testing.T) (c *acpClient, serverW io.WriteCloser, drainBuf
 		notifications: make(chan *rpcMessage, 128),
 		reverseReqs:   make(chan *rpcMessage, 16),
 		done:          make(chan struct{}),
+		logWriter:     io.Discard,
 	}
 	go c.readLoop()
 
@@ -1033,7 +1034,7 @@ func TestNewACPClient_KiroNotFound(t *testing.T) {
 	// even if it happens to be installed on the test machine.
 	t.Setenv("PATH", "/nonexistent-dir-for-test")
 
-	_, err := newACPClient(ctx, nil)
+	_, err := newACPClient(ctx, nil, io.Discard)
 	if err == nil {
 		t.Fatal("expected error when kiro-cli is not in PATH, got nil")
 	}

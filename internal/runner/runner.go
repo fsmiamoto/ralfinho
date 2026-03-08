@@ -101,6 +101,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 	if r.rawFile != nil {
 		agentOpts = append(agentOpts, agent.WithRawWriter(r.rawFile))
 	}
+	agentOpts = append(agentOpts, agent.WithLogWriter(r.stderr))
 	resolved, err := agent.Resolve(r.cfg.Agent, agentOpts...)
 	if err != nil {
 		r.logf("error: %v\n", err)
@@ -302,8 +303,8 @@ func (r *Runner) handleEvent(ev *Event) {
 		}
 
 	case EventToolExecutionStart:
-		r.logf("  ⚙ tool: %s (id=%s)\n", ev.ToolName, truncate(ev.ToolCallID, 12))
-		r.sessionLogf("[%s] ⚙ tool start: %s (id=%s)\n", r.timestamp(), ev.ToolName, truncate(ev.ToolCallID, 12))
+		r.logf("  > tool: %s (id=%s)\n", ev.ToolName, truncate(ev.ToolCallID, 12))
+		r.sessionLogf("[%s] > tool start: %s (id=%s)\n", r.timestamp(), ev.ToolName, truncate(ev.ToolCallID, 12))
 		if ev.Args != nil {
 			var args ToolArgs
 			if err := json.Unmarshal(ev.Args, &args); err == nil && args.Command != "" {
@@ -319,8 +320,8 @@ func (r *Runner) handleEvent(ev *Event) {
 		if ev.IsError != nil && *ev.IsError {
 			errStr = " [ERROR]"
 		}
-		r.logf("  ⚙ tool done: %s%s\n", ev.ToolName, errStr)
-		r.sessionLogf("[%s] ⚙ tool done: %s%s\n", r.timestamp(), ev.ToolName, errStr)
+		r.logf("  + tool done: %s%s\n", ev.ToolName, errStr)
+		r.sessionLogf("[%s] + tool done: %s%s\n", r.timestamp(), ev.ToolName, errStr)
 		if ev.Result != nil {
 			r.sessionLogf("    result: %s\n", truncate(string(ev.Result), 200))
 		}

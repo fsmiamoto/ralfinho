@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -131,6 +130,9 @@ type acpClient struct {
 	readErr   error // the error that terminated the read loop (often io.EOF)
 	readErrMu sync.Mutex
 
+	// logWriter receives diagnostic/warning messages.
+	logWriter io.Writer
+
 	// stderrBuf captures the last N bytes of kiro-cli stderr for diagnostics.
 	stderrBuf *limitedBuffer
 
@@ -151,7 +153,7 @@ func (c *acpClient) getReadErr() error {
 //
 // If rawWriter is non-nil, raw JSON-RPC messages from stdout are tee'd to it
 // for debugging (raw-output.log).
-func newACPClient(ctx context.Context, rawWriter io.Writer) (*acpClient, error) {
+func newACPClient(ctx context.Context, rawWriter io.Writer, logWriter io.Writer) (*acpClient, error) {
 	cmd := exec.CommandContext(ctx, "kiro-cli", "acp")
 	stderrBuf := newLimitedBuffer(4096)
 	cmd.Stderr = stderrBuf // capture last 4KB of kiro-cli stderr for diagnostics
@@ -189,6 +191,7 @@ func newACPClient(ctx context.Context, rawWriter io.Writer) (*acpClient, error) 
 		notifications: make(chan *rpcMessage, 128),
 		reverseReqs:   make(chan *rpcMessage, 16),
 		done:          make(chan struct{}),
+		logWriter:     logWriter,
 		stderrBuf:     stderrBuf,
 	}
 
@@ -267,7 +270,7 @@ func (c *acpClient) readLoop() {
 			default:
 				// Drop if buffer is full. In practice 128 is more than
 				// enough for streaming text chunks between reads.
-				fmt.Fprintf(os.Stderr, "acp: warning: notification buffer full, dropping %s\n", msg.Method)
+				fmt.Fprintf(c.logWriter, "acp: warning: notification buffer full, dropping %s\n", msg.Method)
 			}
 
 		case msg.IsReverseRequest():
@@ -276,7 +279,7 @@ func (c *acpClient) readLoop() {
 			default:
 				// Drop if buffer is full — shouldn't happen since the
 				// permission handler should consume promptly.
-				fmt.Fprintf(os.Stderr, "acp: warning: reverse request buffer full, dropping %s\n", msg.Method)
+				fmt.Fprintf(c.logWriter, "acp: warning: reverse request buffer full, dropping %s\n", msg.Method)
 			}
 		}
 	}
@@ -592,11 +595,11 @@ func (c *acpClient) autoApprovePermissions(ctx context.Context) {
 				return // channel closed
 			}
 			if msg.Method == "session/request_permission" {
-				fmt.Fprintf(os.Stderr, "acp: auto-approved permission: %s (id=%s)\n", msg.Method, string(msg.ID))
+				fmt.Fprintf(c.logWriter, "acp: auto-approved permission: %s (id=%s)\n", msg.Method, string(msg.ID))
 				resp := newResponse(msg.ID, "allow_always")
 				if err := c.codec.send(resp); err != nil {
 					// Log error but don't crash — connection is likely dying
-					fmt.Fprintf(os.Stderr, "acp: warning: failed to send permission response: %v\n", err)
+					fmt.Fprintf(c.logWriter, "acp: warning: failed to send permission response: %v\n", err)
 				}
 			}
 
@@ -622,7 +625,7 @@ func (c *acpClient) Close() error {
 			// that inherit the stdout pipe; killing only the parent leaves
 			// the pipe open and cmd.Wait() hangs.
 			if err := syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
-				fmt.Fprintf(os.Stderr, "acp: warning: failed to kill process group: %v\n", err)
+				fmt.Fprintf(c.logWriter, "acp: warning: failed to kill process group: %v\n", err)
 			}
 		}
 		// Collect the process exit status (may return "signal: killed").
