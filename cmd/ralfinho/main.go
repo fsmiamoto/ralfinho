@@ -37,11 +37,14 @@ func main() {
 	}
 
 	// Handle "view" subcommand.
-	if cfg.ViewList {
+	switch cfg.ResolveViewMode(isViewInteractiveTerminal()) {
+	case cli.ViewModeBrowser:
+		runBrowser(cfg)
+		return
+	case cli.ViewModeList:
 		listRuns(cfg)
 		return
-	}
-	if cfg.ViewRunID != "" {
+	case cli.ViewModeReplay:
 		runViewer(cfg)
 		return
 	}
@@ -192,36 +195,62 @@ func runViewer(cfg *cli.Config) {
 	}
 }
 
-// listRuns prints a summary of all available runs.
+// runBrowser is the interactive entrypoint for `ralfinho view` on TTYs.
+// Phase 1 wires the routing here; Phase 2 will replace the plain fallback
+// output with a dedicated browser TUI.
+func runBrowser(cfg *cli.Config) {
+	listRuns(cfg)
+}
+
+// listRuns prints a readable summary of all available runs.
 func listRuns(cfg *cli.Config) {
-	runs, err := viewer.ListRuns(cfg.RunsDir)
+	summaries, err := viewer.ListRunSummaries(cfg.RunsDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ralfinho view: %v\n", err)
 		os.Exit(1)
 	}
 
-	if len(runs) == 0 {
+	if len(summaries) == 0 {
 		fmt.Println("No runs found.")
 		return
 	}
 
 	fmt.Println("Available runs:")
-	for _, meta := range runs {
-		id := meta.RunID
-		if len(id) > 8 {
-			id = id[:8]
-		}
-		date := formatMetaDate(meta.StartedAt)
-		agentName := meta.Agent
-		if agentName == "" {
-			agentName = "pi"
-		}
-		source := meta.PromptSource
-		if source == "" {
-			source = "unknown"
-		}
-		fmt.Printf("  %s  %s  %-5s %-22s %d iterations  (%s)\n",
-			id, date, agentName, meta.Status, meta.IterationsCompleted, source)
+	for _, summary := range summaries {
+		fmt.Println(formatRunSummary(summary))
+	}
+}
+
+func formatRunSummary(summary viewer.RunSummary) string {
+	id := summary.RunID
+	if len(id) > 8 {
+		id = id[:8]
+	}
+
+	details := fmt.Sprintf("%d iterations  (%s)", summary.IterationsCompleted, summary.PromptLabel)
+	if summary.ArtifactError != "" {
+		details = summary.ArtifactError
+	}
+
+	return fmt.Sprintf("  %s  %s  %-5s %-22s %s",
+		id,
+		formatRunSummaryDate(summary),
+		summary.Agent,
+		summary.Status,
+		details,
+	)
+}
+
+func formatRunSummaryDate(summary viewer.RunSummary) string {
+	switch {
+	case !summary.StartedAt.IsZero():
+		return summary.StartedAt.Format("2006-01-02 15:04")
+	case summary.StartedAtText != "":
+		return formatMetaDate(summary.StartedAtText)
+	case !summary.SortTime.IsZero():
+		return summary.SortTime.Format("2006-01-02 15:04")
+	default:
+		return "unknown"
 	}
 }
 
@@ -257,4 +286,10 @@ func resolvePrompt(cfg *cli.Config) (string, error) {
 // isTerminal reports whether stderr is connected to a terminal.
 func isTerminal() bool {
 	return term.IsTerminal(int(os.Stderr.Fd()))
+}
+
+// isViewInteractiveTerminal reports whether `ralfinho view` can safely launch
+// an interactive browser instead of printing plain text.
+func isViewInteractiveTerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }

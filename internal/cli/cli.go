@@ -19,17 +19,27 @@ type Config struct {
 
 	Agent         string // agent executable name (default: "pi")
 	MaxIterations int    // 0 = unlimited
-	NoTUI         bool   // disable TUI
+	NoTUI         bool   // disable TUI / browser TUI when viewing runs
 	RunsDir       string // directory for run storage
 
 	// Subcommand
-	ViewRunID   string // non-empty means "view <run-id>" subcommand
-	ViewList    bool   // true means "view" without a run-id (list mode)
+	ViewRunID   string // non-empty means "view <run-id>" replay mode
+	ViewList    bool   // true means "view" without a run-id
 	ShowVersion bool   // true means --version was requested
 }
 
+// ViewMode is the resolved execution mode for the "view" subcommand.
+type ViewMode string
+
+const (
+	ViewModeNone    ViewMode = ""
+	ViewModeBrowser ViewMode = "browser"
+	ViewModeList    ViewMode = "list"
+	ViewModeReplay  ViewMode = "replay"
+)
+
 const usage = `Usage: ralfinho [flags] [PROMPT_FILE]
-       ralfinho view [--runs-dir <path>] <run-id>
+       ralfinho view [--runs-dir <path>] [--no-tui] [<run-id>]
 
 An autonomous coding agent runner.
 
@@ -44,8 +54,25 @@ Flags:
   -h, --help              Show this help
 
 Subcommands:
+  view                    Browse saved runs on TTYs, or list them otherwise
   view <run-id>           View a past run
 `
+
+// ResolveViewMode returns the concrete execution mode for the "view"
+// subcommand after terminal/opt-out decisions are applied.
+func (c Config) ResolveViewMode(interactive bool) ViewMode {
+	switch {
+	case c.ViewRunID != "":
+		return ViewModeReplay
+	case c.ViewList:
+		if interactive && !c.NoTUI {
+			return ViewModeBrowser
+		}
+		return ViewModeList
+	default:
+		return ViewModeNone
+	}
+}
 
 // Parse parses command-line arguments and returns a Config.
 // It writes usage/error output to stderr and returns an error
@@ -175,23 +202,32 @@ func parseView(args []string) (*Config, error) {
 	fs := flag.NewFlagSet("view", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	var runsDir string
+	var (
+		runsDir string
+		noTUI   bool
+	)
 	fs.StringVar(&runsDir, "runs-dir", ".ralfinho/runs", "")
+	fs.BoolVar(&noTUI, "no-tui", false, "")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, fmt.Errorf("invalid view flags: %w", err)
 	}
 
 	remaining := fs.Args()
+	if len(remaining) > 1 {
+		return nil, fmt.Errorf("expected at most one run-id, got %d", len(remaining))
+	}
 	if len(remaining) == 0 {
 		return &Config{
 			ViewList: true,
+			NoTUI:    noTUI,
 			RunsDir:  runsDir,
 		}, nil
 	}
 
 	return &Config{
 		ViewRunID: remaining[0],
+		NoTUI:     noTUI,
 		RunsDir:   runsDir,
 	}, nil
 }

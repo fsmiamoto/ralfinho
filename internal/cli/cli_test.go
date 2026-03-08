@@ -134,6 +134,80 @@ func TestParseViewList(t *testing.T) {
 	}
 }
 
+func TestParseViewListNoTUI(t *testing.T) {
+	cfg, err := Parse([]string{"view", "--no-tui"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.ViewList {
+		t.Error("ViewList = false, want true")
+	}
+	if !cfg.NoTUI {
+		t.Error("NoTUI = false, want true")
+	}
+}
+
+func TestParseViewRejectsMultipleRunIDs(t *testing.T) {
+	_, err := Parse([]string{"view", "abc-123", "def-456"})
+	if err == nil {
+		t.Fatal("expected error for multiple run IDs, got nil")
+	}
+}
+
+func TestResolveViewMode(t *testing.T) {
+	tests := []struct {
+		name        string
+		cfg         Config
+		interactive bool
+		want        ViewMode
+	}{
+		{
+			name:        "browser on interactive tty",
+			cfg:         Config{ViewList: true},
+			interactive: true,
+			want:        ViewModeBrowser,
+		},
+		{
+			name:        "plain list on non-tty",
+			cfg:         Config{ViewList: true},
+			interactive: false,
+			want:        ViewModeList,
+		},
+		{
+			name:        "plain list when opted out",
+			cfg:         Config{ViewList: true, NoTUI: true},
+			interactive: true,
+			want:        ViewModeList,
+		},
+		{
+			name:        "replay preserved for run id",
+			cfg:         Config{ViewRunID: "abc-123"},
+			interactive: true,
+			want:        ViewModeReplay,
+		},
+		{
+			name:        "replay wins even with no-tui",
+			cfg:         Config{ViewRunID: "abc-123", NoTUI: true},
+			interactive: false,
+			want:        ViewModeReplay,
+		},
+		{
+			name:        "non-view command",
+			cfg:         Config{},
+			interactive: true,
+			want:        ViewModeNone,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.ResolveViewMode(tt.interactive); got != tt.want {
+				t.Fatalf("ResolveViewMode(%v) = %q, want %q", tt.interactive, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseMaxIterations(t *testing.T) {
 	cfg, err := Parse([]string{"-m", "5"})
 	if err != nil {
