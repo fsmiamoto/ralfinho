@@ -250,6 +250,15 @@ func runBrowser(cfg *cli.Config) {
 			}
 			// Loop back to re-open the browser (the new run now appears
 			// in the session list after the rescan).
+		case tui.BrowserActionDelete:
+			if result.DeleteDir != "" {
+				if err := os.RemoveAll(result.DeleteDir); err != nil {
+					fmt.Fprintf(os.Stderr, "ralfinho view: delete: %v\n", err)
+				}
+			}
+			lastSelectedRunID = result.DeleteNextRunID
+			// Loop back to re-open the browser; the deleted run
+			// disappears after the rescan.
 		default:
 			return
 		}

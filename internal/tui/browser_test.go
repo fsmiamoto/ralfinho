@@ -803,6 +803,331 @@ func TestBrowserStatusHintsExcludeOpenWhenUnavailable(t *testing.T) {
 	}
 }
 
+// --- Delete confirmation tests ---
+
+func TestBrowserDeleteEntersConfirmationOnX(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("del-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+
+	if !m.confirmingDelete {
+		t.Fatal("confirmingDelete = false, want true after x")
+	}
+	if m.confirmDeleteRunID != "del-run" {
+		t.Fatalf("confirmDeleteRunID = %q, want %q", m.confirmDeleteRunID, "del-run")
+	}
+	if m.confirmDeleteDir != "/tmp/del-run" {
+		t.Fatalf("confirmDeleteDir = %q, want %q", m.confirmDeleteDir, "/tmp/del-run")
+	}
+	// Should not have emitted a result yet.
+	if m.Result().Action != BrowserActionNone {
+		t.Fatalf("Result().Action = %q, want %q (no result before confirmation)", m.Result().Action, BrowserActionNone)
+	}
+}
+
+func TestBrowserDeleteConfirmOnY(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("del-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	// Enter confirmation, then confirm with y.
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'y'}}))
+
+	result := m.Result()
+	if result.Action != BrowserActionDelete {
+		t.Fatalf("Result().Action = %q, want %q", result.Action, BrowserActionDelete)
+	}
+	if result.RunID != "del-run" {
+		t.Fatalf("Result().RunID = %q, want %q", result.RunID, "del-run")
+	}
+	if result.DeleteDir != "/tmp/del-run" {
+		t.Fatalf("Result().DeleteDir = %q, want %q", result.DeleteDir, "/tmp/del-run")
+	}
+}
+
+func TestBrowserDeleteConfirmOnEnter(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("del-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+
+	result := m.Result()
+	if result.Action != BrowserActionDelete {
+		t.Fatalf("Result().Action = %q, want %q", result.Action, BrowserActionDelete)
+	}
+	if result.RunID != "del-run" {
+		t.Fatalf("Result().RunID = %q, want %q", result.RunID, "del-run")
+	}
+}
+
+func TestBrowserDeleteCancelOnN(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("del-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+	if !m.confirmingDelete {
+		t.Fatal("not in confirmation mode after x")
+	}
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'n'}}))
+
+	if m.confirmingDelete {
+		t.Fatal("confirmingDelete = true, want false after n")
+	}
+	if m.confirmDeleteRunID != "" {
+		t.Fatalf("confirmDeleteRunID = %q, want empty after cancel", m.confirmDeleteRunID)
+	}
+	if m.Result().Action != BrowserActionNone {
+		t.Fatalf("Result().Action = %q, want %q after cancel", m.Result().Action, BrowserActionNone)
+	}
+}
+
+func TestBrowserDeleteCancelOnEsc(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("del-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEsc}))
+
+	if m.confirmingDelete {
+		t.Fatal("confirmingDelete = true, want false after Esc")
+	}
+	if m.Result().Action != BrowserActionNone {
+		t.Fatalf("Result().Action = %q, want %q after Esc cancel", m.Result().Action, BrowserActionNone)
+	}
+}
+
+func TestBrowserDeleteIgnoresOtherKeysDuringConfirmation(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("del-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+
+	// Press keys that are NOT y/n/Enter/Esc/Ctrl+C — should remain in confirmation.
+	for _, key := range []rune{'j', 'k', 'q', 's', 'a', 'z'} {
+		m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{key}}))
+		if !m.confirmingDelete {
+			t.Fatalf("confirmingDelete = false after pressing %q, want true (should be ignored)", string(key))
+		}
+	}
+	if m.Result().Action != BrowserActionNone {
+		t.Fatalf("Result().Action = %q, want %q (no action from ignored keys)", m.Result().Action, BrowserActionNone)
+	}
+}
+
+func TestBrowserDeleteBlockedWhenUnavailable(t *testing.T) {
+	s := browserTestSummary("no-del-run", time.Now(), "pi", "completed", "default")
+	s.Actions.Delete = viewer.RunActionState{DisabledReason: "run directory unavailable"}
+
+	m := NewBrowserModel([]viewer.RunSummary{s})
+	m.width = 100
+	m.height = 30
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+
+	if m.confirmingDelete {
+		t.Fatal("confirmingDelete = true, want false (delete unavailable)")
+	}
+}
+
+func TestBrowserDeleteBlockedFromPreviewPane(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("del-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+	m.focusedPane = 1
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+
+	if m.confirmingDelete {
+		t.Fatal("confirmingDelete = true, want false (should only work from sessions pane)")
+	}
+}
+
+func TestBrowserDeleteBlockedOnEmptyList(t *testing.T) {
+	m := NewBrowserModel(nil)
+	m.width = 100
+	m.height = 30
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+
+	if m.confirmingDelete {
+		t.Fatal("confirmingDelete = true, want false (no sessions)")
+	}
+}
+
+func TestBrowserDeleteNextRunIDMiddle(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("run-alpha", time.Date(2026, 3, 8, 11, 0, 0, 0, time.UTC), "pi", "completed", "default", true),
+		browserTestSummaryWithActions("run-beta", time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC), "kiro", "completed", "plan", true),
+		browserTestSummaryWithActions("run-gamma", time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "pi", "failed", "prompt", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	// Move to run-beta (middle).
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'j'}}))
+	if current := m.currentSummary(); current == nil || current.RunID != "run-beta" {
+		t.Fatalf("current = %v, want run-beta", current)
+	}
+
+	// Press x then y to confirm.
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'y'}}))
+
+	result := m.Result()
+	if result.DeleteNextRunID != "run-gamma" {
+		t.Fatalf("DeleteNextRunID = %q, want %q (next run after middle)", result.DeleteNextRunID, "run-gamma")
+	}
+}
+
+func TestBrowserDeleteNextRunIDEnd(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("run-alpha", time.Date(2026, 3, 8, 11, 0, 0, 0, time.UTC), "pi", "completed", "default", true),
+		browserTestSummaryWithActions("run-beta", time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC), "kiro", "completed", "plan", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	// Move to run-beta (last).
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'j'}}))
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'y'}}))
+
+	result := m.Result()
+	if result.DeleteNextRunID != "run-alpha" {
+		t.Fatalf("DeleteNextRunID = %q, want %q (previous run when at end)", result.DeleteNextRunID, "run-alpha")
+	}
+}
+
+func TestBrowserDeleteNextRunIDOnly(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("only-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'y'}}))
+
+	result := m.Result()
+	if result.DeleteNextRunID != "" {
+		t.Fatalf("DeleteNextRunID = %q, want empty (only item)", result.DeleteNextRunID)
+	}
+}
+
+func TestBrowserStatusHintsIncludeDeleteWhenAvailable(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("del-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	hints := m.browserStatusRightVariants()
+	if len(hints) == 0 {
+		t.Fatal("no status hints")
+	}
+	if !strings.Contains(hints[0], "delete") {
+		t.Errorf("hints = %q, want 'delete'", hints[0])
+	}
+}
+
+func TestBrowserStatusHintsExcludeDeleteWhenUnavailable(t *testing.T) {
+	s := browserTestSummary("no-del-run", time.Now(), "pi", "completed", "default")
+	s.Actions.Delete = viewer.RunActionState{DisabledReason: "run directory unavailable"}
+
+	m := NewBrowserModel([]viewer.RunSummary{s})
+	m.width = 100
+	m.height = 30
+
+	hints := m.browserStatusRightVariants()
+	if len(hints) == 0 {
+		t.Fatal("no status hints")
+	}
+	for _, h := range hints {
+		if strings.Contains(h, "delete") {
+			t.Errorf("hints = %q, should not contain 'delete' when unavailable", h)
+			break
+		}
+	}
+}
+
+func TestBrowserStatusHintsForDeleteConfirmation(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("del-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+
+	hints := m.browserStatusRightVariants()
+	if len(hints) == 0 {
+		t.Fatal("no confirmation hints")
+	}
+	if !strings.Contains(hints[0], "confirm") {
+		t.Errorf("confirmation hints = %q, want 'confirm'", hints[0])
+	}
+	if !strings.Contains(hints[0], "cancel") {
+		t.Errorf("confirmation hints = %q, want 'cancel'", hints[0])
+	}
+}
+
+func TestBrowserStatusLeftForDeleteConfirmation(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("del-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+
+	left := m.browserStatusLeft()
+	if !strings.Contains(left, "Delete") {
+		t.Errorf("confirmation status left = %q, want 'Delete'", left)
+	}
+	if !strings.Contains(left, "del-run") {
+		t.Errorf("confirmation status left = %q, want run ID", left)
+	}
+	if !strings.Contains(left, "cannot be undone") {
+		t.Errorf("confirmation status left = %q, want 'cannot be undone'", left)
+	}
+}
+
 func browserTestSummaryWithActions(runID string, startedAt time.Time, agent, status, promptSource string, openable bool) viewer.RunSummary {
 	s := browserTestSummary(runID, startedAt, agent, status, promptSource)
 	if openable {

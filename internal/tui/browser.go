@@ -32,6 +32,10 @@ type BrowserResult struct {
 	ResumeAgent  string
 	ResumeSource viewer.ResumeSource
 	ResumePath   string
+
+	// Delete metadata (set only for BrowserActionDelete).
+	DeleteDir       string
+	DeleteNextRunID string
 }
 
 type browserSortMode string
@@ -76,6 +80,10 @@ type BrowserModel struct {
 	sortMode      browserSortMode
 	searchQuery   string
 	searching     bool
+
+	confirmingDelete   bool
+	confirmDeleteRunID string
+	confirmDeleteDir   string
 
 	agentFilter  string
 	agentOptions []string
@@ -148,6 +156,10 @@ func (m BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m BrowserModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.confirmingDelete {
+		return m.handleConfirmDeleteKey(msg)
+	}
+
 	if m.searching {
 		return m.handleSearchKey(msg)
 	}
@@ -172,6 +184,15 @@ func (m BrowserModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					ResumePath:   summary.Actions.Resume.Path,
 				}
 				return m, tea.Quit
+			}
+		}
+
+	case "x":
+		if m.focusedPane == 0 {
+			if summary := m.currentSummary(); summary != nil && summary.Actions.Delete.Available {
+				m.confirmingDelete = true
+				m.confirmDeleteRunID = summary.RunID
+				m.confirmDeleteDir = summary.Dir
 			}
 		}
 
@@ -303,6 +324,51 @@ func (m BrowserModel) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m BrowserModel) handleConfirmDeleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "enter":
+		m.confirmingDelete = false
+		m.result = BrowserResult{
+			Action:          BrowserActionDelete,
+			RunID:           m.confirmDeleteRunID,
+			DeleteDir:       m.confirmDeleteDir,
+			DeleteNextRunID: m.nextRunIDAfterDelete(),
+		}
+		return m, tea.Quit
+	case "n", "esc":
+		m.confirmingDelete = false
+		m.confirmDeleteRunID = ""
+		m.confirmDeleteDir = ""
+		return m, nil
+	case "ctrl+c":
+		m.confirmingDelete = false
+		return m, tea.Quit
+	}
+	// All other keys are ignored during confirmation.
+	return m, nil
+}
+
+// nextRunIDAfterDelete returns the RunID of the session that should be selected
+// after the confirmed run is removed. It picks the next row if available, then
+// the previous row, or empty when the list would become empty.
+func (m BrowserModel) nextRunIDAfterDelete() string {
+	if len(m.summaries) <= 1 {
+		return ""
+	}
+	for i, s := range m.summaries {
+		if s.RunID == m.confirmDeleteRunID {
+			if i+1 < len(m.summaries) {
+				return m.summaries[i+1].RunID
+			}
+			if i-1 >= 0 {
+				return m.summaries[i-1].RunID
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 func (m *BrowserModel) moveCursor(delta int) {
@@ -697,6 +763,9 @@ func (m BrowserModel) renderBrowserStatus() string {
 }
 
 func (m BrowserModel) browserStatusLeft() string {
+	if m.confirmingDelete {
+		return fmt.Sprintf("Delete run %s? This cannot be undone.", shortID(m.confirmDeleteRunID))
+	}
 	if len(m.allSummaries) == 0 {
 		return "No saved runs │ run ralfinho to create a session"
 	}
@@ -721,6 +790,19 @@ func (m BrowserModel) browserStatusRightVariants() []string {
 			parts = append(parts, statusKeyStyle.Render(hint.Key)+":"+hint.Label)
 		}
 		return strings.Join(parts, statusSepStyle.Render(" │ "))
+	}
+
+	if m.confirmingDelete {
+		return []string{
+			render(
+				browserHint{Key: "y/Enter", Label: "confirm delete"},
+				browserHint{Key: "n/Esc", Label: "cancel"},
+			),
+			render(
+				browserHint{Key: "y", Label: "confirm"},
+				browserHint{Key: "Esc", Label: "cancel"},
+			),
+		}
 	}
 
 	if m.searching {
@@ -803,6 +885,9 @@ func (m BrowserModel) browserStatusRightVariants() []string {
 		}
 		if summary.Actions.Resume.Available {
 			actions = append(actions, browserHint{Key: "r", Label: "resume"})
+		}
+		if summary.Actions.Delete.Available {
+			actions = append(actions, browserHint{Key: "x", Label: "delete"})
 		}
 	}
 
