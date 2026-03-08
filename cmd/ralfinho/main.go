@@ -243,6 +243,13 @@ func runBrowser(cfg *cli.Config) {
 				// another session or quit normally.
 			}
 			// Loop back to re-open the browser.
+		case tui.BrowserActionResume:
+			lastSelectedRunID = result.RunID
+			if err := resumeRunFromBrowser(cfg, result); err != nil {
+				fmt.Fprintf(os.Stderr, "ralfinho view: resume: %v\n", err)
+			}
+			// Loop back to re-open the browser (the new run now appears
+			// in the session list after the rescan).
 		default:
 			return
 		}
@@ -314,6 +321,111 @@ func formatMetaDate(s string) string {
 		}
 	}
 	return t.Format("2006-01-02 15:04")
+}
+
+// resumeRunFromBrowser launches a fresh run using prompt artifacts recovered
+// from a previous session. It blocks until the TUI-driven run finishes (or the
+// user quits early) and then returns so the browser loop can reopen.
+func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
+	promptText, err := resolveResumePrompt(result.ResumeSource, result.ResumePath)
+	if err != nil {
+		return fmt.Errorf("resolving prompt: %w", err)
+	}
+
+	agentName := result.ResumeAgent
+	if agentName == "" || agentName == "unknown" {
+		agentName = cfg.Agent
+	}
+	if !agent.IsValid(agentName) {
+		return fmt.Errorf("unknown agent %q from saved run", agentName)
+	}
+
+	// Map the resume source to runner metadata so the new run's meta.json
+	// accurately describes how the prompt was obtained.
+	inputMode, promptFile, planFile := resumePromptMeta(result.ResumeSource, result.ResumePath)
+
+	eventCh := make(chan runner.Event, 256)
+	r := runner.New(runner.RunConfig{
+		Agent:         agentName,
+		Prompt:        promptText,
+		MaxIterations: cfg.MaxIterations,
+		RunsDir:       cfg.RunsDir,
+		PromptSource:  inputMode,
+		PromptFile:    promptFile,
+		PlanFile:      planFile,
+		EventChan:     eventCh,
+	})
+
+	resultCh := make(chan runner.RunResult, 1)
+	go func() {
+		res := r.Run(context.Background())
+		resultCh <- res
+		close(eventCh)
+	}()
+
+	model := tui.NewModel(eventCh)
+	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	go func() {
+		res := <-resultCh
+		p.Send(tui.DoneMsg{Result: res})
+	}()
+
+	finalModel, err := p.Run()
+	if err != nil {
+		return fmt.Errorf("TUI error: %v", err)
+	}
+
+	if m, ok := finalModel.(tui.Model); ok {
+		if runResult := m.RunResult(); runResult != nil {
+			fmt.Fprintf(os.Stderr, "\n=== resumed run summary ===\n")
+			fmt.Fprintf(os.Stderr, "run-id:     %s\n", runResult.RunID)
+			fmt.Fprintf(os.Stderr, "agent:      %s\n", runResult.Agent)
+			fmt.Fprintf(os.Stderr, "iterations: %d\n", runResult.Iterations)
+			fmt.Fprintf(os.Stderr, "status:     %s\n", runResult.Status)
+		}
+	}
+
+	return nil
+}
+
+// resolveResumePrompt reads the prompt text for a resumed run based on the
+// saved artifact source. It never tries to restore an in-progress backend
+// session; the result is always a fresh prompt string for a new run.
+func resolveResumePrompt(source viewer.ResumeSource, path string) (string, error) {
+	switch source {
+	case viewer.ResumeSourceEffectivePrompt:
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("reading effective prompt %q: %w", path, err)
+		}
+		return string(data), nil
+	case viewer.ResumeSourcePromptFile:
+		return prompt.BuildFromPromptFile(path)
+	case viewer.ResumeSourcePlanFile:
+		return prompt.BuildFromPlan(path)
+	case viewer.ResumeSourceDefault:
+		return prompt.BuildDefault(), nil
+	default:
+		return "", fmt.Errorf("unknown resume source %q", source)
+	}
+}
+
+// resumePromptMeta maps a resume source to the runner metadata fields so the
+// new run's meta.json accurately reflects how the prompt was obtained.
+func resumePromptMeta(source viewer.ResumeSource, path string) (inputMode, promptFile, planFile string) {
+	switch source {
+	case viewer.ResumeSourceEffectivePrompt:
+		return "prompt", "", ""
+	case viewer.ResumeSourcePromptFile:
+		return "prompt", path, ""
+	case viewer.ResumeSourcePlanFile:
+		return "plan", "", path
+	case viewer.ResumeSourceDefault:
+		return "default", "", ""
+	default:
+		return "prompt", "", ""
+	}
 }
 
 // resolvePrompt reads the prompt content based on the CLI config.

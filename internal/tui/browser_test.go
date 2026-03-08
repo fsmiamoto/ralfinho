@@ -582,6 +582,193 @@ func TestBrowserWithSelectedRunID(t *testing.T) {
 	}
 }
 
+func TestBrowserResumeActionOnR(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryResumable("resumable-run", time.Now(), "pi", "completed", "prompt",
+			viewer.ResumeSourceEffectivePrompt, "/tmp/resumable-run/effective-prompt.md"),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'r'}}))
+
+	result := m.Result()
+	if result.Action != BrowserActionResume {
+		t.Fatalf("Result().Action = %q, want %q", result.Action, BrowserActionResume)
+	}
+	if result.RunID != "resumable-run" {
+		t.Fatalf("Result().RunID = %q, want %q", result.RunID, "resumable-run")
+	}
+	if result.ResumeAgent != "pi" {
+		t.Fatalf("Result().ResumeAgent = %q, want %q", result.ResumeAgent, "pi")
+	}
+	if result.ResumeSource != viewer.ResumeSourceEffectivePrompt {
+		t.Fatalf("Result().ResumeSource = %q, want %q", result.ResumeSource, viewer.ResumeSourceEffectivePrompt)
+	}
+	if result.ResumePath != "/tmp/resumable-run/effective-prompt.md" {
+		t.Fatalf("Result().ResumePath = %q, want %q", result.ResumePath, "/tmp/resumable-run/effective-prompt.md")
+	}
+}
+
+func TestBrowserResumeActionBlockedWhenUnavailable(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("no-resume-run", time.Now(), "pi", "unknown", "default", false),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'r'}}))
+
+	result := m.Result()
+	if result.Action != BrowserActionNone {
+		t.Fatalf("Result().Action = %q, want %q (resume should be blocked)", result.Action, BrowserActionNone)
+	}
+}
+
+func TestBrowserResumeActionBlockedFromPreviewPane(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryResumable("resumable-run", time.Now(), "pi", "completed", "prompt",
+			viewer.ResumeSourceEffectivePrompt, "/tmp/resumable-run/effective-prompt.md"),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+	m.focusedPane = 1
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'r'}}))
+
+	result := m.Result()
+	if result.Action != BrowserActionNone {
+		t.Fatalf("Result().Action = %q, want %q (resume should only work from sessions pane)", result.Action, BrowserActionNone)
+	}
+}
+
+func TestBrowserResumeActionBlockedOnEmptyList(t *testing.T) {
+	m := NewBrowserModel(nil)
+	m.width = 100
+	m.height = 30
+
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'r'}}))
+
+	result := m.Result()
+	if result.Action != BrowserActionNone {
+		t.Fatalf("Result().Action = %q, want %q (no sessions to resume)", result.Action, BrowserActionNone)
+	}
+}
+
+func TestBrowserResumeResultIncludesMetadata(t *testing.T) {
+	tests := []struct {
+		name   string
+		source viewer.ResumeSource
+		path   string
+		agent  string
+	}{
+		{"effective prompt", viewer.ResumeSourceEffectivePrompt, "/tmp/run1/effective-prompt.md", "pi"},
+		{"prompt file", viewer.ResumeSourcePromptFile, "/home/user/prompt.md", "kiro"},
+		{"plan file", viewer.ResumeSourcePlanFile, "/home/user/plan.md", "pi"},
+		{"default", viewer.ResumeSourceDefault, "", "kiro"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			summaries := []viewer.RunSummary{
+				browserTestSummaryResumable("run-"+tt.name, time.Now(), tt.agent, "completed", "prompt", tt.source, tt.path),
+			}
+			m := NewBrowserModel(summaries)
+			m.width = 100
+			m.height = 30
+
+			m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'r'}}))
+
+			result := m.Result()
+			if result.Action != BrowserActionResume {
+				t.Fatalf("Action = %q, want %q", result.Action, BrowserActionResume)
+			}
+			if result.ResumeAgent != tt.agent {
+				t.Errorf("ResumeAgent = %q, want %q", result.ResumeAgent, tt.agent)
+			}
+			if result.ResumeSource != tt.source {
+				t.Errorf("ResumeSource = %q, want %q", result.ResumeSource, tt.source)
+			}
+			if result.ResumePath != tt.path {
+				t.Errorf("ResumePath = %q, want %q", result.ResumePath, tt.path)
+			}
+		})
+	}
+}
+
+func TestBrowserStatusHintsIncludeResumeWhenAvailable(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryResumable("resumable-run", time.Now(), "pi", "completed", "prompt",
+			viewer.ResumeSourceEffectivePrompt, "/tmp/resumable-run/effective-prompt.md"),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	hints := m.browserStatusRightVariants()
+	if len(hints) == 0 {
+		t.Fatal("no status hints")
+	}
+	if !strings.Contains(hints[0], "resume") {
+		t.Errorf("hints for resumable session = %q, want 'resume'", hints[0])
+	}
+	// Should also show open since the session has both actions available.
+	if !strings.Contains(hints[0], "open") {
+		t.Errorf("hints for resumable session = %q, want 'open' alongside 'resume'", hints[0])
+	}
+}
+
+func TestBrowserStatusHintsExcludeResumeWhenUnavailable(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("no-resume-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	hints := m.browserStatusRightVariants()
+	if len(hints) == 0 {
+		t.Fatal("no status hints")
+	}
+	for _, h := range hints {
+		if strings.Contains(h, "resume") {
+			t.Errorf("hints for non-resumable session = %q, should not contain 'resume'", h)
+			break
+		}
+	}
+}
+
+func TestBrowserStatusHintsResumeOnlyNoOpen(t *testing.T) {
+	// Session with resume available but open unavailable.
+	s := browserTestSummary("resume-only", time.Now(), "pi", "unknown", "prompt")
+	s.HasEffectivePrompt = true
+	s.Actions.Open = viewer.RunActionState{DisabledReason: "events.jsonl unavailable"}
+	s.Actions.Resume = viewer.ResumeActionState{
+		RunActionState: viewer.RunActionState{Available: true},
+		Source:         viewer.ResumeSourceEffectivePrompt,
+		Path:           "/tmp/resume-only/effective-prompt.md",
+	}
+	s.Actions.Delete = viewer.RunActionState{Available: true}
+
+	m := NewBrowserModel([]viewer.RunSummary{s})
+	m.width = 100
+	m.height = 30
+
+	hints := m.browserStatusRightVariants()
+	if len(hints) == 0 {
+		t.Fatal("no status hints")
+	}
+	// Should show resume but not Enter:open.
+	if !strings.Contains(hints[0], "resume") {
+		t.Errorf("hints = %q, want 'resume'", hints[0])
+	}
+	if strings.Contains(hints[0], "Enter") {
+		t.Errorf("hints = %q, should not contain 'Enter' (open unavailable)", hints[0])
+	}
+}
+
 func TestBrowserStatusHintsIncludeOpenWhenAvailable(t *testing.T) {
 	summaries := []viewer.RunSummary{
 		browserTestSummaryWithActions("openable-run", time.Now(), "pi", "completed", "default", true),
@@ -626,6 +813,17 @@ func browserTestSummaryWithActions(runID string, startedAt time.Time, agent, sta
 		s.Actions.Open = viewer.RunActionState{DisabledReason: "events.jsonl unavailable"}
 	}
 	s.Actions.Delete = viewer.RunActionState{Available: true}
+	return s
+}
+
+func browserTestSummaryResumable(runID string, startedAt time.Time, agent, status, promptSource string, source viewer.ResumeSource, path string) viewer.RunSummary {
+	s := browserTestSummaryWithActions(runID, startedAt, agent, status, promptSource, true)
+	s.HasEffectivePrompt = true
+	s.Actions.Resume = viewer.ResumeActionState{
+		RunActionState: viewer.RunActionState{Available: true},
+		Source:         source,
+		Path:           path,
+	}
 	return s
 }
 

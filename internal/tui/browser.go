@@ -27,6 +27,11 @@ const (
 type BrowserResult struct {
 	Action BrowserAction
 	RunID  string
+
+	// Resume metadata (set only for BrowserActionResume).
+	ResumeAgent  string
+	ResumeSource viewer.ResumeSource
+	ResumePath   string
 }
 
 type browserSortMode string
@@ -152,6 +157,20 @@ func (m BrowserModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.focusedPane == 0 {
 			if summary := m.currentSummary(); summary != nil && summary.Actions.Open.Available {
 				m.result = BrowserResult{Action: BrowserActionOpen, RunID: summary.RunID}
+				return m, tea.Quit
+			}
+		}
+
+	case "r":
+		if m.focusedPane == 0 {
+			if summary := m.currentSummary(); summary != nil && summary.Actions.Resume.Available {
+				m.result = BrowserResult{
+					Action:       BrowserActionResume,
+					RunID:        summary.RunID,
+					ResumeAgent:  summary.Agent,
+					ResumeSource: summary.Actions.Resume.Source,
+					ResumePath:   summary.Actions.Resume.Path,
+				}
 				return m, tea.Quit
 			}
 		}
@@ -775,18 +794,23 @@ func (m BrowserModel) browserStatusRightVariants() []string {
 		}
 	}
 
-	// Build hint sets with optional open action when the selected session
-	// has the open action available.
-	openHint := browserHint{Key: "Enter", Label: "open"}
-	canOpen := false
-	if summary := m.currentSummary(); summary != nil && summary.Actions.Open.Available {
-		canOpen = true
+	// Build hint sets with optional action hints (open, resume) when the
+	// selected session has the corresponding action available.
+	var actions []browserHint
+	if summary := m.currentSummary(); summary != nil {
+		if summary.Actions.Open.Available {
+			actions = append(actions, browserHint{Key: "Enter", Label: "open"})
+		}
+		if summary.Actions.Resume.Available {
+			actions = append(actions, browserHint{Key: "r", Label: "resume"})
+		}
 	}
 
-	if canOpen {
+	q := browserHint{Key: "q", Label: "quit"}
+
+	if len(actions) > 0 {
 		return []string{
-			render(
-				openHint,
+			render(browserJoinHints(actions,
 				browserHint{Key: "↑↓", Label: "move"},
 				browserHint{Key: "g/G", Label: "top/end"},
 				browserHint{Key: "Ctrl+u/d", Label: "page"},
@@ -795,27 +819,22 @@ func (m BrowserModel) browserStatusRightVariants() []string {
 				browserHint{Key: "a/t/p/d", Label: "filter"},
 				browserHint{Key: "c", Label: "clear"},
 				browserHint{Key: "Tab", Label: "preview"},
-				browserHint{Key: "q", Label: "quit"},
-			),
-			render(
-				openHint,
+				q,
+			)...),
+			render(browserJoinHints(actions,
 				browserHint{Key: "↑↓", Label: "move"},
 				browserHint{Key: "/", Label: "search"},
 				browserHint{Key: "s", Label: "sort"},
 				browserHint{Key: "Tab", Label: "preview"},
-				browserHint{Key: "q", Label: "quit"},
-			),
-			render(
-				openHint,
+				q,
+			)...),
+			render(browserJoinHints(actions,
 				browserHint{Key: "/", Label: "search"},
 				browserHint{Key: "s", Label: "sort"},
-				browserHint{Key: "q", Label: "quit"},
-			),
-			render(
-				openHint,
-				browserHint{Key: "q", Label: "quit"},
-			),
-			render(browserHint{Key: "q", Label: "quit"}),
+				q,
+			)...),
+			render(browserJoinHints(actions, q)...),
+			render(q),
 		}
 	}
 
@@ -829,7 +848,7 @@ func (m BrowserModel) browserStatusRightVariants() []string {
 			browserHint{Key: "a/t/p/d", Label: "filter"},
 			browserHint{Key: "c", Label: "clear"},
 			browserHint{Key: "Tab", Label: "preview"},
-			browserHint{Key: "q", Label: "quit"},
+			q,
 		),
 		render(
 			browserHint{Key: "↑↓", Label: "move"},
@@ -837,15 +856,15 @@ func (m BrowserModel) browserStatusRightVariants() []string {
 			browserHint{Key: "s", Label: "sort"},
 			browserHint{Key: "a/t/p/d", Label: "filter"},
 			browserHint{Key: "Tab", Label: "preview"},
-			browserHint{Key: "q", Label: "quit"},
+			q,
 		),
 		render(
 			browserHint{Key: "/", Label: "search"},
 			browserHint{Key: "s", Label: "sort"},
 			browserHint{Key: "Tab", Label: "preview"},
-			browserHint{Key: "q", Label: "quit"},
+			q,
 		),
-		render(browserHint{Key: "q", Label: "quit"}),
+		render(q),
 	}
 }
 
@@ -1446,6 +1465,16 @@ func browserSearchLabel(query string, searching bool) string {
 		return query + "_"
 	}
 	return query
+}
+
+// browserJoinHints returns a new slice with prefix hints followed by rest.
+// It always allocates a fresh slice so callers can safely pass the result to
+// variadic functions without clobbering the prefix.
+func browserJoinHints(prefix []browserHint, rest ...browserHint) []browserHint {
+	out := make([]browserHint, 0, len(prefix)+len(rest))
+	out = append(out, prefix...)
+	out = append(out, rest...)
+	return out
 }
 
 func padToWidth(s string, width int) string {
