@@ -29,7 +29,7 @@ func normalizeToolName(name string) string {
 type BlockKind int
 
 const (
-	BlockIteration    BlockKind = iota // ━━━ Iteration N ━━━
+	BlockIteration    BlockKind = iota // ── iteration N ──
 	BlockAssistantText                 // rendered markdown prose
 	BlockThinking                      // single dim summary line
 	BlockToolCall                      // bordered tool box with args/result
@@ -71,14 +71,14 @@ func (b *MainBlock) Render(width int, spinnerView string) string {
 }
 
 func (b *MainBlock) renderIteration(width int) string {
-	label := fmt.Sprintf(" Iteration %d ", b.Iteration)
-	// Fill remaining width with ━ characters.
-	labelW := len(label) + 3 // "━━━" prefix
+	label := fmt.Sprintf("iteration %d", b.Iteration)
+	// Fill remaining width with ─ characters.
+	labelW := 3 + len(label) + 1 // "── " prefix + label + " " trailing
 	remaining := width - labelW
 	if remaining < 3 {
 		remaining = 3
 	}
-	rule := "━━━" + label + strings.Repeat("━", remaining)
+	rule := "── " + label + " " + strings.Repeat("─", remaining)
 	return iterationRuleStyle.Render(rule)
 }
 
@@ -90,23 +90,23 @@ func (b *MainBlock) renderAssistantText(width int) string {
 }
 
 func (b *MainBlock) renderThinking() string {
-	line := fmt.Sprintf("  💭 Thinking (%d chars)", b.ThinkingLen)
+	line := fmt.Sprintf("  thinking (%d chars)", b.ThinkingLen)
 	return thinkingLineStyle.Render(line)
 }
 
 func (b *MainBlock) renderToolCall(width int, spinnerView string) string {
-	// Build the header: ⚙ toolname [status]
+	// Build the header: toolname [status]
 	var header string
 	if b.ToolError {
-		header = toolHeaderErrorStyle.Render(fmt.Sprintf("⚙ %s ✗", b.ToolName))
+		header = toolHeaderErrorStyle.Render(fmt.Sprintf("%s !", b.ToolName))
 	} else if b.ToolDone {
-		header = toolHeaderStyle.Render(fmt.Sprintf("⚙ %s ✓", b.ToolName))
+		header = toolHeaderStyle.Render(fmt.Sprintf("%s ok", b.ToolName))
 	} else {
-		status := "◐"
+		status := "..."
 		if spinnerView != "" {
 			status = spinnerView
 		}
-		header = toolHeaderStyle.Render(fmt.Sprintf("⚙ %s %s", b.ToolName, status))
+		header = toolHeaderStyle.Render(fmt.Sprintf("%s %s", b.ToolName, status))
 	}
 
 	// Build inner content.

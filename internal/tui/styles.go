@@ -6,7 +6,6 @@ import "github.com/charmbracelet/lipgloss"
 var (
 	ColorAccent    = lipgloss.Color("69")  // blue, primary accent
 	colorUser      = lipgloss.Color("75")  // lighter blue
-	colorAssistant = lipgloss.Color("114") // soft green
 	colorTool      = lipgloss.Color("214") // orange
 	colorError     = lipgloss.Color("196") // red
 	colorThinking  = lipgloss.Color("183") // lighter purple
@@ -90,7 +89,7 @@ func eventStyle(evType string) lipgloss.Style {
 	case DisplayUserMsg:
 		return lipgloss.NewStyle().Foreground(colorUser)
 	case DisplayAssistantText:
-		return lipgloss.NewStyle().Foreground(colorAssistant)
+		return lipgloss.NewStyle().Foreground(colorBright)
 	case DisplayToolStart:
 		return lipgloss.NewStyle().Foreground(colorTool)
 	case DisplayToolEnd:
@@ -131,7 +130,7 @@ var (
 			Padding(0, 1)
 )
 
-// Tool header styles (the "⚙ toolname ✓" line inside the box).
+// Tool header styles (the "toolname ok" line inside the box).
 var (
 	toolHeaderStyle = lipgloss.NewStyle().
 			Foreground(colorTool).

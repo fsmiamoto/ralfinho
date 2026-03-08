@@ -479,7 +479,7 @@ func (m *Model) ensureStreamCursorVisible() {
 // Layout dimension helpers.
 
 func (m Model) usableHeight() int {
-	return m.height - 2 // 1 for header + 1 for status bar
+	return m.height - 4 // 1 header + 1 status + 2 main view borders
 }
 
 func (m Model) mainHeight() int {
@@ -609,9 +609,9 @@ func (m Model) renderMain() string {
 
 	displayContent := strings.Join(lines, "\n")
 
-	title := " 📺 Live "
+	title := " LIVE "
 	if len(allLines) > visibleLines {
-		title = fmt.Sprintf(" 📺 Live [%d/%d] ", scroll+1, len(allLines))
+		title = fmt.Sprintf(" LIVE [%d/%d] ", scroll+1, len(allLines))
 	}
 
 	border := focusedBorder
@@ -638,7 +638,7 @@ func (m Model) renderHeader() string {
 	}
 	parts = append(parts, "ralfinho")
 
-	sep := " ─── "
+	sep := " │ "
 
 	// Build optional segments, only adding them if they fit.
 	var optional []string
@@ -704,7 +704,7 @@ func (m Model) renderStream() string {
 
 		style := eventStyle(ev.Type)
 		// Tool errors get special coloring.
-		if ev.Type == DisplayToolEnd && strings.HasPrefix(ev.Summary, "✗") {
+		if ev.Type == DisplayToolEnd && strings.HasPrefix(ev.Summary, "!") {
 			style = errorEventStyle
 		}
 
@@ -722,7 +722,7 @@ func (m Model) renderStream() string {
 
 	content := strings.Join(lines, "\n")
 
-	title := fmt.Sprintf(" 📡 Stream (%d) ", len(m.events))
+	title := fmt.Sprintf(" STREAM (%d) ", len(m.events))
 	border := focusedBorder
 	if m.focusedPane != 1 {
 		border = unfocusedBorder
@@ -805,9 +805,9 @@ func (m Model) renderDetail() string {
 
 	displayContent := strings.Join(lines, "\n")
 
-	title := " 📋 Detail "
+	title := " DETAIL "
 	if totalLines > visibleLines {
-		title = fmt.Sprintf(" 📋 Detail [%d/%d] ", scroll+1, totalLines)
+		title = fmt.Sprintf(" DETAIL [%d/%d] ", scroll+1, totalLines)
 	}
 
 	border := focusedBorder

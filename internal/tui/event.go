@@ -77,7 +77,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 		}
 		return []DisplayEvent{{
 			Type:      DisplaySession,
-			Summary:   fmt.Sprintf("📡 Session %s", id),
+			Summary:   fmt.Sprintf("session %s", id),
 			Detail:    fmt.Sprintf("Session ID: %s\nTimestamp: %s\nCWD: %s", ev.ID, ev.Timestamp, ev.CWD),
 			Timestamp: now,
 			Iteration: c.iteration,
@@ -113,7 +113,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			}
 			return []DisplayEvent{{
 				Type:      DisplayUserMsg,
-				Summary:   "→ User message",
+				Summary:   "> user",
 				Detail:    detail,
 				Timestamp: now,
 				Iteration: c.iteration,
@@ -127,7 +127,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			c.inAssistant = true
 			return []DisplayEvent{{
 				Type:      DisplayAssistantText,
-				Summary:   fmt.Sprintf("← Assistant (%s)", c.currentModel),
+				Summary:   fmt.Sprintf("< assistant (%s)", c.currentModel),
 				Detail:    "",
 				Timestamp: now,
 				Iteration: c.iteration,
@@ -150,7 +150,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			charCount := len(text)
 			return []DisplayEvent{{
 				Type:      DisplayAssistantText,
-				Summary:   fmt.Sprintf("← Assistant (%s) [%d chars]", c.currentModel, charCount),
+				Summary:   fmt.Sprintf("< assistant (%s) [%d chars]", c.currentModel, charCount),
 				Detail:    text,
 				Timestamp: now,
 				Iteration: c.iteration,
@@ -164,9 +164,9 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 				c.inThinking = false
 				text := c.thinkingText.String()
 				c.thinkingText.Reset()
-				summary := "💭 Thinking"
+				summary := "thinking"
 				if len(text) > 60 {
-					summary = fmt.Sprintf("💭 Thinking (%d chars)", len(text))
+					summary = fmt.Sprintf("thinking (%d chars)", len(text))
 				}
 				return []DisplayEvent{{
 					Type:      DisplayThinking,
@@ -192,7 +192,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 				charCount := len(text)
 				return []DisplayEvent{{
 					Type:      DisplayAssistantText,
-					Summary:   fmt.Sprintf("✓ Assistant text (%d chars)", charCount),
+					Summary:   fmt.Sprintf("+ assistant (%d chars)", charCount),
 					Detail:    text,
 					Timestamp: now,
 					Iteration: c.iteration,
@@ -211,9 +211,9 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 				argsSummary = truncateStr(string(ev.Args), 80)
 			}
 		}
-		summary := fmt.Sprintf("⚙ %s", ev.ToolName)
+		summary := fmt.Sprintf("> %s", ev.ToolName)
 		if argsSummary != "" {
-			summary = fmt.Sprintf("⚙ %s: %s", ev.ToolName, truncateStr(argsSummary, 60))
+			summary = fmt.Sprintf("> %s: %s", ev.ToolName, truncateStr(argsSummary, 60))
 		}
 		detail := fmt.Sprintf("Tool: %s\nCall ID: %s", ev.ToolName, ev.ToolCallID)
 		if argsSummary != "" {
@@ -235,7 +235,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 		// that was previously started with minimal info (common with kiro-cli).
 		return []DisplayEvent{{
 			Type:       DisplayToolUpdate,
-			Summary:    fmt.Sprintf("⚙ %s", ev.ToolName),
+			Summary:    fmt.Sprintf("~ %s", ev.ToolName),
 			Detail:     fmt.Sprintf("Tool: %s\nCall ID: %s", ev.ToolName, ev.ToolCallID),
 			Timestamp:  now,
 			Iteration:  c.iteration,
@@ -248,9 +248,9 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 		isErr := ev.IsError != nil && *ev.IsError
 		var summary string
 		if isErr {
-			summary = fmt.Sprintf("✗ %s error", ev.ToolName)
+			summary = fmt.Sprintf("! %s error", ev.ToolName)
 		} else {
-			summary = fmt.Sprintf("✓ %s done", ev.ToolName)
+			summary = fmt.Sprintf("+ %s done", ev.ToolName)
 		}
 		detail := fmt.Sprintf("Tool: %s\nCall ID: %s\nError: %v", ev.ToolName, ev.ToolCallID, isErr)
 		var resultText string
@@ -273,7 +273,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 	case runner.EventTurnEnd:
 		return []DisplayEvent{{
 			Type:      DisplayTurnEnd,
-			Summary:   "── turn end ──",
+			Summary:   "-- turn end --",
 			Detail:    "Turn completed.",
 			Timestamp: now,
 			Iteration: c.iteration,
@@ -282,7 +282,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 	case runner.EventAgentEnd:
 		return []DisplayEvent{{
 			Type:      DisplayAgentEnd,
-			Summary:   "── agent end ──",
+			Summary:   "-- agent end --",
 			Detail:    "Agent process ended.",
 			Timestamp: now,
 			Iteration: c.iteration,
@@ -305,7 +305,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 func MakeIterationEvent(n int) DisplayEvent {
 	return DisplayEvent{
 		Type:      DisplayIteration,
-		Summary:   fmt.Sprintf("═══ Iteration %d ═══", n),
+		Summary:   fmt.Sprintf("-- iteration %d --", n),
 		Detail:    fmt.Sprintf("Starting iteration %d", n),
 		Timestamp: time.Now(),
 		Iteration: n,
