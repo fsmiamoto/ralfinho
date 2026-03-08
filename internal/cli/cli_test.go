@@ -261,3 +261,196 @@ func TestParseAgentFlag(t *testing.T) {
 		t.Errorf("Agent = %q, want %q", cfg.Agent, "myagent")
 	}
 }
+
+func TestParseViewRunsDir(t *testing.T) {
+	cfg, err := Parse([]string{"view", "--runs-dir", "/custom/runs"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RunsDir != "/custom/runs" {
+		t.Errorf("RunsDir = %q, want %q", cfg.RunsDir, "/custom/runs")
+	}
+	if !cfg.ViewList {
+		t.Error("ViewList = false, want true")
+	}
+}
+
+func TestParseViewRunIDWithRunsDir(t *testing.T) {
+	cfg, err := Parse([]string{"view", "--runs-dir", "/custom/runs", "abc-123"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ViewRunID != "abc-123" {
+		t.Errorf("ViewRunID = %q, want %q", cfg.ViewRunID, "abc-123")
+	}
+	if cfg.RunsDir != "/custom/runs" {
+		t.Errorf("RunsDir = %q, want %q", cfg.RunsDir, "/custom/runs")
+	}
+}
+
+func TestParseViewCombinedFlags(t *testing.T) {
+	cfg, err := Parse([]string{"view", "--runs-dir", "/custom", "--no-tui"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.ViewList {
+		t.Error("ViewList = false, want true")
+	}
+	if !cfg.NoTUI {
+		t.Error("NoTUI = false, want true")
+	}
+	if cfg.RunsDir != "/custom" {
+		t.Errorf("RunsDir = %q, want %q", cfg.RunsDir, "/custom")
+	}
+}
+
+func TestParseRunsDirDefault(t *testing.T) {
+	cfg, err := Parse([]string{"view"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RunsDir != ".ralfinho/runs" {
+		t.Errorf("RunsDir = %q, want %q", cfg.RunsDir, ".ralfinho/runs")
+	}
+}
+
+func TestParseRunsDirDefaultNonView(t *testing.T) {
+	tmp := t.TempDir()
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(orig)
+
+	cfg, err := Parse([]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RunsDir != ".ralfinho/runs" {
+		t.Errorf("RunsDir = %q, want %q", cfg.RunsDir, ".ralfinho/runs")
+	}
+}
+
+func TestParseMaxIterationsInvalid(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"negative short", []string{"-m", "-1"}},
+		{"non-numeric short", []string{"-m", "abc"}},
+		{"negative long", []string{"--max-iterations", "-5"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(tt.args)
+			if err == nil {
+				t.Fatalf("Parse(%v): expected error, got nil", tt.args)
+			}
+		})
+	}
+}
+
+func TestParseMaxIterationsLongAndShort(t *testing.T) {
+	// Long flag only
+	cfg, err := Parse([]string{"--max-iterations", "10"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxIterations != 10 {
+		t.Errorf("MaxIterations = %d, want 10", cfg.MaxIterations)
+	}
+
+	// Short flag only
+	cfg, err = Parse([]string{"-m", "3"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxIterations != 3 {
+		t.Errorf("MaxIterations = %d, want 3", cfg.MaxIterations)
+	}
+
+	// Both given: short wins
+	cfg, err = Parse([]string{"--max-iterations", "10", "-m", "3"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxIterations != 3 {
+		t.Errorf("MaxIterations = %d, want 3 (short flag should win)", cfg.MaxIterations)
+	}
+}
+
+func TestParseAgentShortFlag(t *testing.T) {
+	cfg, err := Parse([]string{"-a", "kiro"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Agent != "kiro" {
+		t.Errorf("Agent = %q, want %q", cfg.Agent, "kiro")
+	}
+}
+
+func TestParseAgentDefault(t *testing.T) {
+	tmp := t.TempDir()
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(orig)
+
+	cfg, err := Parse([]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Agent != "pi" {
+		t.Errorf("Agent = %q, want %q", cfg.Agent, "pi")
+	}
+}
+
+func TestParseAgentShortOverridesLong(t *testing.T) {
+	cfg, err := Parse([]string{"--agent", "pi", "-a", "kiro"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Agent != "kiro" {
+		t.Errorf("Agent = %q, want %q (short flag should win)", cfg.Agent, "kiro")
+	}
+}
+
+func TestParseViewInvalidFlag(t *testing.T) {
+	_, err := Parse([]string{"view", "--invalid-flag"})
+	if err == nil {
+		t.Fatal("expected error for invalid view flag, got nil")
+	}
+}
+
+func TestResolveViewModePreservesConfig(t *testing.T) {
+	cfg := Config{
+		ViewList:  true,
+		NoTUI:     false,
+		ViewRunID: "",
+		RunsDir:   "/some/dir",
+		Agent:     "pi",
+	}
+
+	// Take a copy before calling ResolveViewMode.
+	before := cfg
+
+	_ = cfg.ResolveViewMode(true)
+
+	// Verify the original Config is unchanged.
+	if cfg.ViewList != before.ViewList {
+		t.Errorf("ViewList changed: got %v, want %v", cfg.ViewList, before.ViewList)
+	}
+	if cfg.NoTUI != before.NoTUI {
+		t.Errorf("NoTUI changed: got %v, want %v", cfg.NoTUI, before.NoTUI)
+	}
+	if cfg.ViewRunID != before.ViewRunID {
+		t.Errorf("ViewRunID changed: got %q, want %q", cfg.ViewRunID, before.ViewRunID)
+	}
+	if cfg.RunsDir != before.RunsDir {
+		t.Errorf("RunsDir changed: got %q, want %q", cfg.RunsDir, before.RunsDir)
+	}
+	if cfg.Agent != before.Agent {
+		t.Errorf("Agent changed: got %q, want %q", cfg.Agent, before.Agent)
+	}
+}

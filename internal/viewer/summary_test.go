@@ -384,3 +384,487 @@ func writeEffectivePrompt(t *testing.T, runsDir, runID, prompt string) {
 		t.Fatalf("WriteFile(effective-prompt.md): %v", err)
 	}
 }
+
+func TestListRunSummariesSortTimeFallsBackToModtime(t *testing.T) {
+	runsDir := t.TempDir()
+
+	// Run with valid started_at.
+	writeRunMeta(t, runsDir, "has-started", runner.RunMeta{
+		RunID:        "has-started",
+		StartedAt:    "2026-03-08T12:00:00Z",
+		Status:       string(runner.StatusCompleted),
+		Agent:        "pi",
+		PromptSource: "default",
+	})
+	writeRunEvents(t, runsDir, "has-started")
+
+	// Run without started_at – SortTime should fall back to modtime.
+	writeRunMeta(t, runsDir, "no-started", runner.RunMeta{
+		RunID:        "no-started",
+		StartedAt:    "",
+		Status:       string(runner.StatusCompleted),
+		Agent:        "pi",
+		PromptSource: "default",
+	})
+	writeRunEvents(t, runsDir, "no-started")
+
+	// Set the modtime of no-started to a time AFTER the started_at of has-started.
+	laterTime := time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC)
+	noStartedDir := filepath.Join(runsDir, "no-started")
+	if err := os.Chtimes(noStartedDir, laterTime, laterTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	summaries, err := ListRunSummaries(runsDir)
+	if err != nil {
+		t.Fatalf("ListRunSummaries() error = %v", err)
+	}
+	if len(summaries) != 2 {
+		t.Fatalf("len(summaries) = %d, want 2", len(summaries))
+	}
+
+	// no-started has later modtime, so it should come first.
+	if summaries[0].RunID != "no-started" {
+		t.Fatalf("summaries[0].RunID = %q, want %q", summaries[0].RunID, "no-started")
+	}
+	if summaries[1].RunID != "has-started" {
+		t.Fatalf("summaries[1].RunID = %q, want %q", summaries[1].RunID, "has-started")
+	}
+
+	// Verify fallback run has non-zero SortTime (from modtime).
+	if summaries[0].SortTime.IsZero() {
+		t.Fatal("no-started SortTime should not be zero (should use modtime)")
+	}
+	if summaries[0].StartedAt.IsZero() == false {
+		t.Fatal("no-started StartedAt should be zero (no started_at in meta)")
+	}
+}
+
+func TestListRunSummariesTieBreaksOnRunID(t *testing.T) {
+	runsDir := t.TempDir()
+
+	sameTime := "2026-03-08T10:00:00Z"
+
+	writeRunMeta(t, runsDir, "run-aaa", runner.RunMeta{
+		RunID:        "run-aaa",
+		StartedAt:    sameTime,
+		Status:       string(runner.StatusCompleted),
+		Agent:        "pi",
+		PromptSource: "default",
+	})
+	writeRunEvents(t, runsDir, "run-aaa")
+
+	writeRunMeta(t, runsDir, "run-zzz", runner.RunMeta{
+		RunID:        "run-zzz",
+		StartedAt:    sameTime,
+		Status:       string(runner.StatusCompleted),
+		Agent:        "pi",
+		PromptSource: "default",
+	})
+	writeRunEvents(t, runsDir, "run-zzz")
+
+	summaries, err := ListRunSummaries(runsDir)
+	if err != nil {
+		t.Fatalf("ListRunSummaries() error = %v", err)
+	}
+	if len(summaries) != 2 {
+		t.Fatalf("len(summaries) = %d, want 2", len(summaries))
+	}
+
+	// Same SortTime → tie-break by RunID descending (zzz before aaa).
+	if summaries[0].RunID != "run-zzz" {
+		t.Fatalf("summaries[0].RunID = %q, want %q", summaries[0].RunID, "run-zzz")
+	}
+	if summaries[1].RunID != "run-aaa" {
+		t.Fatalf("summaries[1].RunID = %q, want %q", summaries[1].RunID, "run-aaa")
+	}
+}
+
+func TestListRunSummariesSkipsNonDirectoryEntries(t *testing.T) {
+	runsDir := t.TempDir()
+
+	// Create a regular file in the runs directory.
+	if err := os.WriteFile(filepath.Join(runsDir, "stray-file.txt"), []byte("not a run"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Create a valid run directory.
+	writeRunMeta(t, runsDir, "valid-run", runner.RunMeta{
+		RunID:        "valid-run",
+		StartedAt:    "2026-03-08T10:00:00Z",
+		Status:       string(runner.StatusCompleted),
+		Agent:        "pi",
+		PromptSource: "default",
+	})
+	writeRunEvents(t, runsDir, "valid-run")
+
+	summaries, err := ListRunSummaries(runsDir)
+	if err != nil {
+		t.Fatalf("ListRunSummaries() error = %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("len(summaries) = %d, want 1", len(summaries))
+	}
+	if summaries[0].RunID != "valid-run" {
+		t.Fatalf("summaries[0].RunID = %q, want %q", summaries[0].RunID, "valid-run")
+	}
+}
+
+func TestRunSummaryAgentNormalization(t *testing.T) {
+	runsDir := t.TempDir()
+
+	// Empty agent → "pi".
+	writeRunMeta(t, runsDir, "empty-agent", runner.RunMeta{
+		RunID:        "empty-agent",
+		StartedAt:    "2026-03-08T10:00:00Z",
+		Status:       string(runner.StatusCompleted),
+		Agent:        "",
+		PromptSource: "default",
+	})
+	writeRunEvents(t, runsDir, "empty-agent")
+
+	// Whitespace-only agent → "pi".
+	writeRunMeta(t, runsDir, "space-agent", runner.RunMeta{
+		RunID:        "space-agent",
+		StartedAt:    "2026-03-08T09:00:00Z",
+		Status:       string(runner.StatusCompleted),
+		Agent:        "   ",
+		PromptSource: "default",
+	})
+	writeRunEvents(t, runsDir, "space-agent")
+
+	summaries, err := ListRunSummaries(runsDir)
+	if err != nil {
+		t.Fatalf("ListRunSummaries() error = %v", err)
+	}
+
+	byID := make(map[string]RunSummary, len(summaries))
+	for _, s := range summaries {
+		byID[s.RunID] = s
+	}
+
+	if got := byID["empty-agent"].Agent; got != "pi" {
+		t.Fatalf("empty-agent Agent = %q, want %q", got, "pi")
+	}
+	if got := byID["space-agent"].Agent; got != "pi" {
+		t.Fatalf("space-agent Agent = %q, want %q", got, "pi")
+	}
+}
+
+func TestRunSummaryPromptLabelDerivation(t *testing.T) {
+	runsDir := t.TempDir()
+
+	cases := []struct {
+		runID     string
+		meta      runner.RunMeta
+		wantLabel string
+	}{
+		{
+			runID: "prompt-file",
+			meta: runner.RunMeta{
+				RunID:        "prompt-file",
+				StartedAt:    "2026-03-08T10:00:00Z",
+				Status:       string(runner.StatusCompleted),
+				Agent:        "pi",
+				PromptSource: "prompt",
+				PromptFile:   "tasks/my-task.md",
+			},
+			wantLabel: "my-task.md",
+		},
+		{
+			runID: "plan-file",
+			meta: runner.RunMeta{
+				RunID:        "plan-file",
+				StartedAt:    "2026-03-08T09:00:00Z",
+				Status:       string(runner.StatusCompleted),
+				Agent:        "pi",
+				PromptSource: "plan",
+				PlanFile:     "plans/my-plan.md",
+			},
+			wantLabel: "my-plan.md",
+		},
+		{
+			runID: "default-source",
+			meta: runner.RunMeta{
+				RunID:        "default-source",
+				StartedAt:    "2026-03-08T08:00:00Z",
+				Status:       string(runner.StatusCompleted),
+				Agent:        "pi",
+				PromptSource: "default",
+			},
+			wantLabel: "default",
+		},
+		{
+			runID: "empty-source",
+			meta: runner.RunMeta{
+				RunID:        "empty-source",
+				StartedAt:    "2026-03-08T07:00:00Z",
+				Status:       string(runner.StatusCompleted),
+				Agent:        "pi",
+				PromptSource: "",
+			},
+			wantLabel: "unknown",
+		},
+	}
+
+	for _, tc := range cases {
+		writeRunMeta(t, runsDir, tc.runID, tc.meta)
+		writeRunEvents(t, runsDir, tc.runID)
+	}
+
+	summaries, err := ListRunSummaries(runsDir)
+	if err != nil {
+		t.Fatalf("ListRunSummaries() error = %v", err)
+	}
+
+	byID := make(map[string]RunSummary, len(summaries))
+	for _, s := range summaries {
+		byID[s.RunID] = s
+	}
+
+	for _, tc := range cases {
+		got := byID[tc.runID].PromptLabel
+		if got != tc.wantLabel {
+			t.Fatalf("%s: PromptLabel = %q, want %q", tc.runID, got, tc.wantLabel)
+		}
+	}
+}
+
+func TestRunSummaryTimeParsing(t *testing.T) {
+	runsDir := t.TempDir()
+
+	cases := []struct {
+		runID     string
+		startedAt string
+		wantValid bool
+		wantZero  bool
+	}{
+		{"rfc3339", "2026-03-08T10:00:00Z", true, false},
+		{"rfc3339nano", "2026-03-08T10:00:00.123456789Z", true, false},
+		{"empty", "", false, true},
+		{"invalid", "not-a-date", false, true},
+	}
+
+	for _, tc := range cases {
+		writeRunMeta(t, runsDir, tc.runID, runner.RunMeta{
+			RunID:        tc.runID,
+			StartedAt:    tc.startedAt,
+			Status:       string(runner.StatusCompleted),
+			Agent:        "pi",
+			PromptSource: "default",
+		})
+		writeRunEvents(t, runsDir, tc.runID)
+	}
+
+	summaries, err := ListRunSummaries(runsDir)
+	if err != nil {
+		t.Fatalf("ListRunSummaries() error = %v", err)
+	}
+
+	byID := make(map[string]RunSummary, len(summaries))
+	for _, s := range summaries {
+		byID[s.RunID] = s
+	}
+
+	for _, tc := range cases {
+		s := byID[tc.runID]
+		if tc.wantZero && !s.StartedAt.IsZero() {
+			t.Fatalf("%s: StartedAt = %v, want zero", tc.runID, s.StartedAt)
+		}
+		if tc.wantValid && s.StartedAt.IsZero() {
+			t.Fatalf("%s: StartedAt is zero, want parsed time", tc.runID)
+		}
+		if s.StartedAtText != tc.startedAt {
+			t.Fatalf("%s: StartedAtText = %q, want %q", tc.runID, s.StartedAtText, tc.startedAt)
+		}
+	}
+}
+
+func TestRunSummaryMatchesEmptyQuery(t *testing.T) {
+	s := RunSummary{RunID: "test-run", SearchText: "test-run\npi\ncompleted"}
+
+	if !s.Matches("") {
+		t.Fatal("Matches(\"\") should return true")
+	}
+	if !s.Matches("   ") {
+		t.Fatal("Matches(\"   \") should return true")
+	}
+}
+
+func TestRunSummaryEventsAsDirectory(t *testing.T) {
+	runsDir := t.TempDir()
+
+	writeRunMeta(t, runsDir, "events-dir", runner.RunMeta{
+		RunID:        "events-dir",
+		StartedAt:    "2026-03-08T10:00:00Z",
+		Status:       string(runner.StatusCompleted),
+		Agent:        "pi",
+		PromptSource: "default",
+	})
+
+	// Create events.jsonl as a directory instead of a file.
+	eventsDir := filepath.Join(runsDir, "events-dir", "events.jsonl")
+	if err := os.MkdirAll(eventsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", eventsDir, err)
+	}
+
+	summaries, err := ListRunSummaries(runsDir)
+	if err != nil {
+		t.Fatalf("ListRunSummaries() error = %v", err)
+	}
+
+	byID := make(map[string]RunSummary, len(summaries))
+	for _, s := range summaries {
+		byID[s.RunID] = s
+	}
+
+	s := byID["events-dir"]
+	if s.HasEvents {
+		t.Fatal("HasEvents should be false when events.jsonl is a directory")
+	}
+	if !strings.Contains(s.EventsError, "is a directory") {
+		t.Fatalf("EventsError = %q, want to contain %q", s.EventsError, "is a directory")
+	}
+	if s.Actions.Open.Available {
+		t.Fatalf("Open action should be unavailable when events.jsonl is a directory")
+	}
+}
+
+func TestRunSummaryResumeSourceFromMetaEdgeCases(t *testing.T) {
+	runsDir := t.TempDir()
+
+	cases := []struct {
+		runID      string
+		meta       runner.RunMeta
+		wantAvail  bool
+		wantSource ResumeSource
+		wantPath   string
+	}{
+		{
+			runID: "prompt-source",
+			meta: runner.RunMeta{
+				RunID:        "prompt-source",
+				StartedAt:    "2026-03-08T10:00:00Z",
+				Status:       string(runner.StatusCompleted),
+				Agent:        "pi",
+				PromptSource: "prompt",
+				PromptFile:   "tasks/p.md",
+			},
+			wantAvail:  true,
+			wantSource: ResumeSourcePromptFile,
+			wantPath:   "tasks/p.md",
+		},
+		{
+			runID: "plan-source",
+			meta: runner.RunMeta{
+				RunID:        "plan-source",
+				StartedAt:    "2026-03-08T09:00:00Z",
+				Status:       string(runner.StatusCompleted),
+				Agent:        "pi",
+				PromptSource: "plan",
+				PlanFile:     "plans/pl.md",
+			},
+			wantAvail:  true,
+			wantSource: ResumeSourcePlanFile,
+			wantPath:   "plans/pl.md",
+		},
+		{
+			runID: "default-source",
+			meta: runner.RunMeta{
+				RunID:        "default-source",
+				StartedAt:    "2026-03-08T08:00:00Z",
+				Status:       string(runner.StatusCompleted),
+				Agent:        "pi",
+				PromptSource: "default",
+			},
+			wantAvail:  true,
+			wantSource: ResumeSourceDefault,
+			wantPath:   "",
+		},
+		{
+			runID: "fallback-prompt",
+			meta: runner.RunMeta{
+				RunID:        "fallback-prompt",
+				StartedAt:    "2026-03-08T07:00:00Z",
+				Status:       string(runner.StatusCompleted),
+				Agent:        "pi",
+				PromptSource: "",
+				PromptFile:   "tasks/fallback.md",
+			},
+			wantAvail:  true,
+			wantSource: ResumeSourcePromptFile,
+			wantPath:   "tasks/fallback.md",
+		},
+		{
+			runID: "fallback-plan",
+			meta: runner.RunMeta{
+				RunID:        "fallback-plan",
+				StartedAt:    "2026-03-08T06:00:00Z",
+				Status:       string(runner.StatusCompleted),
+				Agent:        "pi",
+				PromptSource: "",
+				PlanFile:     "plans/fallback.md",
+			},
+			wantAvail:  true,
+			wantSource: ResumeSourcePlanFile,
+			wantPath:   "plans/fallback.md",
+		},
+		{
+			runID: "no-resume",
+			meta: runner.RunMeta{
+				RunID:        "no-resume",
+				StartedAt:    "2026-03-08T05:00:00Z",
+				Status:       string(runner.StatusCompleted),
+				Agent:        "pi",
+				PromptSource: "unknown",
+			},
+			wantAvail:  false,
+			wantSource: ResumeSourceNone,
+			wantPath:   "",
+		},
+	}
+
+	for _, tc := range cases {
+		writeRunMeta(t, runsDir, tc.runID, tc.meta)
+		writeRunEvents(t, runsDir, tc.runID)
+		// Do NOT write effective-prompt.md so the meta fallback path is exercised.
+	}
+
+	summaries, err := ListRunSummaries(runsDir)
+	if err != nil {
+		t.Fatalf("ListRunSummaries() error = %v", err)
+	}
+
+	byID := make(map[string]RunSummary, len(summaries))
+	for _, s := range summaries {
+		byID[s.RunID] = s
+	}
+
+	for _, tc := range cases {
+		s := byID[tc.runID]
+		if s.Actions.Resume.Available != tc.wantAvail {
+			t.Fatalf("%s: Resume.Available = %v, want %v (action = %#v)", tc.runID, s.Actions.Resume.Available, tc.wantAvail, s.Actions.Resume)
+		}
+		if s.Actions.Resume.Source != tc.wantSource {
+			t.Fatalf("%s: Resume.Source = %q, want %q", tc.runID, s.Actions.Resume.Source, tc.wantSource)
+		}
+		if s.Actions.Resume.Path != tc.wantPath {
+			t.Fatalf("%s: Resume.Path = %q, want %q", tc.runID, s.Actions.Resume.Path, tc.wantPath)
+		}
+	}
+}
+
+func TestListRunSummariesEmptyRunsDir(t *testing.T) {
+	runsDir := t.TempDir()
+
+	summaries, err := ListRunSummaries(runsDir)
+	if err != nil {
+		t.Fatalf("ListRunSummaries() error = %v", err)
+	}
+	if summaries == nil {
+		t.Fatal("summaries should be non-nil empty slice, got nil")
+	}
+	if len(summaries) != 0 {
+		t.Fatalf("len(summaries) = %d, want 0", len(summaries))
+	}
+}
