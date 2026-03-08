@@ -106,6 +106,17 @@ func NewBrowserModel(summaries []viewer.RunSummary) BrowserModel {
 	return m
 }
 
+// WithSelectedRunID returns a copy of the browser with the given run
+// pre-selected. This is used when returning from an action (e.g. the replay
+// viewer) so the browser re-opens with the same session highlighted.
+func (m BrowserModel) WithSelectedRunID(runID string) BrowserModel {
+	if runID != "" {
+		m.selectedRunID = runID
+		m.applyBrowserView()
+	}
+	return m
+}
+
 // Result returns the action requested by the browser, if any.
 func (m BrowserModel) Result() BrowserResult {
 	return m.result
@@ -137,6 +148,14 @@ func (m BrowserModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
+	case "enter", "o":
+		if m.focusedPane == 0 {
+			if summary := m.currentSummary(); summary != nil && summary.Actions.Open.Available {
+				m.result = BrowserResult{Action: BrowserActionOpen, RunID: summary.RunID}
+				return m, tea.Quit
+			}
+		}
+
 	case "/", "?":
 		m.searching = true
 
@@ -750,6 +769,50 @@ func (m BrowserModel) browserStatusRightVariants() []string {
 			),
 			render(
 				browserHint{Key: "Tab", Label: "sessions"},
+				browserHint{Key: "q", Label: "quit"},
+			),
+			render(browserHint{Key: "q", Label: "quit"}),
+		}
+	}
+
+	// Build hint sets with optional open action when the selected session
+	// has the open action available.
+	openHint := browserHint{Key: "Enter", Label: "open"}
+	canOpen := false
+	if summary := m.currentSummary(); summary != nil && summary.Actions.Open.Available {
+		canOpen = true
+	}
+
+	if canOpen {
+		return []string{
+			render(
+				openHint,
+				browserHint{Key: "↑↓", Label: "move"},
+				browserHint{Key: "g/G", Label: "top/end"},
+				browserHint{Key: "Ctrl+u/d", Label: "page"},
+				browserHint{Key: "/", Label: "search"},
+				browserHint{Key: "s", Label: "sort"},
+				browserHint{Key: "a/t/p/d", Label: "filter"},
+				browserHint{Key: "c", Label: "clear"},
+				browserHint{Key: "Tab", Label: "preview"},
+				browserHint{Key: "q", Label: "quit"},
+			),
+			render(
+				openHint,
+				browserHint{Key: "↑↓", Label: "move"},
+				browserHint{Key: "/", Label: "search"},
+				browserHint{Key: "s", Label: "sort"},
+				browserHint{Key: "Tab", Label: "preview"},
+				browserHint{Key: "q", Label: "quit"},
+			),
+			render(
+				openHint,
+				browserHint{Key: "/", Label: "search"},
+				browserHint{Key: "s", Label: "sort"},
+				browserHint{Key: "q", Label: "quit"},
+			),
+			render(
+				openHint,
 				browserHint{Key: "q", Label: "quit"},
 			),
 			render(browserHint{Key: "q", Label: "quit"}),

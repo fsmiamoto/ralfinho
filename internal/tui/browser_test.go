@@ -464,6 +464,171 @@ func TestBrowserViewRendersWithVeryNarrowTerminal(t *testing.T) {
 	}
 }
 
+func TestBrowserOpenActionOnEnter(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("openable-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	// Press Enter on the selected session.
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+
+	result := m.Result()
+	if result.Action != BrowserActionOpen {
+		t.Fatalf("Result().Action = %q, want %q", result.Action, BrowserActionOpen)
+	}
+	if result.RunID != "openable-run" {
+		t.Fatalf("Result().RunID = %q, want %q", result.RunID, "openable-run")
+	}
+}
+
+func TestBrowserOpenActionOnO(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("openable-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	// Press 'o' on the selected session.
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'o'}}))
+
+	result := m.Result()
+	if result.Action != BrowserActionOpen {
+		t.Fatalf("Result().Action = %q, want %q", result.Action, BrowserActionOpen)
+	}
+	if result.RunID != "openable-run" {
+		t.Fatalf("Result().RunID = %q, want %q", result.RunID, "openable-run")
+	}
+}
+
+func TestBrowserOpenActionBlockedWhenUnavailable(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("broken-run", time.Now(), "pi", "unknown", "default", false),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	// Press Enter on a session without open available.
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+
+	result := m.Result()
+	if result.Action != BrowserActionNone {
+		t.Fatalf("Result().Action = %q, want %q (open should be blocked)", result.Action, BrowserActionNone)
+	}
+}
+
+func TestBrowserOpenActionBlockedFromPreviewPane(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("openable-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+	m.focusedPane = 1 // preview pane
+
+	// Press Enter while preview is focused.
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+
+	result := m.Result()
+	if result.Action != BrowserActionNone {
+		t.Fatalf("Result().Action = %q, want %q (open should only work from sessions pane)", result.Action, BrowserActionNone)
+	}
+}
+
+func TestBrowserOpenActionOnEmptyList(t *testing.T) {
+	m := NewBrowserModel(nil)
+	m.width = 100
+	m.height = 30
+
+	// Press Enter with no sessions.
+	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+
+	result := m.Result()
+	if result.Action != BrowserActionNone {
+		t.Fatalf("Result().Action = %q, want %q (no sessions to open)", result.Action, BrowserActionNone)
+	}
+}
+
+func TestBrowserWithSelectedRunID(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("run-alpha", time.Date(2026, 3, 8, 11, 0, 0, 0, time.UTC), "pi", "completed", "default", true),
+		browserTestSummaryWithActions("run-beta", time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC), "kiro", "completed", "plan", true),
+		browserTestSummaryWithActions("run-gamma", time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "pi", "failed", "prompt", true),
+	}
+
+	// Default selection is the first (newest) run.
+	m := NewBrowserModel(summaries)
+	if m.selectedRunID != "run-alpha" {
+		t.Fatalf("default selectedRunID = %q, want %q", m.selectedRunID, "run-alpha")
+	}
+
+	// Pre-select run-beta.
+	m = NewBrowserModel(summaries).WithSelectedRunID("run-beta")
+	if m.selectedRunID != "run-beta" {
+		t.Fatalf("WithSelectedRunID selectedRunID = %q, want %q", m.selectedRunID, "run-beta")
+	}
+	if current := m.currentSummary(); current == nil || current.RunID != "run-beta" {
+		t.Fatalf("WithSelectedRunID currentSummary = %v, want run-beta", current)
+	}
+
+	// Pre-select non-existent run ID should fall back gracefully.
+	m = NewBrowserModel(summaries).WithSelectedRunID("run-nonexistent")
+	if current := m.currentSummary(); current == nil {
+		t.Fatal("WithSelectedRunID for non-existent ID returned nil currentSummary")
+	}
+}
+
+func TestBrowserStatusHintsIncludeOpenWhenAvailable(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("openable-run", time.Now(), "pi", "completed", "default", true),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	hints := m.browserStatusRightVariants()
+	if len(hints) == 0 {
+		t.Fatal("no status hints")
+	}
+	if !strings.Contains(hints[0], "open") {
+		t.Errorf("hints for openable session = %q, want 'open'", hints[0])
+	}
+}
+
+func TestBrowserStatusHintsExcludeOpenWhenUnavailable(t *testing.T) {
+	summaries := []viewer.RunSummary{
+		browserTestSummaryWithActions("broken-run", time.Now(), "pi", "unknown", "default", false),
+	}
+	m := NewBrowserModel(summaries)
+	m.width = 100
+	m.height = 30
+
+	hints := m.browserStatusRightVariants()
+	if len(hints) == 0 {
+		t.Fatal("no status hints")
+	}
+	if strings.Contains(hints[0], "Enter") {
+		t.Errorf("hints for non-openable session = %q, should not contain 'Enter'", hints[0])
+	}
+}
+
+func browserTestSummaryWithActions(runID string, startedAt time.Time, agent, status, promptSource string, openable bool) viewer.RunSummary {
+	s := browserTestSummary(runID, startedAt, agent, status, promptSource)
+	if openable {
+		s.HasMeta = true
+		s.HasEvents = true
+		s.Actions.Open = viewer.RunActionState{Available: true}
+	} else {
+		s.Actions.Open = viewer.RunActionState{DisabledReason: "events.jsonl unavailable"}
+	}
+	s.Actions.Delete = viewer.RunActionState{Available: true}
+	return s
+}
+
 func browserTestSummary(runID string, startedAt time.Time, agent, status, promptSource string) viewer.RunSummary {
 	searchParts := []string{runID, agent, status, promptSource}
 	if !startedAt.IsZero() {

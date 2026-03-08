@@ -172,13 +172,20 @@ func exitForStatus(status runner.Status) {
 
 // runViewer loads a saved run and opens it in a read-only TUI.
 func runViewer(cfg *cli.Config) {
-	saved, err := viewer.LoadRun(cfg.RunsDir, cfg.ViewRunID)
-	if err != nil {
+	if err := openRunViewer(cfg.RunsDir, cfg.ViewRunID); err != nil {
 		fmt.Fprintf(os.Stderr, "ralfinho view: %v\n", err)
 		os.Exit(1)
 	}
+}
 
-	// Convert raw events to display events.
+// openRunViewer loads a single saved run and opens the replay TUI.
+// It returns when the user exits the viewer.
+func openRunViewer(runsDir, runID string) error {
+	saved, err := viewer.LoadRun(runsDir, runID)
+	if err != nil {
+		return err
+	}
+
 	conv := tui.NewEventConverter()
 	var displayEvents []tui.DisplayEvent
 	for i := range saved.Events {
@@ -190,25 +197,55 @@ func runViewer(cfg *cli.Config) {
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "ralfinho: TUI error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("TUI error: %v", err)
 	}
+	return nil
 }
 
 // runBrowser loads saved runs and opens the interactive session browser.
+// When the user opens a session, the browser dispatches to the replay viewer
+// and re-opens the browser afterward with the same session selected.
 func runBrowser(cfg *cli.Config) {
-	summaries, err := viewer.ListRunSummaries(cfg.RunsDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ralfinho view: %v\n", err)
-		os.Exit(1)
-	}
+	var lastSelectedRunID string
 
-	model := tui.NewBrowserModel(summaries)
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	for {
+		summaries, err := viewer.ListRunSummaries(cfg.RunsDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ralfinho view: %v\n", err)
+			os.Exit(1)
+		}
 
-	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "ralfinho: TUI error: %v\n", err)
-		os.Exit(1)
+		model := tui.NewBrowserModel(summaries)
+		if lastSelectedRunID != "" {
+			model = model.WithSelectedRunID(lastSelectedRunID)
+		}
+
+		p := tea.NewProgram(model, tea.WithAltScreen())
+
+		finalModel, err := p.Run()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ralfinho: TUI error: %v\n", err)
+			os.Exit(1)
+		}
+
+		m, ok := finalModel.(tui.BrowserModel)
+		if !ok {
+			return
+		}
+
+		result := m.Result()
+		switch result.Action {
+		case tui.BrowserActionOpen:
+			lastSelectedRunID = result.RunID
+			if err := openRunViewer(cfg.RunsDir, result.RunID); err != nil {
+				fmt.Fprintf(os.Stderr, "ralfinho view: %v\n", err)
+				// Don't exit — return to the browser so the user can try
+				// another session or quit normally.
+			}
+			// Loop back to re-open the browser.
+		default:
+			return
+		}
 	}
 }
 
