@@ -12,6 +12,37 @@ import (
 	"time"
 )
 
+// waitFor polls fn until it returns true or timeout is reached.
+func waitFor(t *testing.T, timeout time.Duration, interval time.Duration, fn func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(interval)
+	}
+	t.Fatal("waitFor: condition not met within timeout")
+}
+
+// waitForPending polls until c.pending has at least one entry.
+func waitForPending(t *testing.T, c *acpClient) {
+	t.Helper()
+	waitFor(t, 2*time.Second, 5*time.Millisecond, func() bool {
+		c.pendingMu.Lock()
+		defer c.pendingMu.Unlock()
+		return len(c.pending) > 0
+	})
+}
+
+// waitForDrainBuf polls until drainBuf has at least minBytes bytes.
+func waitForDrainBuf(t *testing.T, drainBuf *safeBuffer, minBytes int) {
+	t.Helper()
+	waitFor(t, 2*time.Second, 5*time.Millisecond, func() bool {
+		return len(drainBuf.Bytes()) >= minBytes
+	})
+}
+
 // mockACPClient builds an acpClient wired to in-memory pipes instead of a real
 // subprocess. Returns the client, a writer to simulate kiro→client messages,
 // and a function to stop the drain goroutine.
@@ -29,8 +60,8 @@ func mockACPClient(t *testing.T) (c *acpClient, serverW io.WriteCloser, drainBuf
 	c = &acpClient{
 		codec:         newRPCCodec(serverToClientR, clientToServerW),
 		pending:       make(map[int64]chan<- *rpcMessage),
-		Notifications: make(chan *rpcMessage, 128),
-		ReverseReqs:   make(chan *rpcMessage, 16),
+		notifications: make(chan *rpcMessage, 128),
+		reverseReqs:   make(chan *rpcMessage, 16),
 		done:          make(chan struct{}),
 	}
 	go c.readLoop()
@@ -98,8 +129,8 @@ func TestACPClient_CallResponse(t *testing.T) {
 		ch <- callResult{msg, err}
 	}()
 
-	// Give the call a moment to send the request and register the channel.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the call to register in c.pending.
+	waitForPending(t, c)
 
 	// Simulate server sending a response with id=1 (first auto-incremented ID).
 	resp := `{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}`
@@ -140,7 +171,8 @@ func TestACPClient_CallError(t *testing.T) {
 		ch <- err
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the call to register in c.pending.
+	waitForPending(t, c)
 
 	resp := `{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid Request"}}`
 	if err := writeJSONLine(serverW, []byte(resp)); err != nil {
@@ -170,7 +202,7 @@ func TestACPClient_NotificationDispatch(t *testing.T) {
 	}
 
 	select {
-	case msg := <-c.Notifications:
+	case msg := <-c.notifications:
 		if msg.Method != "session/notification" {
 			t.Errorf("expected method session/notification, got %q", msg.Method)
 		}
@@ -189,7 +221,7 @@ func TestACPClient_ReverseRequestDispatch(t *testing.T) {
 	}
 
 	select {
-	case msg := <-c.ReverseReqs:
+	case msg := <-c.reverseReqs:
 		if msg.Method != "session/request_permission" {
 			t.Errorf("expected method session/request_permission, got %q", msg.Method)
 		}
@@ -214,7 +246,8 @@ func TestACPClient_CallContextCancellation(t *testing.T) {
 		ch <- err
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the call to register in c.pending before cancelling.
+	waitForPending(t, c)
 	cancel()
 
 	select {
@@ -240,7 +273,8 @@ func TestACPClient_ConnectionClosed(t *testing.T) {
 		ch <- err
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the call to register in c.pending before closing.
+	waitForPending(t, c)
 	serverW.Close() // simulate kiro process exit
 
 	select {
@@ -279,8 +313,8 @@ func TestACPClient_SessionNew(t *testing.T) {
 		ch <- result{id, err}
 	}()
 
-	// Give the goroutine time to send the request.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the call to register in c.pending.
+	waitForPending(t, c)
 
 	// Server responds with a session ID.
 	resp := `{"jsonrpc":"2.0","id":1,"result":{"sessionId":"sess-abc-123"}}`
@@ -314,7 +348,8 @@ func TestACPClient_SessionNew_EmptyID(t *testing.T) {
 		ch <- err
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the call to register in c.pending.
+	waitForPending(t, c)
 
 	// Server responds with an empty session ID.
 	resp := `{"jsonrpc":"2.0","id":1,"result":{"sessionId":""}}`
@@ -354,7 +389,8 @@ func TestACPClient_SessionPrompt(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the call to register in c.pending.
+	waitForPending(t, c)
 
 	// Send agent_message_chunk update.
 	notif1 := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-123","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello "}}}}`
@@ -416,16 +452,21 @@ func TestACPClient_SessionPrompt_ResponseCompletesPrompt(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the call to register in c.pending.
+	waitForPending(t, c)
 
-	// Send an update followed immediately by the prompt response.
+	// Send an update followed by the prompt response.
 	notif := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-123","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}}}`
 	if err := writeJSONLine(serverW, []byte(notif)); err != nil {
 		t.Fatalf("writeJSONLine: %v", err)
 	}
 
-	// Small delay so the notification is consumed before the response arrives.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the notification to be consumed before sending the response.
+	waitFor(t, 2*time.Second, 5*time.Millisecond, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) >= 1
+	})
 
 	resp := `{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}`
 	if err := writeJSONLine(serverW, []byte(resp)); err != nil {
@@ -464,7 +505,8 @@ func TestACPClient_SessionPromptError(t *testing.T) {
 		errCh <- c.sessionPrompt(ctx, "sess-bad", "hello", func(u sessionUpdate) {})
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the call to register in c.pending.
+	waitForPending(t, c)
 
 	// Server responds with an error to the session/prompt request.
 	resp := `{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"session not found"}}`
@@ -496,7 +538,8 @@ func TestACPClient_SessionPrompt_ConnectionClose(t *testing.T) {
 		errCh <- c.sessionPrompt(ctx, "sess-123", "hello", func(u sessionUpdate) {})
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the call to register in c.pending.
+	waitForPending(t, c)
 
 	// Close the server writer to simulate kiro process exit.
 	serverW.Close()
@@ -619,8 +662,8 @@ func TestACPClient_AutoApprovePermissions(t *testing.T) {
 		t.Fatalf("writeJSONLine: %v", err)
 	}
 
-	// Give the handler time to process and respond.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the handler to process and write the response.
+	waitForDrainBuf(t, drainBuf, 1)
 
 	// Read the response from the drain buffer.
 	captured := drainBuf.Bytes()
@@ -666,8 +709,21 @@ func TestACPClient_AutoApprovePermissions_Multiple(t *testing.T) {
 		}
 	}
 
-	// Give the handler time to process all three.
-	time.Sleep(150 * time.Millisecond)
+	// Wait until all three responses are in the drain buffer.
+	// We poll by trying to parse 3 messages from the captured bytes.
+	waitFor(t, 2*time.Second, 5*time.Millisecond, func() bool {
+		captured := drainBuf.Bytes()
+		codec := newRPCCodec(bytes.NewReader(captured), io.Discard)
+		count := 0
+		for {
+			_, err := codec.readMessage()
+			if err != nil {
+				break
+			}
+			count++
+		}
+		return count >= 3
+	})
 
 	// Read all three responses.
 	captured := drainBuf.Bytes()
@@ -717,13 +773,37 @@ func TestACPClient_AutoApprovePermissions_IgnoresOtherMethods(t *testing.T) {
 		t.Fatalf("writeJSONLine: %v", err)
 	}
 
-	// Give time for potential processing.
-	time.Sleep(100 * time.Millisecond)
+	// For a negative test (nothing should happen), we need a brief wait.
+	// We send a follow-up permission request and wait for THAT response,
+	// which proves the first non-permission request was processed (skipped).
+	followUp := `{"jsonrpc":"2.0","id":100,"method":"session/request_permission","params":{"permission":"bash"}}`
+	if err := writeJSONLine(serverW, []byte(followUp)); err != nil {
+		t.Fatalf("writeJSONLine follow-up: %v", err)
+	}
 
-	// No response should have been sent.
+	// Wait for the follow-up response to appear.
+	waitForDrainBuf(t, drainBuf, 1)
+
+	// Verify only one response was sent (the follow-up, not the other method).
 	captured := drainBuf.Bytes()
-	if len(captured) > 0 {
-		t.Errorf("expected no response for non-permission request, but got %d bytes: %s", len(captured), captured)
+	codec := newRPCCodec(bytes.NewReader(captured), io.Discard)
+
+	msg, err := codec.readMessage()
+	if err != nil {
+		t.Fatalf("readMessage: %v", err)
+	}
+	id, ok := rpcIDInt(msg.ID)
+	if !ok {
+		t.Fatal("expected numeric ID")
+	}
+	if id != 100 {
+		t.Errorf("expected response ID 100 (follow-up), got %d", id)
+	}
+
+	// Ensure no second message exists (the non-permission request should have been ignored).
+	_, err = codec.readMessage()
+	if err == nil {
+		t.Error("expected no more messages, but got another response")
 	}
 }
 
@@ -771,7 +851,8 @@ func TestACPClient_AutoApprovePermissions_WithSessionPrompt(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the call to register in c.pending.
+	waitForPending(t, c)
 
 	// Simulate: kiro sends an agent message chunk.
 	notif1 := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-perm","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Working..."}}}}`
@@ -785,8 +866,22 @@ func TestACPClient_AutoApprovePermissions_WithSessionPrompt(t *testing.T) {
 		t.Fatalf("writeJSONLine perm: %v", err)
 	}
 
-	// Give auto-approve time to respond.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for auto-approve to write the permission response.
+	// The drainBuf will contain the session/prompt request + the permission response.
+	// We need at least 2 messages.
+	waitFor(t, 2*time.Second, 5*time.Millisecond, func() bool {
+		captured := drainBuf.Bytes()
+		codec := newRPCCodec(bytes.NewReader(captured), io.Discard)
+		count := 0
+		for {
+			_, err := codec.readMessage()
+			if err != nil {
+				break
+			}
+			count++
+		}
+		return count >= 2
+	})
 
 	// Simulate: kiro continues with more output after permission was granted.
 	notif2 := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-perm","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Done."}}}}`
@@ -874,7 +969,7 @@ func TestACPClient_ReadLoop_SkipsMalformedJSON(t *testing.T) {
 	// The readLoop should have skipped the malformed message and delivered
 	// the valid notification.
 	select {
-	case msg := <-c.Notifications:
+	case msg := <-c.notifications:
 		if msg.Method != "test/survived" {
 			t.Errorf("expected method test/survived, got %q", msg.Method)
 		}
@@ -902,7 +997,7 @@ func TestACPClient_ReadLoop_SkipsMultipleMalformed(t *testing.T) {
 	}
 
 	select {
-	case msg := <-c.Notifications:
+	case msg := <-c.notifications:
 		if msg.Method != "test/still-alive" {
 			t.Errorf("expected method test/still-alive, got %q", msg.Method)
 		}
@@ -962,7 +1057,8 @@ func TestACPClient_SessionPrompt_ProcessCrash(t *testing.T) {
 		errCh <- c.sessionPrompt(ctx, "sess-crash", "hello", func(u sessionUpdate) {})
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the call to register in c.pending.
+	waitForPending(t, c)
 
 	// Simulate process crash by closing the server writer (broken pipe/EOF).
 	serverW.Close()
@@ -995,8 +1091,8 @@ func TestACPClient_Notify(t *testing.T) {
 		t.Fatalf("notify: %v", err)
 	}
 
-	// Give the drain goroutine a moment to capture the bytes.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the drain goroutine to capture the bytes.
+	waitForDrainBuf(t, drainBuf, 1)
 
 	// Parse what was captured and verify it's a proper notification.
 	captured := drainBuf.Bytes()

@@ -1,11 +1,13 @@
+//go:build unix
+
 // acp.go implements the ACP (Agent Communication Protocol) client that manages
 // a kiro-cli subprocess communicating via JSON-RPC 2.0 over stdio.
 //
 // The acpClient handles:
 //   - Spawning `kiro-cli acp` and wiring stdin/stdout to a JSON-RPC codec.
 //   - A read goroutine that dispatches incoming messages by type:
-//     responses → per-request channels, notifications → Notifications channel,
-//     reverse requests → ReverseReqs channel.
+//     responses → per-request channels, notifications → notifications channel,
+//     reverse requests → reverseReqs channel.
 //   - The initialize handshake (protocolVersion, capabilities, clientInfo).
 //   - Clean teardown (process kill + wait + drain read goroutine).
 //
@@ -18,10 +20,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/fsmiamoto/ralfinho/internal/events"
 )
 
 const (
@@ -53,6 +58,41 @@ type clientInfo struct {
 }
 
 // ---------------------------------------------------------------------------
+// limitedBuffer — ring buffer capturing the last N bytes
+// ---------------------------------------------------------------------------
+
+// limitedBuffer captures the last N bytes written to it.
+type limitedBuffer struct {
+	buf  []byte
+	size int
+	pos  int
+	full bool
+}
+
+func newLimitedBuffer(size int) *limitedBuffer {
+	return &limitedBuffer{buf: make([]byte, size), size: size}
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	for _, c := range p {
+		b.buf[b.pos] = c
+		b.pos = (b.pos + 1) % b.size
+		if b.pos == 0 {
+			b.full = true
+		}
+	}
+	return n, nil
+}
+
+func (b *limitedBuffer) String() string {
+	if !b.full {
+		return string(b.buf[:b.pos])
+	}
+	return string(b.buf[b.pos:]) + string(b.buf[:b.pos])
+}
+
+// ---------------------------------------------------------------------------
 // ACPClient
 // ---------------------------------------------------------------------------
 
@@ -62,8 +102,8 @@ type clientInfo struct {
 // Message dispatch:
 //   - Responses (to our requests) are routed to per-request channels registered
 //     by call(). The caller blocks until the matching response arrives.
-//   - Notifications (server → client, no id) go to the Notifications channel.
-//   - Reverse requests (server → client, has id+method) go to ReverseReqs.
+//   - Notifications (server → client, no id) go to the notifications channel.
+//   - Reverse requests (server → client, has id+method) go to reverseReqs.
 //     Task 4 wires the auto-approve handler that consumes from this channel.
 type acpClient struct {
 	cmd   *exec.Cmd
@@ -75,22 +115,35 @@ type acpClient struct {
 	pending   map[int64]chan<- *rpcMessage
 	pendingMu sync.Mutex
 
-	// Notifications receives server-initiated notifications (e.g.
+	// notifications receives server-initiated notifications (e.g.
 	// session/notification events during prompt execution). Buffered to
 	// avoid blocking the read loop.
-	Notifications chan *rpcMessage
+	notifications chan *rpcMessage
 
-	// ReverseReqs receives server-initiated requests that expect a response
+	// reverseReqs receives server-initiated requests that expect a response
 	// (e.g. session/request_permission). A separate goroutine should consume
 	// from this channel and reply via the codec.
-	ReverseReqs chan *rpcMessage
+	reverseReqs chan *rpcMessage
 
 	// done is closed when the read goroutine exits. Any pending call()
 	// waiters are unblocked.
-	done    chan struct{}
-	readErr error // the error that terminated the read loop (often io.EOF)
+	done      chan struct{}
+	readErr   error // the error that terminated the read loop (often io.EOF)
+	readErrMu sync.Mutex
 
-	rawWriter io.Writer
+	// stderrBuf captures the last N bytes of kiro-cli stderr for diagnostics.
+	stderrBuf *limitedBuffer
+
+	// closeOnce ensures Close() body runs exactly once.
+	closeOnce sync.Once
+	closeErr  error
+}
+
+// getReadErr returns the error that terminated the read loop, if any.
+func (c *acpClient) getReadErr() error {
+	c.readErrMu.Lock()
+	defer c.readErrMu.Unlock()
+	return c.readErr
 }
 
 // newACPClient spawns `kiro-cli acp`, performs the ACP initialize handshake,
@@ -100,7 +153,8 @@ type acpClient struct {
 // for debugging (raw-output.log).
 func newACPClient(ctx context.Context, rawWriter io.Writer) (*acpClient, error) {
 	cmd := exec.CommandContext(ctx, "kiro-cli", "acp")
-	cmd.Stderr = io.Discard // don't mix kiro stderr with ralfinho output
+	stderrBuf := newLimitedBuffer(4096)
+	cmd.Stderr = stderrBuf // capture last 4KB of kiro-cli stderr for diagnostics
 	// Use a process group so we can kill kiro-cli and all its children.
 	// Without this, child processes keep the stdout pipe open after kill.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -132,10 +186,10 @@ func newACPClient(ctx context.Context, rawWriter io.Writer) (*acpClient, error) 
 		cmd:           cmd,
 		codec:         newRPCCodec(reader, stdin),
 		pending:       make(map[int64]chan<- *rpcMessage),
-		Notifications: make(chan *rpcMessage, 128),
-		ReverseReqs:   make(chan *rpcMessage, 16),
+		notifications: make(chan *rpcMessage, 128),
+		reverseReqs:   make(chan *rpcMessage, 16),
 		done:          make(chan struct{}),
-		rawWriter:     rawWriter,
+		stderrBuf:     stderrBuf,
 	}
 
 	// Start the background read goroutine before the handshake so we can
@@ -174,7 +228,9 @@ func (c *acpClient) readLoop() {
 
 			// I/O errors (EOF, broken pipe) are fatal — the stream is
 			// in an unknown state or the subprocess has exited.
+			c.readErrMu.Lock()
 			c.readErr = err
+			c.readErrMu.Unlock()
 
 			// Unblock all pending callers by closing their channels.
 			c.pendingMu.Lock()
@@ -207,18 +263,20 @@ func (c *acpClient) readLoop() {
 
 		case msg.IsNotification():
 			select {
-			case c.Notifications <- msg:
+			case c.notifications <- msg:
 			default:
 				// Drop if buffer is full. In practice 128 is more than
 				// enough for streaming text chunks between reads.
+				fmt.Fprintf(os.Stderr, "acp: warning: notification buffer full, dropping %s\n", msg.Method)
 			}
 
 		case msg.IsReverseRequest():
 			select {
-			case c.ReverseReqs <- msg:
+			case c.reverseReqs <- msg:
 			default:
 				// Drop if buffer is full — shouldn't happen since the
 				// permission handler should consume promptly.
+				fmt.Fprintf(os.Stderr, "acp: warning: reverse request buffer full, dropping %s\n", msg.Method)
 			}
 		}
 	}
@@ -230,7 +288,7 @@ func (c *acpClient) readLoop() {
 
 // call sends a JSON-RPC request and blocks until the matching response arrives,
 // the context is cancelled, or the connection is closed.
-func (c *acpClient) call(ctx context.Context, method string, params interface{}) (*rpcMessage, error) {
+func (c *acpClient) call(ctx context.Context, method string, params any) (*rpcMessage, error) {
 	req := c.codec.newRequest(method, params)
 
 	// Register a channel for the response before sending, so we can't miss
@@ -262,7 +320,7 @@ func (c *acpClient) call(ctx context.Context, method string, params interface{})
 	case msg, ok := <-ch:
 		if !ok {
 			// Channel closed by readLoop — connection died.
-			return nil, fmt.Errorf("acp: connection closed while waiting for %s response: %v", method, c.readErr)
+			return nil, fmt.Errorf("acp: connection closed while waiting for %s response: %v", method, c.getReadErr())
 		}
 		if msg.Error != nil {
 			return nil, fmt.Errorf("acp: %s: server error %d: %s", method, msg.Error.Code, msg.Error.Message)
@@ -273,12 +331,12 @@ func (c *acpClient) call(ctx context.Context, method string, params interface{})
 		return nil, ctx.Err()
 
 	case <-c.done:
-		return nil, fmt.Errorf("acp: connection closed while waiting for %s response: %v", method, c.readErr)
+		return nil, fmt.Errorf("acp: connection closed while waiting for %s response: %v", method, c.getReadErr())
 	}
 }
 
 // notify sends a JSON-RPC notification (no id, no response expected).
-func (c *acpClient) notify(method string, params interface{}) error {
+func (c *acpClient) notify(method string, params any) error {
 	msg := rpcNotification{
 		JSONRPC: jsonrpcVersion,
 		Method:  method,
@@ -318,6 +376,11 @@ func (c *acpClient) initialize(ctx context.Context) error {
 		return fmt.Errorf("acp: initialize handshake failed: %w", err)
 	}
 
+	// Send "initialized" notification per LSP-style protocol convention.
+	if err := c.notify("initialized", nil); err != nil {
+		return fmt.Errorf("acp: initialized notification: %w", err)
+	}
+
 	return nil
 }
 
@@ -342,7 +405,7 @@ const (
 
 type sessionNewParams struct {
 	CWD        string        `json:"cwd"`
-	MCPServers []interface{} `json:"mcpServers"`
+	MCPServers []any `json:"mcpServers"`
 }
 
 type sessionNewResult struct {
@@ -351,12 +414,7 @@ type sessionNewResult struct {
 
 type sessionPromptParams struct {
 	SessionID string         `json:"sessionId"`
-	Prompt    []contentBlock `json:"prompt"`
-}
-
-type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Prompt    []events.ContentBlock `json:"prompt"`
 }
 
 // sessionUpdate represents a single update from a session/update notification.
@@ -374,7 +432,7 @@ type sessionUpdate struct {
 // sessionNew creates a new ACP session with the given working directory.
 // Returns the session ID assigned by the server.
 func (c *acpClient) sessionNew(ctx context.Context, cwd string) (string, error) {
-	resp, err := c.call(ctx, "session/new", sessionNewParams{CWD: cwd, MCPServers: []interface{}{}})
+	resp, err := c.call(ctx, "session/new", sessionNewParams{CWD: cwd, MCPServers: []any{}})
 	if err != nil {
 		return "", fmt.Errorf("session/new: %w", err)
 	}
@@ -398,11 +456,11 @@ func (c *acpClient) sessionNew(ctx context.Context, cwd string) (string, error) 
 //
 // Note: permission requests (session/request_permission) arriving from the
 // server during prompt execution must be handled separately by consuming
-// from c.ReverseReqs concurrently.
+// from c.reverseReqs concurrently.
 func (c *acpClient) sessionPrompt(ctx context.Context, sessionID, prompt string, onUpdate func(sessionUpdate)) error {
 	params := sessionPromptParams{
 		SessionID: sessionID,
-		Prompt: []contentBlock{
+		Prompt: []events.ContentBlock{
 			{Type: "text", Text: prompt},
 		},
 	}
@@ -439,7 +497,7 @@ func (c *acpClient) sessionPrompt(ctx context.Context, sessionID, prompt string,
 	// not by a TurnEnd update.
 	for {
 		select {
-		case msg := <-c.Notifications:
+		case msg := <-c.notifications:
 			if msg.Method != "session/update" {
 				continue // ignore unrelated notifications (_kiro.dev/*, etc.)
 			}
@@ -452,7 +510,7 @@ func (c *acpClient) sessionPrompt(ctx context.Context, sessionID, prompt string,
 		case msg, ok := <-respCh:
 			if !ok {
 				// Channel closed by readLoop — connection died.
-				return fmt.Errorf("acp: connection closed during session/prompt: %v", c.readErr)
+				return fmt.Errorf("acp: connection closed during session/prompt: %v", c.getReadErr())
 			}
 			if msg.Error != nil {
 				return fmt.Errorf("acp: session/prompt error %d: %s", msg.Error.Code, msg.Error.Message)
@@ -460,7 +518,7 @@ func (c *acpClient) sessionPrompt(ctx context.Context, sessionID, prompt string,
 			// Drain any remaining notifications that arrived before/with the response.
 			for {
 				select {
-				case pending := <-c.Notifications:
+				case pending := <-c.notifications:
 					if pending.Method != "session/update" {
 						continue
 					}
@@ -476,7 +534,7 @@ func (c *acpClient) sessionPrompt(ctx context.Context, sessionID, prompt string,
 			return ctx.Err()
 
 		case <-c.done:
-			return fmt.Errorf("acp: connection closed during session/prompt: %v", c.readErr)
+			return fmt.Errorf("acp: connection closed during session/prompt: %v", c.getReadErr())
 		}
 	}
 }
@@ -529,13 +587,17 @@ func parseSessionUpdate(msg *rpcMessage) (sessionUpdate, error) {
 func (c *acpClient) autoApprovePermissions(ctx context.Context) {
 	for {
 		select {
-		case msg, ok := <-c.ReverseReqs:
+		case msg, ok := <-c.reverseReqs:
 			if !ok {
 				return // channel closed
 			}
 			if msg.Method == "session/request_permission" {
+				fmt.Fprintf(os.Stderr, "acp: auto-approved permission: %s (id=%s)\n", msg.Method, string(msg.ID))
 				resp := newResponse(msg.ID, "allow_always")
-				_ = c.codec.send(resp) // best-effort; if send fails, connection is dying
+				if err := c.codec.send(resp); err != nil {
+					// Log error but don't crash — connection is likely dying
+					fmt.Fprintf(os.Stderr, "acp: warning: failed to send permission response: %v\n", err)
+				}
 			}
 
 		case <-ctx.Done():
@@ -554,18 +616,26 @@ func (c *acpClient) autoApprovePermissions(ctx context.Context) {
 // Close terminates the kiro-cli subprocess (and all its children) and waits
 // for cleanup. Safe to call multiple times.
 func (c *acpClient) Close() error {
-	if c.cmd != nil && c.cmd.Process != nil {
-		// Kill the entire process group. kiro-cli spawns child processes
-		// that inherit the stdout pipe; killing only the parent leaves
-		// the pipe open and cmd.Wait() hangs.
-		_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
-	}
-	// Collect the process exit status (may return "signal: killed").
-	var err error
-	if c.cmd != nil {
-		err = c.cmd.Wait()
-	}
-	// Wait for the read goroutine to fully exit.
-	<-c.done
-	return err
+	c.closeOnce.Do(func() {
+		if c.cmd != nil && c.cmd.Process != nil {
+			// Kill the entire process group. kiro-cli spawns child processes
+			// that inherit the stdout pipe; killing only the parent leaves
+			// the pipe open and cmd.Wait() hangs.
+			if err := syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+				fmt.Fprintf(os.Stderr, "acp: warning: failed to kill process group: %v\n", err)
+			}
+		}
+		// Collect the process exit status (may return "signal: killed").
+		if c.cmd != nil {
+			c.closeErr = c.cmd.Wait()
+			if c.closeErr != nil {
+				if stderr := c.stderrBuf.String(); stderr != "" {
+					c.closeErr = fmt.Errorf("%w\nkiro-cli stderr: %s", c.closeErr, stderr)
+				}
+			}
+		}
+		// Wait for the read goroutine to fully exit.
+		<-c.done
+	})
+	return c.closeErr
 }

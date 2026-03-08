@@ -87,23 +87,23 @@ var iterationBarStyle = lipgloss.NewStyle().
 // eventStyle returns the style for a given event type.
 func eventStyle(evType string) lipgloss.Style {
 	switch evType {
-	case "user_msg":
+	case DisplayUserMsg:
 		return lipgloss.NewStyle().Foreground(colorUser)
-	case "assistant_text":
+	case DisplayAssistantText:
 		return lipgloss.NewStyle().Foreground(colorAssistant)
-	case "tool_start":
+	case DisplayToolStart:
 		return lipgloss.NewStyle().Foreground(colorTool)
-	case "tool_end":
+	case DisplayToolEnd:
 		return lipgloss.NewStyle().Foreground(colorTool)
-	case "thinking":
+	case DisplayThinking:
 		return lipgloss.NewStyle().Foreground(colorThinking)
-	case "turn_end", "agent_end":
+	case DisplayTurnEnd, DisplayAgentEnd:
 		return lipgloss.NewStyle().Foreground(colorDim)
-	case "iteration":
+	case DisplayIteration:
 		return lipgloss.NewStyle().Foreground(colorIteration).Bold(true)
-	case "session":
+	case DisplaySession:
 		return lipgloss.NewStyle().Foreground(colorInfo)
-	case "info":
+	case DisplayInfo:
 		return lipgloss.NewStyle().Foreground(colorInfo)
 	default:
 		return lipgloss.NewStyle().Foreground(colorBright)

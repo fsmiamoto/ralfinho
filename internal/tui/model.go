@@ -197,13 +197,13 @@ func (m Model) handleRawEvent(ev runner.Event) (tea.Model, tea.Cmd) {
 
 func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
 	// Update status bar and iteration counter on iteration boundaries.
-	if de.Type == "iteration" && m.running {
+	if de.Type == DisplayIteration && m.running {
 		m.iteration = de.Iteration
 		m.status = fmt.Sprintf("Iteration #%d", de.Iteration)
 	}
 
 	// Extract model name from assistant_text summaries like "← Assistant (claude-xxx)".
-	if de.Type == "assistant_text" && de.Summary != "" {
+	if de.Type == DisplayAssistantText && de.Summary != "" {
 		if start := strings.Index(de.Summary, "("); start != -1 {
 			if end := strings.Index(de.Summary[start:], ")"); end != -1 {
 				name := de.Summary[start+1 : start+end]
@@ -215,9 +215,9 @@ func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
 	}
 
 	// For assistant_text updates, merge with the last assistant_text event.
-	if de.Type == "assistant_text" && len(m.events) > 0 {
+	if de.Type == DisplayAssistantText && len(m.events) > 0 {
 		last := &m.events[len(m.events)-1]
-		if last.Type == "assistant_text" && last.Iteration == de.Iteration {
+		if last.Type == DisplayAssistantText && last.Iteration == de.Iteration {
 			last.Summary = de.Summary
 			last.Detail = de.Detail
 			last.Timestamp = de.Timestamp
@@ -247,12 +247,12 @@ func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
 // buildBlock appends or updates blocks based on the display event type.
 func (m *Model) buildBlock(de DisplayEvent) {
 	switch de.Type {
-	case "iteration":
+	case DisplayIteration:
 		m.blocks = append(m.blocks, MainBlock{
 			Kind:      BlockIteration,
 			Iteration: de.Iteration,
 		})
-	case "assistant_text":
+	case DisplayAssistantText:
 		// Merge with last BlockAssistantText for the same iteration.
 		if len(m.blocks) > 0 {
 			last := &m.blocks[len(m.blocks)-1]
@@ -266,13 +266,13 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			Iteration: de.Iteration,
 			Text:      de.Detail,
 		})
-	case "thinking":
+	case DisplayThinking:
 		m.blocks = append(m.blocks, MainBlock{
 			Kind:        BlockThinking,
 			Iteration:   de.Iteration,
 			ThinkingLen: len(de.Detail),
 		})
-	case "tool_start":
+	case DisplayToolStart:
 		m.blocks = append(m.blocks, MainBlock{
 			Kind:       BlockToolCall,
 			Iteration:  de.Iteration,
@@ -281,7 +281,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			ToolArgs:   formatToolArgs(de.ToolName, de.RawArgs),
 		})
 		m.activeToolIdx = len(m.blocks) - 1
-	case "tool_update":
+	case DisplayToolUpdate:
 		// Intermediate update — kiro sends the actual args in a follow-up.
 		// Find the matching tool block and update its args.
 		for i := len(m.blocks) - 1; i >= 0; i-- {
@@ -290,7 +290,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 				break
 			}
 		}
-	case "tool_end":
+	case DisplayToolEnd:
 		// Find the matching tool_start block by ToolCallID.
 		for i := len(m.blocks) - 1; i >= 0; i-- {
 			if m.blocks[i].Kind == BlockToolCall && m.blocks[i].ToolCallID == de.ToolCallID {
@@ -301,7 +301,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			}
 		}
 		m.activeToolIdx = -1
-	case "info":
+	case DisplayInfo:
 		m.blocks = append(m.blocks, MainBlock{
 			Kind:     BlockInfo,
 			InfoText: de.Detail,
@@ -704,7 +704,7 @@ func (m Model) renderStream() string {
 
 		style := eventStyle(ev.Type)
 		// Tool errors get special coloring.
-		if ev.Type == "tool_end" && strings.HasPrefix(ev.Summary, "✗") {
+		if ev.Type == DisplayToolEnd && strings.HasPrefix(ev.Summary, "✗") {
 			style = errorEventStyle
 		}
 
@@ -747,7 +747,7 @@ func (m Model) renderDetail() string {
 			content = fmt.Sprintf("Type: %s\nTime: %s\nIteration: %d\n\n%s",
 				ev.Type, ev.Timestamp.Format("15:04:05"), ev.Iteration, ev.Detail)
 			content = WrapText(content, contentWidth)
-		} else if ev.Type == "assistant_text" && ev.Detail != "" {
+		} else if ev.Type == DisplayAssistantText && ev.Detail != "" {
 			content = renderMarkdown(ev.Detail, contentWidth)
 		} else {
 			content = WrapText(ev.Detail, contentWidth)

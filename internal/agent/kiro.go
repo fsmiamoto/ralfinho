@@ -36,7 +36,7 @@ type KiroAgent struct {
 // Pass WithRawWriter to capture raw JSON-RPC messages for debugging.
 func NewKiroAgent(options ...Option) *KiroAgent {
 	return &KiroAgent{
-		opts: ApplyOptions(options),
+		opts: applyOptions(options),
 	}
 }
 

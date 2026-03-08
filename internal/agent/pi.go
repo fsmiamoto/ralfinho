@@ -29,7 +29,7 @@ type PiAgent struct {
 func NewPiAgent(binary string, options ...Option) *PiAgent {
 	return &PiAgent{
 		binary: binary,
-		opts:   ApplyOptions(options),
+		opts:   applyOptions(options),
 	}
 }
 
@@ -43,6 +43,10 @@ func (a *PiAgent) RunIteration(ctx context.Context, prompt string, onEvent func(
 	}
 	tmpPath := tmpFile.Name()
 	defer os.Remove(tmpPath)
+
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		return "", fmt.Errorf("setting temp file permissions: %w", err)
+	}
 
 	if _, err := tmpFile.WriteString(prompt); err != nil {
 		tmpFile.Close()
@@ -101,6 +105,10 @@ func (a *PiAgent) RunIteration(ctx context.Context, prompt string, onEvent func(
 		}
 
 		onEvent(ev)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return assistantText.String(), fmt.Errorf("reading agent output: %w", err)
 	}
 
 	// Wait for the process to finish. Exit codes are not meaningful for

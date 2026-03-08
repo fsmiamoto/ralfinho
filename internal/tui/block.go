@@ -7,6 +7,23 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 )
+// normalizeToolName maps tool name variants from different agent backends
+// to a canonical lowercase form.
+func normalizeToolName(name string) string {
+	switch name {
+	case "bash", "Bash", "shell":
+		return "bash"
+	case "read", "Read":
+		return "read"
+	case "edit", "Edit":
+		return "edit"
+	case "write", "Write":
+		return "write"
+	default:
+		return name
+	}
+}
+
 
 // BlockKind identifies the type of content block rendered in the main view.
 type BlockKind int
@@ -103,8 +120,8 @@ func (b *MainBlock) renderToolCall(width int, spinnerView string) string {
 	if b.ToolDone && b.ToolResult != "" {
 		// For read/write/edit, don't dump file contents — just show a
 		// line count summary.  Full output is in the Detail pane.
-		toolLower := strings.ToLower(b.ToolName)
-		if toolLower == "read" || toolLower == "write" || toolLower == "edit" {
+		normalized := normalizeToolName(b.ToolName)
+		if normalized == "read" || normalized == "write" || normalized == "edit" {
 			lines := strings.Count(b.ToolResult, "\n") + 1
 			summary := fmt.Sprintf("(%d lines)", lines)
 			inner = append(inner, toolResultStyle.Render(summary))
@@ -151,29 +168,29 @@ func formatToolArgs(toolName string, rawArgs json.RawMessage) string {
 		return ""
 	}
 
-	switch toolName {
-	case "bash", "Bash", "shell":
+	switch normalizeToolName(toolName) {
+	case "bash":
 		var args struct {
 			Command string `json:"command"`
 		}
 		if json.Unmarshal(rawArgs, &args) == nil && args.Command != "" {
 			return "$ " + args.Command
 		}
-	case "read", "Read":
+	case "read":
 		var args struct {
 			Path string `json:"path"`
 		}
 		if json.Unmarshal(rawArgs, &args) == nil && args.Path != "" {
 			return args.Path
 		}
-	case "edit", "Edit":
+	case "edit":
 		var args struct {
 			Path string `json:"path"`
 		}
 		if json.Unmarshal(rawArgs, &args) == nil && args.Path != "" {
 			return args.Path
 		}
-	case "write", "Write":
+	case "write":
 		var args struct {
 			Path string `json:"path"`
 		}

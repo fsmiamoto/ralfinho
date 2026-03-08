@@ -9,10 +9,28 @@ import (
 
 	"github.com/fsmiamoto/ralfinho/internal/runner"
 )
+// DisplayEventType identifies the kind of display event.
+type DisplayEventType = string
+
+const (
+	DisplaySession       DisplayEventType = "session"
+	DisplayUserMsg       DisplayEventType = "user_msg"
+	DisplayAssistantText DisplayEventType = "assistant_text"
+	DisplayThinking      DisplayEventType = "thinking"
+	DisplayToolStart     DisplayEventType = "tool_start"
+	DisplayToolUpdate    DisplayEventType = "tool_update"
+	DisplayToolEnd       DisplayEventType = "tool_end"
+	DisplayTurnEnd       DisplayEventType = "turn_end"
+	DisplayAgentEnd      DisplayEventType = "agent_end"
+	DisplayIteration     DisplayEventType = "iteration"
+	DisplayInfo          DisplayEventType = "info"
+)
+
+
 
 // DisplayEvent is a UI-friendly representation of a runner event.
 type DisplayEvent struct {
-	Type      string // "session", "user_msg", "assistant_text", "thinking", "tool_start", "tool_end", "turn_end", "agent_end", "iteration", "info"
+	Type      DisplayEventType
 	Summary   string // one-line summary for the stream pane
 	Detail    string // full content for the detail pane
 	Timestamp time.Time
@@ -58,7 +76,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			id = id[:12]
 		}
 		return []DisplayEvent{{
-			Type:      "session",
+			Type:      DisplaySession,
 			Summary:   fmt.Sprintf("📡 Session %s", id),
 			Detail:    fmt.Sprintf("Session ID: %s\nTimestamp: %s\nCWD: %s", ev.ID, ev.Timestamp, ev.CWD),
 			Timestamp: now,
@@ -94,7 +112,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 				}
 			}
 			return []DisplayEvent{{
-				Type:      "user_msg",
+				Type:      DisplayUserMsg,
 				Summary:   "→ User message",
 				Detail:    detail,
 				Timestamp: now,
@@ -108,7 +126,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			c.assistantText.Reset()
 			c.inAssistant = true
 			return []DisplayEvent{{
-				Type:      "assistant_text",
+				Type:      DisplayAssistantText,
 				Summary:   fmt.Sprintf("← Assistant (%s)", c.currentModel),
 				Detail:    "",
 				Timestamp: now,
@@ -131,7 +149,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			text := c.assistantText.String()
 			charCount := len(text)
 			return []DisplayEvent{{
-				Type:      "assistant_text",
+				Type:      DisplayAssistantText,
 				Summary:   fmt.Sprintf("← Assistant (%s) [%d chars]", c.currentModel, charCount),
 				Detail:    text,
 				Timestamp: now,
@@ -151,7 +169,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 					summary = fmt.Sprintf("💭 Thinking (%d chars)", len(text))
 				}
 				return []DisplayEvent{{
-					Type:      "thinking",
+					Type:      DisplayThinking,
 					Summary:   summary,
 					Detail:    text,
 					Timestamp: now,
@@ -173,7 +191,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			if text != "" {
 				charCount := len(text)
 				return []DisplayEvent{{
-					Type:      "assistant_text",
+					Type:      DisplayAssistantText,
 					Summary:   fmt.Sprintf("✓ Assistant text (%d chars)", charCount),
 					Detail:    text,
 					Timestamp: now,
@@ -202,7 +220,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			detail += fmt.Sprintf("\nArgs: %s", argsSummary)
 		}
 		return []DisplayEvent{{
-			Type:       "tool_start",
+			Type:       DisplayToolStart,
 			Summary:    summary,
 			Detail:     detail,
 			Timestamp:  now,
@@ -216,7 +234,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 		// Intermediate tool update — carries the actual arguments for a tool
 		// that was previously started with minimal info (common with kiro-cli).
 		return []DisplayEvent{{
-			Type:       "tool_update",
+			Type:       DisplayToolUpdate,
 			Summary:    fmt.Sprintf("⚙ %s", ev.ToolName),
 			Detail:     fmt.Sprintf("Tool: %s\nCall ID: %s", ev.ToolName, ev.ToolCallID),
 			Timestamp:  now,
@@ -241,7 +259,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			detail += fmt.Sprintf("\nResult:\n%s", resultText)
 		}
 		return []DisplayEvent{{
-			Type:           "tool_end",
+			Type:           DisplayToolEnd,
 			Summary:        summary,
 			Detail:         detail,
 			Timestamp:      now,
@@ -254,7 +272,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 
 	case runner.EventTurnEnd:
 		return []DisplayEvent{{
-			Type:      "turn_end",
+			Type:      DisplayTurnEnd,
 			Summary:   "── turn end ──",
 			Detail:    "Turn completed.",
 			Timestamp: now,
@@ -263,7 +281,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 
 	case runner.EventAgentEnd:
 		return []DisplayEvent{{
-			Type:      "agent_end",
+			Type:      DisplayAgentEnd,
 			Summary:   "── agent end ──",
 			Detail:    "Agent process ended.",
 			Timestamp: now,
@@ -286,7 +304,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 // MakeIterationEvent creates a synthetic iteration boundary event.
 func MakeIterationEvent(n int) DisplayEvent {
 	return DisplayEvent{
-		Type:      "iteration",
+		Type:      DisplayIteration,
 		Summary:   fmt.Sprintf("═══ Iteration %d ═══", n),
 		Detail:    fmt.Sprintf("Starting iteration %d", n),
 		Timestamp: time.Now(),
@@ -297,7 +315,7 @@ func MakeIterationEvent(n int) DisplayEvent {
 // MakeInfoEvent creates a general info event.
 func MakeInfoEvent(text string) DisplayEvent {
 	return DisplayEvent{
-		Type:      "info",
+		Type:      DisplayInfo,
 		Summary:   text,
 		Detail:    text,
 		Timestamp: time.Now(),

@@ -31,6 +31,9 @@ import (
 type Agent interface {
 	// RunIteration executes a single agent iteration with the given prompt.
 	//
+	// The onEvent callback is called synchronously from a single goroutine.
+	// Implementations must not call onEvent concurrently from multiple goroutines.
+	//
 	// The agent streams parsed events through the onEvent callback. When the
 	// agent process finishes (or ctx is cancelled), RunIteration returns the
 	// full assistant text accumulated during this iteration and any error.
@@ -57,13 +60,23 @@ func WithRawWriter(w io.Writer) Option {
 	}
 }
 
-// ApplyOptions applies the given options to an Options struct and returns it.
-func ApplyOptions(opts []Option) Options {
+// applyOptions applies the given options to an Options struct and returns it.
+func applyOptions(opts []Option) Options {
 	var o Options
 	for _, fn := range opts {
 		fn(&o)
 	}
 	return o
+}
+
+// IsValid reports whether name is a recognized agent name.
+func IsValid(name string) bool {
+	switch name {
+	case "pi", "kiro":
+		return true
+	default:
+		return false
+	}
 }
 
 // Resolve maps an agent name to a concrete Agent implementation.

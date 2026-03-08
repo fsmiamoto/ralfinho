@@ -42,7 +42,7 @@ type rpcRequest struct {
 	JSONRPC string      `json:"jsonrpc"`
 	ID      int64       `json:"id"`
 	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
+	Params  any `json:"params,omitempty"`
 }
 
 // rpcNotification is an outgoing JSON-RPC 2.0 notification (no id, no
@@ -50,7 +50,7 @@ type rpcRequest struct {
 type rpcNotification struct {
 	JSONRPC string      `json:"jsonrpc"`
 	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
+	Params  any `json:"params,omitempty"`
 }
 
 // rpcResponse is an outgoing JSON-RPC 2.0 response (reply to a reverse request
@@ -58,7 +58,7 @@ type rpcNotification struct {
 type rpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
-	Result  interface{}     `json:"result,omitempty"`
+	Result  any     `json:"result,omitempty"`
 	Error   *rpcError       `json:"error,omitempty"`
 }
 
@@ -112,6 +112,10 @@ func rpcIDInt(raw json.RawMessage) (int64, bool) {
 	if raw == nil {
 		return 0, false
 	}
+	// JSON null should not match any integer ID.
+	if string(raw) == "null" {
+		return 0, false
+	}
 	var n int64
 	if err := json.Unmarshal(raw, &n); err != nil {
 		return 0, false
@@ -157,7 +161,7 @@ func newRPCCodec(r io.Reader, w io.Writer) *rpcCodec {
 // Content-Length framing).
 //
 // Thread-safe: concurrent calls are serialized via mutex.
-func (c *rpcCodec) send(msg interface{}) error {
+func (c *rpcCodec) send(msg any) error {
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("jsonrpc: marshal: %w", err)
@@ -215,7 +219,7 @@ func (c *rpcCodec) readMessage() (*rpcMessage, error) {
 
 // newRequest creates an rpcRequest with an auto-incremented ID.
 // The returned request is ready to be passed to send().
-func (c *rpcCodec) newRequest(method string, params interface{}) rpcRequest {
+func (c *rpcCodec) newRequest(method string, params any) rpcRequest {
 	return rpcRequest{
 		JSONRPC: jsonrpcVersion,
 		ID:      c.nextID.Add(1),
@@ -226,7 +230,7 @@ func (c *rpcCodec) newRequest(method string, params interface{}) rpcRequest {
 
 // newResponse creates an rpcResponse for replying to a reverse request.
 // The id should come from the incoming rpcMessage.ID that is being replied to.
-func newResponse(id json.RawMessage, result interface{}) rpcResponse {
+func newResponse(id json.RawMessage, result any) rpcResponse {
 	return rpcResponse{
 		JSONRPC: jsonrpcVersion,
 		ID:      id,

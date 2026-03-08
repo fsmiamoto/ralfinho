@@ -318,7 +318,7 @@ func TestRPCIDInt(t *testing.T) {
 		{"negative", json.RawMessage(`-1`), -1, true},
 		{"nil", nil, 0, false},
 		{"string id", json.RawMessage(`"abc"`), 0, false},
-		{"null", json.RawMessage(`null`), 0, true}, // json.Unmarshal unmarshals null → 0
+		{"null", json.RawMessage(`null`), 0, false},
 		{"float", json.RawMessage(`1.5`), 0, false},
 		{"object", json.RawMessage(`{}`), 0, false},
 	}
@@ -436,7 +436,7 @@ func TestCodec_Send_WireFormat(t *testing.T) {
 	}
 
 	// Body must be valid JSON.
-	var msg map[string]interface{}
+	var msg map[string]any
 	if err := json.Unmarshal([]byte(body), &msg); err != nil {
 		t.Fatalf("body is not valid JSON: %v", err)
 	}
