@@ -71,11 +71,6 @@ var (
 
 )
 
-// iterationBarStyle is used for iteration separators in the stream.
-var iterationBarStyle = lipgloss.NewStyle().
-	Foreground(colorIteration).
-	Bold(true)
-
 // Stream pane event styles — pre-computed to avoid allocations per render.
 var eventStyles = map[DisplayEventType]lipgloss.Style{
 	DisplayUserMsg:       lipgloss.NewStyle().Foreground(colorUser),

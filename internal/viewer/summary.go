@@ -161,9 +161,9 @@ func summarizeRunDir(runsDir string, entry os.DirEntry) RunSummary {
 
 	summary.Meta = meta
 	summary.HasMeta = true
-	summary.Status = normalizeSummaryValue(meta.Status, "unknown")
-	summary.Agent = normalizeSummaryAgent(meta.Agent)
-	summary.PromptSource = normalizeSummaryValue(meta.PromptSource, "unknown")
+	summary.Status = valueOrDefault(meta.Status, "unknown")
+	summary.Agent = valueOrDefault(meta.Agent, "pi")
+	summary.PromptSource = valueOrDefault(meta.PromptSource, "unknown")
 	summary.PromptPath = summaryPromptPath(meta)
 	summary.PromptLabel = summaryPromptLabel(meta)
 	summary.IterationsCompleted = meta.IterationsCompleted
@@ -215,9 +215,9 @@ func buildRunActions(summary RunSummary) RunActions {
 
 	switch {
 	case !summary.HasMeta:
-		actions.Open.DisabledReason = defaultActionReason(summary.ArtifactError, "meta.json unavailable")
+		actions.Open.DisabledReason = valueOrDefault(summary.ArtifactError, "meta.json unavailable")
 	case !summary.HasEvents:
-		actions.Open.DisabledReason = defaultActionReason(summary.EventsError, "events.jsonl unavailable")
+		actions.Open.DisabledReason = valueOrDefault(summary.EventsError, "events.jsonl unavailable")
 	default:
 		actions.Open.Available = true
 	}
@@ -265,7 +265,7 @@ func buildResumeDisabledReason(summary RunSummary) string {
 		parts = append(parts, summary.EffectivePromptError)
 	}
 	if !summary.HasMeta {
-		parts = append(parts, defaultActionReason(summary.ArtifactError, "meta.json unavailable"))
+		parts = append(parts, valueOrDefault(summary.ArtifactError, "meta.json unavailable"))
 	} else {
 		parts = append(parts, "meta.json does not describe a reusable prompt source")
 	}
@@ -316,28 +316,13 @@ func inspectRunArtifact(path string) (bool, string) {
 	return true, ""
 }
 
-func defaultActionReason(reason, fallback string) string {
-	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		return fallback
-	}
-	return reason
-}
-
-func normalizeSummaryValue(value, fallback string) string {
+// valueOrDefault returns value (trimmed) if non-empty, otherwise fallback.
+func valueOrDefault(value, fallback string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return fallback
 	}
 	return value
-}
-
-func normalizeSummaryAgent(agent string) string {
-	agent = strings.TrimSpace(agent)
-	if agent == "" {
-		return "pi"
-	}
-	return agent
 }
 
 func summaryPromptPath(meta runner.RunMeta) string {
