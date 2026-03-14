@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -304,6 +305,402 @@ func TestTruncateResult(t *testing.T) {
 				t.Errorf("truncateResult(%q, %d) = %q, want %q", tt.result, tt.maxLines, got, tt.want)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildBlock — all block types
+// ---------------------------------------------------------------------------
+
+func TestBuildBlock_Iteration(t *testing.T) {
+	m := &Model{activeToolIdx: -1}
+	m.buildBlock(DisplayEvent{Type: DisplayIteration, Iteration: 3})
+
+	if len(m.blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(m.blocks))
+	}
+	if m.blocks[0].Kind != BlockIteration {
+		t.Errorf("expected BlockIteration, got %d", m.blocks[0].Kind)
+	}
+	if m.blocks[0].Iteration != 3 {
+		t.Errorf("expected Iteration=3, got %d", m.blocks[0].Iteration)
+	}
+}
+
+func TestBuildBlock_AssistantText_NewBlock(t *testing.T) {
+	m := &Model{activeToolIdx: -1}
+	m.buildBlock(DisplayEvent{Type: DisplayAssistantText, Iteration: 1, Detail: "hello"})
+
+	if len(m.blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(m.blocks))
+	}
+	if m.blocks[0].Kind != BlockAssistantText {
+		t.Errorf("expected BlockAssistantText, got %d", m.blocks[0].Kind)
+	}
+	if m.blocks[0].Text != "hello" {
+		t.Errorf("expected Text=%q, got %q", "hello", m.blocks[0].Text)
+	}
+}
+
+func TestBuildBlock_AssistantText_MergesSameIteration(t *testing.T) {
+	m := &Model{activeToolIdx: -1}
+	m.buildBlock(DisplayEvent{Type: DisplayAssistantText, Iteration: 1, Detail: "hello"})
+	m.buildBlock(DisplayEvent{Type: DisplayAssistantText, Iteration: 1, Detail: "hello world"})
+
+	if len(m.blocks) != 1 {
+		t.Fatalf("expected 1 block (merged), got %d", len(m.blocks))
+	}
+	if m.blocks[0].Text != "hello world" {
+		t.Errorf("expected merged Text=%q, got %q", "hello world", m.blocks[0].Text)
+	}
+}
+
+func TestBuildBlock_AssistantText_NewBlockForDifferentIteration(t *testing.T) {
+	m := &Model{activeToolIdx: -1}
+	m.buildBlock(DisplayEvent{Type: DisplayAssistantText, Iteration: 1, Detail: "first"})
+	m.buildBlock(DisplayEvent{Type: DisplayAssistantText, Iteration: 2, Detail: "second"})
+
+	if len(m.blocks) != 2 {
+		t.Fatalf("expected 2 blocks (different iterations), got %d", len(m.blocks))
+	}
+	if m.blocks[0].Text != "first" {
+		t.Errorf("block 0: expected Text=%q, got %q", "first", m.blocks[0].Text)
+	}
+	if m.blocks[1].Text != "second" {
+		t.Errorf("block 1: expected Text=%q, got %q", "second", m.blocks[1].Text)
+	}
+}
+
+func TestBuildBlock_AssistantText_NoMergeAfterDifferentBlockKind(t *testing.T) {
+	m := &Model{activeToolIdx: -1}
+	m.buildBlock(DisplayEvent{Type: DisplayAssistantText, Iteration: 1, Detail: "first"})
+	m.buildBlock(DisplayEvent{Type: DisplayIteration, Iteration: 1})
+	m.buildBlock(DisplayEvent{Type: DisplayAssistantText, Iteration: 1, Detail: "second"})
+
+	// Should be 3 blocks: assistant, iteration, assistant (not merged)
+	if len(m.blocks) != 3 {
+		t.Fatalf("expected 3 blocks, got %d", len(m.blocks))
+	}
+	if m.blocks[2].Text != "second" {
+		t.Errorf("block 2: expected Text=%q, got %q", "second", m.blocks[2].Text)
+	}
+}
+
+func TestBuildBlock_Thinking(t *testing.T) {
+	m := &Model{activeToolIdx: -1}
+	m.buildBlock(DisplayEvent{Type: DisplayThinking, Iteration: 2, Detail: "some thinking content"})
+
+	if len(m.blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(m.blocks))
+	}
+	if m.blocks[0].Kind != BlockThinking {
+		t.Errorf("expected BlockThinking, got %d", m.blocks[0].Kind)
+	}
+	if m.blocks[0].ThinkingLen != len("some thinking content") {
+		t.Errorf("expected ThinkingLen=%d, got %d", len("some thinking content"), m.blocks[0].ThinkingLen)
+	}
+}
+
+func TestBuildBlock_ToolLifecycle_StartUpdateEnd(t *testing.T) {
+	m := &Model{activeToolIdx: -1}
+
+	// Start
+	m.buildBlock(DisplayEvent{
+		Type:       DisplayToolStart,
+		ToolCallID: "tc-1",
+		ToolName:   "bash",
+		RawArgs:    json.RawMessage(`{"command":"echo hi"}`),
+	})
+	if len(m.blocks) != 1 {
+		t.Fatalf("after start: expected 1 block, got %d", len(m.blocks))
+	}
+	if m.activeToolIdx != 0 {
+		t.Errorf("activeToolIdx should be 0 after tool start, got %d", m.activeToolIdx)
+	}
+	if m.blocks[0].ToolDone {
+		t.Error("tool should not be done after start")
+	}
+
+	// Update
+	m.buildBlock(DisplayEvent{
+		Type:            DisplayToolUpdate,
+		ToolCallID:      "tc-1",
+		ToolName:        "bash",
+		ToolDisplayArgs: "$ echo updated",
+	})
+	if len(m.blocks) != 1 {
+		t.Fatalf("after update: expected 1 block, got %d", len(m.blocks))
+	}
+	if m.blocks[0].ToolArgs != "$ echo updated" {
+		t.Errorf("after update: expected ToolArgs=%q, got %q", "$ echo updated", m.blocks[0].ToolArgs)
+	}
+
+	// End
+	m.buildBlock(DisplayEvent{
+		Type:           DisplayToolEnd,
+		ToolCallID:     "tc-1",
+		ToolName:       "bash",
+		ToolResultText: "hi\n",
+		ToolIsError:    false,
+	})
+	if m.blocks[0].ToolDone != true {
+		t.Error("tool should be done after end")
+	}
+	if m.blocks[0].ToolResult != "hi\n" {
+		t.Errorf("expected ToolResult=%q, got %q", "hi\n", m.blocks[0].ToolResult)
+	}
+	if m.blocks[0].ToolError {
+		t.Error("tool should not be error")
+	}
+	if m.activeToolIdx != -1 {
+		t.Errorf("activeToolIdx should be -1 after tool end, got %d", m.activeToolIdx)
+	}
+}
+
+func TestBuildBlock_ToolEnd_WithError(t *testing.T) {
+	m := &Model{activeToolIdx: -1}
+
+	m.buildBlock(DisplayEvent{
+		Type:       DisplayToolStart,
+		ToolCallID: "tc-err",
+		ToolName:   "bash",
+	})
+	m.buildBlock(DisplayEvent{
+		Type:           DisplayToolEnd,
+		ToolCallID:     "tc-err",
+		ToolName:       "bash",
+		ToolResultText: "command not found",
+		ToolIsError:    true,
+	})
+
+	if !m.blocks[0].ToolError {
+		t.Error("tool should be marked as error")
+	}
+	if m.blocks[0].ToolResult != "command not found" {
+		t.Errorf("expected ToolResult=%q, got %q", "command not found", m.blocks[0].ToolResult)
+	}
+}
+
+func TestBuildBlock_ToolEnd_UnmatchedID(t *testing.T) {
+	m := &Model{activeToolIdx: -1}
+
+	m.buildBlock(DisplayEvent{
+		Type:       DisplayToolStart,
+		ToolCallID: "tc-a",
+		ToolName:   "bash",
+	})
+	// End with a different ID — should not match any block.
+	m.buildBlock(DisplayEvent{
+		Type:           DisplayToolEnd,
+		ToolCallID:     "tc-b",
+		ToolName:       "bash",
+		ToolResultText: "result",
+	})
+
+	if m.blocks[0].ToolDone {
+		t.Error("tool tc-a should not be marked done when tc-b ends")
+	}
+}
+
+func TestBuildBlock_Info(t *testing.T) {
+	m := &Model{activeToolIdx: -1}
+	m.buildBlock(DisplayEvent{Type: DisplayInfo, Detail: "some info"})
+
+	if len(m.blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(m.blocks))
+	}
+	if m.blocks[0].Kind != BlockInfo {
+		t.Errorf("expected BlockInfo, got %d", m.blocks[0].Kind)
+	}
+	if m.blocks[0].InfoText != "some info" {
+		t.Errorf("expected InfoText=%q, got %q", "some info", m.blocks[0].InfoText)
+	}
+}
+
+func TestBuildBlock_SkippedTypes(t *testing.T) {
+	m := &Model{activeToolIdx: -1}
+
+	// These display types should not produce blocks.
+	for _, typ := range []DisplayEventType{DisplaySession, DisplayUserMsg, DisplayTurnEnd, DisplayAgentEnd} {
+		m.buildBlock(DisplayEvent{Type: typ, Detail: "ignored"})
+	}
+
+	if len(m.blocks) != 0 {
+		t.Errorf("expected 0 blocks for skipped types, got %d", len(m.blocks))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// updateAssistantBlock
+// ---------------------------------------------------------------------------
+
+func TestUpdateAssistantBlock_UpdatesMatchingIteration(t *testing.T) {
+	m := &Model{activeToolIdx: -1}
+	m.blocks = []MainBlock{
+		{Kind: BlockIteration, Iteration: 1},
+		{Kind: BlockAssistantText, Iteration: 1, Text: "old"},
+	}
+
+	m.updateAssistantBlock(DisplayEvent{Iteration: 1, Detail: "new text"})
+
+	if m.blocks[1].Text != "new text" {
+		t.Errorf("expected Text=%q, got %q", "new text", m.blocks[1].Text)
+	}
+}
+
+func TestUpdateAssistantBlock_NoMatchDoesNothing(t *testing.T) {
+	m := &Model{activeToolIdx: -1}
+	m.blocks = []MainBlock{
+		{Kind: BlockAssistantText, Iteration: 1, Text: "original"},
+	}
+
+	m.updateAssistantBlock(DisplayEvent{Iteration: 2, Detail: "should not appear"})
+
+	if m.blocks[0].Text != "original" {
+		t.Errorf("expected Text unchanged, got %q", m.blocks[0].Text)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// addDisplayEvent — model name extraction and iteration counter
+// ---------------------------------------------------------------------------
+
+func TestAddDisplayEvent_ExtractsModelName(t *testing.T) {
+	m := Model{activeToolIdx: -1, running: true, converter: NewEventConverter()}
+
+	de := DisplayEvent{
+		Type:    DisplayAssistantText,
+		Summary: "← Assistant (claude-4-opus)",
+		Detail:  "hello",
+	}
+	updated, _ := m.addDisplayEvent(de)
+	model := updated.(Model)
+
+	if model.modelName != "claude-4-opus" {
+		t.Errorf("expected modelName=%q, got %q", "claude-4-opus", model.modelName)
+	}
+}
+
+func TestAddDisplayEvent_ModelNameNotExtractedWithoutParens(t *testing.T) {
+	m := Model{activeToolIdx: -1, running: true, converter: NewEventConverter()}
+
+	de := DisplayEvent{
+		Type:    DisplayAssistantText,
+		Summary: "← Assistant text only",
+		Detail:  "hello",
+	}
+	updated, _ := m.addDisplayEvent(de)
+	model := updated.(Model)
+
+	if model.modelName != "" {
+		t.Errorf("expected empty modelName, got %q", model.modelName)
+	}
+}
+
+func TestAddDisplayEvent_IterationUpdatesStatus(t *testing.T) {
+	m := Model{activeToolIdx: -1, running: true, converter: NewEventConverter()}
+
+	de := DisplayEvent{
+		Type:      DisplayIteration,
+		Iteration: 5,
+	}
+	updated, _ := m.addDisplayEvent(de)
+	model := updated.(Model)
+
+	if model.iteration != 5 {
+		t.Errorf("expected iteration=5, got %d", model.iteration)
+	}
+	if model.status != "Iteration #5" {
+		t.Errorf("expected status=%q, got %q", "Iteration #5", model.status)
+	}
+}
+
+func TestAddDisplayEvent_IterationIgnoredWhenNotRunning(t *testing.T) {
+	m := Model{activeToolIdx: -1, running: false, converter: NewEventConverter(), status: "Done"}
+
+	de := DisplayEvent{
+		Type:      DisplayIteration,
+		Iteration: 5,
+	}
+	updated, _ := m.addDisplayEvent(de)
+	model := updated.(Model)
+
+	if model.status != "Done" {
+		t.Errorf("expected status unchanged when not running, got %q", model.status)
+	}
+}
+
+func TestAddDisplayEvent_AssistantTextMergesConsecutive(t *testing.T) {
+	m := Model{activeToolIdx: -1, running: true, converter: NewEventConverter()}
+
+	// First assistant text event.
+	updated, _ := m.addDisplayEvent(DisplayEvent{
+		Type:      DisplayAssistantText,
+		Iteration: 1,
+		Summary:   "← Assistant (test)",
+		Detail:    "hello",
+	})
+	m = updated.(Model)
+
+	// Second assistant text event for same iteration — should merge.
+	updated, _ = m.addDisplayEvent(DisplayEvent{
+		Type:      DisplayAssistantText,
+		Iteration: 1,
+		Summary:   "← Assistant (test)",
+		Detail:    "hello world",
+	})
+	m = updated.(Model)
+
+	if len(m.events) != 1 {
+		t.Errorf("expected 1 merged event, got %d", len(m.events))
+	}
+	if m.events[0].Detail != "hello world" {
+		t.Errorf("expected merged Detail=%q, got %q", "hello world", m.events[0].Detail)
+	}
+}
+
+func TestAddDisplayEvent_AssistantTextNoMergeDifferentIteration(t *testing.T) {
+	m := Model{activeToolIdx: -1, running: true, converter: NewEventConverter()}
+
+	updated, _ := m.addDisplayEvent(DisplayEvent{
+		Type: DisplayAssistantText, Iteration: 1, Detail: "first",
+	})
+	m = updated.(Model)
+
+	updated, _ = m.addDisplayEvent(DisplayEvent{
+		Type: DisplayAssistantText, Iteration: 2, Detail: "second",
+	})
+	m = updated.(Model)
+
+	if len(m.events) != 2 {
+		t.Errorf("expected 2 events (different iterations), got %d", len(m.events))
+	}
+}
+
+func TestAddDisplayEvent_AutoScrollFollowsNewEvents(t *testing.T) {
+	m := Model{activeToolIdx: -1, running: true, converter: NewEventConverter(), autoScroll: true}
+
+	for i := 0; i < 5; i++ {
+		updated, _ := m.addDisplayEvent(DisplayEvent{
+			Type: DisplayInfo, Detail: fmt.Sprintf("event %d", i),
+		})
+		m = updated.(Model)
+	}
+
+	if m.cursor != len(m.events)-1 {
+		t.Errorf("expected cursor at last event (%d), got %d", len(m.events)-1, m.cursor)
+	}
+}
+
+func TestAddDisplayEvent_NoAutoScrollWhenDisabled(t *testing.T) {
+	m := Model{activeToolIdx: -1, running: true, converter: NewEventConverter(), autoScroll: false}
+
+	updated, _ := m.addDisplayEvent(DisplayEvent{Type: DisplayInfo, Detail: "event"})
+	model := updated.(Model)
+
+	// cursor should stay at 0 (default), not jump to the new event
+	if model.cursor != 0 {
+		t.Errorf("expected cursor at 0 when autoScroll disabled, got %d", model.cursor)
 	}
 }
 
