@@ -96,21 +96,23 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 	// Open persistence files.
 	r.openRunFiles()
 
-	// Construct the agent for this run.
-	var agentOpts []agent.Option
-	if r.rawFile != nil {
-		agentOpts = append(agentOpts, agent.WithRawWriter(r.rawFile))
+	// Construct the agent for this run (unless pre-set, e.g. in tests).
+	if r.iterAgent == nil {
+		var agentOpts []agent.Option
+		if r.rawFile != nil {
+			agentOpts = append(agentOpts, agent.WithRawWriter(r.rawFile))
+		}
+		agentOpts = append(agentOpts, agent.WithLogWriter(r.stderr))
+		resolved, err := agent.Resolve(r.cfg.Agent, agentOpts...)
+		if err != nil {
+			r.logf("error: %v\n", err)
+			result.Status = StatusFailed
+			r.writeMeta(result)
+			r.closeRunFiles()
+			return result
+		}
+		r.iterAgent = resolved
 	}
-	agentOpts = append(agentOpts, agent.WithLogWriter(r.stderr))
-	resolved, err := agent.Resolve(r.cfg.Agent, agentOpts...)
-	if err != nil {
-		r.logf("error: %v\n", err)
-		result.Status = StatusFailed
-		r.writeMeta(result)
-		r.closeRunFiles()
-		return result
-	}
-	r.iterAgent = resolved
 
 	done := false
 	for !done {
