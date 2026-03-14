@@ -83,30 +83,29 @@ var iterationBarStyle = lipgloss.NewStyle().
 	Foreground(colorIteration).
 	Bold(true)
 
-// eventStyle returns the style for a given event type.
+// Stream pane event styles — pre-computed to avoid allocations per render.
+var eventStyles = map[DisplayEventType]lipgloss.Style{
+	DisplayUserMsg:       lipgloss.NewStyle().Foreground(colorUser),
+	DisplayAssistantText: lipgloss.NewStyle().Foreground(colorBright),
+	DisplayToolStart:     lipgloss.NewStyle().Foreground(colorTool),
+	DisplayToolUpdate:    lipgloss.NewStyle().Foreground(colorTool),
+	DisplayToolEnd:       lipgloss.NewStyle().Foreground(colorTool),
+	DisplayThinking:      lipgloss.NewStyle().Foreground(colorThinking),
+	DisplayTurnEnd:       lipgloss.NewStyle().Foreground(colorDim),
+	DisplayAgentEnd:      lipgloss.NewStyle().Foreground(colorDim),
+	DisplayIteration:     lipgloss.NewStyle().Foreground(colorIteration).Bold(true),
+	DisplaySession:       lipgloss.NewStyle().Foreground(colorInfo),
+	DisplayInfo:          lipgloss.NewStyle().Foreground(colorInfo),
+}
+
+var defaultEventStyle = lipgloss.NewStyle().Foreground(colorBright)
+
+// eventStyle returns the pre-computed style for a given event type.
 func eventStyle(evType string) lipgloss.Style {
-	switch evType {
-	case DisplayUserMsg:
-		return lipgloss.NewStyle().Foreground(colorUser)
-	case DisplayAssistantText:
-		return lipgloss.NewStyle().Foreground(colorBright)
-	case DisplayToolStart:
-		return lipgloss.NewStyle().Foreground(colorTool)
-	case DisplayToolEnd:
-		return lipgloss.NewStyle().Foreground(colorTool)
-	case DisplayThinking:
-		return lipgloss.NewStyle().Foreground(colorThinking)
-	case DisplayTurnEnd, DisplayAgentEnd:
-		return lipgloss.NewStyle().Foreground(colorDim)
-	case DisplayIteration:
-		return lipgloss.NewStyle().Foreground(colorIteration).Bold(true)
-	case DisplaySession:
-		return lipgloss.NewStyle().Foreground(colorInfo)
-	case DisplayInfo:
-		return lipgloss.NewStyle().Foreground(colorInfo)
-	default:
-		return lipgloss.NewStyle().Foreground(colorBright)
+	if s, ok := eventStyles[evType]; ok {
+		return s
 	}
+	return defaultEventStyle
 }
 
 // errorEventStyle is for tool errors.
