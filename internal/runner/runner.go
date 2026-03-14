@@ -239,7 +239,8 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 		return iterInterrupted, nil
 	}
 
-	// Surface agent errors.
+	// Surface agent errors. The status value is ignored by the caller when
+	// err != nil, so we return the zero value (iterContinue).
 	if err != nil {
 		return iterContinue, err
 	}
