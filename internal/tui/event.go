@@ -253,7 +253,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 		detail := fmt.Sprintf("Tool: %s\nCall ID: %s\nError: %v", ev.ToolName, ev.ToolCallID, isErr)
 		var resultText string
 		if ev.Result != nil {
-			resultText = string(ev.Result)
+			resultText = jsonToText(ev.Result)
 			detail += fmt.Sprintf("\nResult:\n%s", resultText)
 		}
 		return []DisplayEvent{{
@@ -318,6 +318,17 @@ func MakeInfoEvent(text string) DisplayEvent {
 		Detail:    text,
 		Timestamp: time.Now(),
 	}
+}
+
+// jsonToText converts a json.RawMessage to a human-readable string.
+// If the value is a JSON string, it is unquoted (quotes removed, escape
+// sequences decoded). Otherwise the raw JSON is returned as-is.
+func jsonToText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	return string(raw)
 }
 
 func truncateStr(s string, n int) string {
