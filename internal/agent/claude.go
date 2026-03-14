@@ -299,15 +299,10 @@ func (m *claudeEventMapper) handleResult() {
 }
 
 // finalize ensures proper event lifecycle closure after the scan loop.
-// Closes any open message block and emits TurnEnd if not already emitted.
+// Delegates to handleResult which is idempotent — safe to call even if the
+// result line was already processed.
 func (m *claudeEventMapper) finalize() {
-	if m.inMessage {
-		m.emitMessageEnd()
-	}
-	if !m.turnEnded {
-		m.onEvent(events.Event{Type: events.EventTurnEnd})
-		m.turnEnded = true
-	}
+	m.handleResult()
 }
 
 // ---------------------------------------------------------------------------
