@@ -69,6 +69,7 @@ func (a *PiAgent) RunIteration(ctx context.Context, prompt string, onEvent func(
 		stdout.Close()
 		return "", fmt.Errorf("starting agent: %w", err)
 	}
+	defer cmd.Wait() // always reap the subprocess to prevent zombies
 
 	// Process JSONL output. Optionally tee raw stdout to RawWriter.
 	var stdoutReader io.Reader = stdout
@@ -112,10 +113,6 @@ func (a *PiAgent) RunIteration(ctx context.Context, prompt string, onEvent func(
 	if err := scanner.Err(); err != nil {
 		return assistantText.String(), fmt.Errorf("reading agent output: %w", err)
 	}
-
-	// Wait for the process to finish. Exit codes are not meaningful for
-	// completion detection — that's prompt-driven via the completion marker.
-	_ = cmd.Wait()
 
 	// Surface context cancellation so the runner knows the iteration was
 	// interrupted rather than completed normally.
