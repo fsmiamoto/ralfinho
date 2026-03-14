@@ -404,13 +404,19 @@ func (r *Runner) openRunFiles() {
 // closeRunFiles closes all persistence files.
 func (r *Runner) closeRunFiles() {
 	if r.eventsFile != nil {
-		r.eventsFile.Close()
+		if err := r.eventsFile.Close(); err != nil {
+			r.logf("warning: closing events.jsonl: %v\n", err)
+		}
 	}
 	if r.rawFile != nil {
-		r.rawFile.Close()
+		if err := r.rawFile.Close(); err != nil {
+			r.logf("warning: closing raw-output.log: %v\n", err)
+		}
 	}
 	if r.sessionFile != nil {
-		r.sessionFile.Close()
+		if err := r.sessionFile.Close(); err != nil {
+			r.logf("warning: closing session.log: %v\n", err)
+		}
 	}
 }
 
