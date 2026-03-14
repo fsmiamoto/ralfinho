@@ -87,7 +87,7 @@ func applyOptions(opts []Option) Options {
 // IsValid reports whether name is a recognized agent name.
 func IsValid(name string) bool {
 	switch name {
-	case "pi", "kiro":
+	case "pi", "kiro", "claude":
 		return true
 	default:
 		return false
@@ -97,8 +97,9 @@ func IsValid(name string) bool {
 // Resolve maps an agent name to a concrete Agent implementation.
 //
 // Supported names:
-//   - "pi"   → PiAgent (invokes the pi CLI tool)
-//   - "kiro" → KiroAgent (invokes kiro-cli via ACP protocol)
+//   - "pi"    → PiAgent (invokes the pi CLI tool)
+//   - "kiro"  → KiroAgent (invokes kiro-cli via ACP protocol)
+//   - "claude" → ClaudeAgent (invokes Claude Code CLI in streaming mode)
 //
 // Unknown names produce a clear error listing the supported agents.
 // Options (e.g. WithRawWriter) are forwarded to the chosen implementation.
@@ -108,7 +109,9 @@ func Resolve(name string, opts ...Option) (Agent, error) {
 		return NewPiAgent("pi", opts...), nil
 	case "kiro":
 		return NewKiroAgent(opts...), nil
+	case "claude":
+		return NewClaudeAgent(opts...), nil
 	default:
-		return nil, fmt.Errorf("unknown agent %q (supported: pi, kiro)", name)
+		return nil, fmt.Errorf("unknown agent %q (supported: pi, kiro, claude)", name)
 	}
 }
