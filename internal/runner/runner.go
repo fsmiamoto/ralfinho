@@ -302,14 +302,7 @@ func (r *Runner) handleEvent(ev *Event) {
 		}
 
 	case EventMessageEnd:
-		// Flush accumulated assistant text to session log.
-		if text := r.sessionText.String(); text != "" {
-			r.sessionLogf("[%s] assistant text:\n", r.timestamp())
-			for _, line := range strings.Split(text, "\n") {
-				r.sessionLogf("    %s\n", line)
-			}
-			r.sessionText.Reset()
-		}
+		r.flushSessionText()
 
 	case EventToolExecutionStart:
 		r.logf("  > tool: %s (id=%s)\n", ev.ToolName, truncate(ev.ToolCallID, 12))
@@ -337,13 +330,7 @@ func (r *Runner) handleEvent(ev *Event) {
 
 	case EventTurnEnd:
 		// Safety flush: write any remaining assistant text not flushed by message_end.
-		if text := r.sessionText.String(); text != "" {
-			r.sessionLogf("[%s] assistant text:\n", r.timestamp())
-			for _, line := range strings.Split(text, "\n") {
-				r.sessionLogf("    %s\n", line)
-			}
-			r.sessionText.Reset()
-		}
+		r.flushSessionText()
 		r.logf("  turn end\n")
 		r.sessionLogf("[%s] turn end\n", r.timestamp())
 
@@ -363,6 +350,20 @@ func (r *Runner) askContinue() bool {
 	}
 	input = strings.TrimSpace(strings.ToLower(input))
 	return input == "y" || input == "yes"
+}
+
+// flushSessionText writes any accumulated assistant text to session.log
+// and resets the buffer. Called at MessageEnd and as a safety flush at TurnEnd.
+func (r *Runner) flushSessionText() {
+	text := r.sessionText.String()
+	if text == "" {
+		return
+	}
+	r.sessionLogf("[%s] assistant text:\n", r.timestamp())
+	for _, line := range strings.Split(text, "\n") {
+		r.sessionLogf("    %s\n", line)
+	}
+	r.sessionText.Reset()
 }
 
 func (r *Runner) logf(format string, args ...any) {
