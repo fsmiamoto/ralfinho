@@ -183,12 +183,21 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 	var mu sync.Mutex
 
 	// Monitor for SIGINT in the background.
+	// The done channel ensures this goroutine exits when runIteration returns,
+	// since signal.Stop does not close sigCh and the goroutine would leak.
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		for range sigCh {
-			mu.Lock()
-			interrupted = true
-			mu.Unlock()
-			cancel()
+		for {
+			select {
+			case <-sigCh:
+				mu.Lock()
+				interrupted = true
+				mu.Unlock()
+				cancel()
+			case <-done:
+				return
+			}
 		}
 	}()
 
