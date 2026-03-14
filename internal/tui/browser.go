@@ -362,10 +362,8 @@ func (m BrowserModel) nextRunIDAfterDelete() string {
 			if i+1 < len(m.summaries) {
 				return m.summaries[i+1].RunID
 			}
-			if i-1 >= 0 {
-				return m.summaries[i-1].RunID
-			}
-			return ""
+			// i must be the last element; since len > 1, i-1 is valid.
+			return m.summaries[i-1].RunID
 		}
 	}
 	return ""

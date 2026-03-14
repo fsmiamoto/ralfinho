@@ -2959,6 +2959,100 @@ func pressKey(t *testing.T, m BrowserModel, key string) BrowserModel {
 	return updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune(key)}))
 }
 
+// ===== nextRunIDAfterDelete =====
+
+func TestNextRunIDAfterDelete(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name      string
+		summaries []viewer.RunSummary
+		deleteID  string
+		want      string
+	}{
+		{
+			name:      "empty list",
+			summaries: nil,
+			deleteID:  "r1",
+			want:      "",
+		},
+		{
+			name:      "single item",
+			summaries: []viewer.RunSummary{browserTestSummary("r1", now, "pi", "completed", "default")},
+			deleteID:  "r1",
+			want:      "",
+		},
+		{
+			name: "delete first of three selects next",
+			summaries: []viewer.RunSummary{
+				browserTestSummary("r1", now, "pi", "completed", "default"),
+				browserTestSummary("r2", now.Add(-time.Hour), "pi", "completed", "default"),
+				browserTestSummary("r3", now.Add(-2*time.Hour), "pi", "completed", "default"),
+			},
+			deleteID: "r1",
+			want:     "r2",
+		},
+		{
+			name: "delete middle of three selects next",
+			summaries: []viewer.RunSummary{
+				browserTestSummary("r1", now, "pi", "completed", "default"),
+				browserTestSummary("r2", now.Add(-time.Hour), "pi", "completed", "default"),
+				browserTestSummary("r3", now.Add(-2*time.Hour), "pi", "completed", "default"),
+			},
+			deleteID: "r2",
+			want:     "r3",
+		},
+		{
+			name: "delete last of three selects previous",
+			summaries: []viewer.RunSummary{
+				browserTestSummary("r1", now, "pi", "completed", "default"),
+				browserTestSummary("r2", now.Add(-time.Hour), "pi", "completed", "default"),
+				browserTestSummary("r3", now.Add(-2*time.Hour), "pi", "completed", "default"),
+			},
+			deleteID: "r3",
+			want:     "r2",
+		},
+		{
+			name: "delete last of two selects previous",
+			summaries: []viewer.RunSummary{
+				browserTestSummary("r1", now, "pi", "completed", "default"),
+				browserTestSummary("r2", now.Add(-time.Hour), "pi", "completed", "default"),
+			},
+			deleteID: "r2",
+			want:     "r1",
+		},
+		{
+			name: "delete first of two selects next",
+			summaries: []viewer.RunSummary{
+				browserTestSummary("r1", now, "pi", "completed", "default"),
+				browserTestSummary("r2", now.Add(-time.Hour), "pi", "completed", "default"),
+			},
+			deleteID: "r1",
+			want:     "r2",
+		},
+		{
+			name: "run ID not found returns empty",
+			summaries: []viewer.RunSummary{
+				browserTestSummary("r1", now, "pi", "completed", "default"),
+				browserTestSummary("r2", now.Add(-time.Hour), "pi", "completed", "default"),
+			},
+			deleteID: "nonexistent",
+			want:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewBrowserModel(tt.summaries)
+			m.confirmDeleteRunID = tt.deleteID
+
+			got := m.nextRunIDAfterDelete()
+			if got != tt.want {
+				t.Errorf("nextRunIDAfterDelete() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // pressRune sends a single rune keypress.
 func pressRune(t *testing.T, m BrowserModel, r rune) BrowserModel {
 	t.Helper()
