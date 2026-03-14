@@ -210,7 +210,9 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 		// Persist to events.jsonl.
 		if r.eventsFile != nil {
 			if data, merr := json.Marshal(ev); merr == nil {
-				fmt.Fprintln(r.eventsFile, string(data))
+				if _, werr := fmt.Fprintln(r.eventsFile, string(data)); werr != nil {
+					r.logf("warning: writing to events.jsonl: %v\n", werr)
+				}
 			}
 		}
 
@@ -447,7 +449,9 @@ func (r *Runner) closeRunFiles() {
 // sessionLogf writes a formatted line to session.log.
 func (r *Runner) sessionLogf(format string, args ...any) {
 	if r.sessionFile != nil {
-		fmt.Fprintf(r.sessionFile, format, args...)
+		if _, err := fmt.Fprintf(r.sessionFile, format, args...); err != nil {
+			r.logf("warning: writing to session.log: %v\n", err)
+		}
 	}
 }
 
