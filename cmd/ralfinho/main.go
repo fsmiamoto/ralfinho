@@ -116,11 +116,14 @@ func runTUI(cfg *cli.Config, promptText string) {
 		EventChan:     eventCh,
 	})
 
-	// Start the runner in a goroutine.
-	resultCh := make(chan runner.RunResult, 1)
+	// Start the runner in a goroutine. Use a close-signal pattern instead
+	// of a buffered channel so both the DoneMsg goroutine and the early-quit
+	// path can safely read the result without racing for a single channel value.
+	var runResult runner.RunResult
+	runDone := make(chan struct{})
 	go func() {
-		result := r.Run(ctx)
-		resultCh <- result
+		runResult = r.Run(ctx)
+		close(runDone)
 		close(eventCh) // signal TUI that no more events are coming
 	}()
 
@@ -129,8 +132,8 @@ func runTUI(cfg *cli.Config, promptText string) {
 
 	// Feed DoneMsg to the program when the runner finishes.
 	go func() {
-		result := <-resultCh
-		p.Send(tui.DoneMsg{Result: result})
+		<-runDone
+		p.Send(tui.DoneMsg{Result: runResult})
 	}()
 
 	finalModel, err := p.Run()
@@ -148,9 +151,9 @@ func runTUI(cfg *cli.Config, promptText string) {
 			// User quit before runner finished — cancel the runner and
 			// wait for it to write meta.json before exiting.
 			cancel()
-			result := <-resultCh
-			printRunSummary("run summary", result)
-			exitForStatus(result.Status)
+			<-runDone
+			printRunSummary("run summary", runResult)
+			exitForStatus(runResult.Status)
 		}
 	}
 }
@@ -375,10 +378,11 @@ func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
 		EventChan:     eventCh,
 	})
 
-	resultCh := make(chan runner.RunResult, 1)
+	var runResult runner.RunResult
+	runDone := make(chan struct{})
 	go func() {
-		res := r.Run(ctx)
-		resultCh <- res
+		runResult = r.Run(ctx)
+		close(runDone)
 		close(eventCh)
 	}()
 
@@ -386,8 +390,8 @@ func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	go func() {
-		res := <-resultCh
-		p.Send(tui.DoneMsg{Result: res})
+		<-runDone
+		p.Send(tui.DoneMsg{Result: runResult})
 	}()
 
 	finalModel, err := p.Run()
@@ -396,14 +400,14 @@ func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
 	}
 
 	if m, ok := finalModel.(tui.Model); ok {
-		if runResult := m.RunResult(); runResult != nil {
-			printRunSummary("resumed run summary", *runResult)
+		if res := m.RunResult(); res != nil {
+			printRunSummary("resumed run summary", *res)
 		} else {
 			// User quit before runner finished — cancel the runner and
 			// wait for it to write meta.json before returning.
 			cancel()
-			result := <-resultCh
-			printRunSummary("resumed run summary", result)
+			<-runDone
+			printRunSummary("resumed run summary", runResult)
 		}
 	}
 
