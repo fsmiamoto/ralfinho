@@ -80,6 +80,7 @@ func (a *ClaudeAgent) RunIteration(ctx context.Context, prompt string, onEvent f
 		stdout.Close()
 		return "", fmt.Errorf("claude: starting agent: %w", err)
 	}
+	defer cmd.Wait() // always reap the subprocess to prevent zombies
 
 	// Optionally tee raw stdout to RawWriter.
 	var stdoutReader io.Reader = stdout
@@ -115,9 +116,6 @@ func (a *ClaudeAgent) RunIteration(ctx context.Context, prompt string, onEvent f
 
 	// Ensure proper lifecycle closure after scan loop.
 	mapper.finalize()
-
-	// Wait for the process to finish.
-	_ = cmd.Wait()
 
 	// Surface context cancellation.
 	if ctx.Err() != nil {
