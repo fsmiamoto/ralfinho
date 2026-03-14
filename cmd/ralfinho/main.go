@@ -96,6 +96,13 @@ func runPlain(cfg *cli.Config, promptText string) {
 
 // runTUI runs the agent with the Bubble Tea TUI.
 func runTUI(cfg *cli.Config, promptText string) {
+	// Use a cancellable context so the runner (and its agent subprocess)
+	// is stopped when the user quits the TUI. Without this, the runner
+	// goroutine keeps running and meta.json may not be written before
+	// the process exits.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	eventCh := make(chan runner.Event, 256)
 
 	r := runner.New(runner.RunConfig{
@@ -112,7 +119,7 @@ func runTUI(cfg *cli.Config, promptText string) {
 	// Start the runner in a goroutine.
 	resultCh := make(chan runner.RunResult, 1)
 	go func() {
-		result := r.Run(context.Background())
+		result := r.Run(ctx)
 		resultCh <- result
 		close(eventCh) // signal TUI that no more events are coming
 	}()
@@ -138,14 +145,12 @@ func runTUI(cfg *cli.Config, promptText string) {
 			printRunSummary("run summary", *r)
 			exitForStatus(r.Status)
 		} else {
-			// User quit before runner finished — try to get result with a short timeout.
-			select {
-			case result := <-resultCh:
-				printRunSummary("run summary", result)
-				exitForStatus(result.Status)
-			case <-time.After(500 * time.Millisecond):
-				// Runner still going; exit without summary.
-			}
+			// User quit before runner finished — cancel the runner and
+			// wait for it to write meta.json before exiting.
+			cancel()
+			result := <-resultCh
+			printRunSummary("run summary", result)
+			exitForStatus(result.Status)
 		}
 	}
 }
