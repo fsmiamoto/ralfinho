@@ -157,3 +157,28 @@ var toolSepStyle = lipgloss.NewStyle().
 // Tool result text.
 var toolResultStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("250"))
+
+// Info text style (for BlockInfo blocks in the main view).
+var infoTextStyle = lipgloss.NewStyle().
+	Foreground(colorInfo)
+
+// Browser state card styles (delete confirmation, resume confirmation, etc.).
+var (
+	browserCardBorder = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				Padding(0, 1).
+				BorderForeground(colorDim)
+
+	browserCardBorderWarning = lipgloss.NewStyle().
+					Border(lipgloss.RoundedBorder()).
+					Padding(0, 1).
+					BorderForeground(colorTool)
+
+	browserCardTitle = lipgloss.NewStyle().
+				Foreground(ColorAccent).
+				Bold(true)
+
+	browserCardTitleWarning = lipgloss.NewStyle().
+				Foreground(colorTool).
+				Bold(true)
+)
