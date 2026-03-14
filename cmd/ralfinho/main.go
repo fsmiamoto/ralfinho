@@ -349,6 +349,13 @@ func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
 	// accurately describes how the prompt was obtained.
 	inputMode, promptFile, planFile := resumePromptMeta(result.ResumeSource, result.ResumePath)
 
+	// Use a cancellable context so the runner (and its agent subprocess)
+	// is stopped when the TUI exits. Without this, quitting the TUI early
+	// leaves the runner goroutine running in the background, and re-opening
+	// the browser could accumulate multiple concurrent runners.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	eventCh := make(chan runner.Event, 256)
 	r := runner.New(runner.RunConfig{
 		Agent:         agentName,
@@ -363,7 +370,7 @@ func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
 
 	resultCh := make(chan runner.RunResult, 1)
 	go func() {
-		res := r.Run(context.Background())
+		res := r.Run(ctx)
 		resultCh <- res
 		close(eventCh)
 	}()
