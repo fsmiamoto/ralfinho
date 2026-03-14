@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,6 +31,9 @@ func TestTruncate(t *testing.T) {
 		{"hello", 10, "hello"},
 		{"hello world", 5, "hell…"},
 		{"", 5, ""},
+		{"こんにちは世界", 5, "こんにち…"},  // multi-byte: truncates by rune, not byte
+		{"abc", 0, "…"},                     // n=0 edge case
+		{"a", 1, "a"},                       // exactly at limit
 	}
 	for _, tt := range tests {
 		got := truncate(tt.s, tt.n)
@@ -559,6 +561,3 @@ func TestRunner_OpenCloseRunFiles(t *testing.T) {
 		}
 	}
 }
-
-// Ensure unused imports are consumed.
-var _ = bytes.Buffer{}
