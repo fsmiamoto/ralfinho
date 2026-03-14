@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -618,6 +619,43 @@ func TestKiroMapper_FullLifecycle(t *testing.T) {
 	// Verify accumulated text.
 	if got := m.assistantText(); got != "Let me check...Found 2 files." {
 		t.Errorf("assistantText=%q, want %q", got, "Let me check...Found 2 files.")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// canonicalToolName — kind+title → tool name mapping
+// ---------------------------------------------------------------------------
+
+func TestCanonicalToolName(t *testing.T) {
+	tests := []struct {
+		kind  string
+		title string
+		want  string
+	}{
+		// "execute" kind → "bash"
+		{"execute", "shell", "bash"},
+		{"execute", "Running: git status", "bash"},
+		{"execute", "", "bash"},
+
+		// Non-empty kind that isn't "execute" → kind itself
+		{"read", "Read file.go", "read"},
+		{"write", "Writing file.go", "write"},
+		{"list", "Listing .", "list"},
+
+		// Empty kind → falls back to title
+		{"", "bash", "bash"},
+		{"", "some_tool", "some_tool"},
+		{"", "", ""},
+	}
+
+	for _, tt := range tests {
+		name := fmt.Sprintf("kind=%q,title=%q", tt.kind, tt.title)
+		t.Run(name, func(t *testing.T) {
+			got := canonicalToolName(tt.kind, tt.title)
+			if got != tt.want {
+				t.Errorf("canonicalToolName(%q, %q) = %q, want %q", tt.kind, tt.title, got, tt.want)
+			}
+		})
 	}
 }
 
