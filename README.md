@@ -49,7 +49,7 @@ that as the plan. Otherwise it runs with a minimal default prompt.
 ```
 --prompt <file>           Explicit prompt file
 --plan <file>             Plan file (generates prompt from template)
--a, --agent <name>        Agent backend: "pi" or "kiro" (default: pi)
+-a, --agent <name>        Agent backend: "pi", "kiro", or "claude" (default: pi)
 -m, --max-iterations <n>  Max iterations, 0=unlimited (default: 0)
 --no-tui                  Disable TUI, plain stderr output
 --runs-dir <path>         Runs directory (default: .ralfinho/runs)
@@ -132,6 +132,34 @@ ralfinho --agent kiro --plan PLAN.md
 - Run artifacts (`events.jsonl`, `session.log`, `meta.json`) are populated
   identically to pi runs. `raw-output.log` contains raw JSON-RPC frames instead
   of JSONL.
+
+### claude
+
+Uses [Claude Code](https://code.claude.com) CLI in print mode with
+streaming JSON output.
+
+```bash
+ralfinho --agent claude --plan PLAN.md
+```
+
+**Prerequisites:**
+- `claude` CLI must be installed and available in your `PATH`. See
+  https://code.claude.com for installation.
+- You must be authenticated (`claude` login).
+- The `--dangerously-skip-permissions` flag is used to auto-approve tool
+  use. Ensure you have enabled this capability if required by your setup.
+
+**Behavioral differences from pi:**
+- Tool permissions are auto-skipped via `--dangerously-skip-permissions` —
+  ralfinho assumes sandboxing is handled externally.
+- Each iteration spawns a fresh `claude -p` subprocess (same one-shot
+  model as pi and kiro).
+- Claude Code may perform multiple internal turns (assistant → tool →
+  assistant) within a single iteration.
+- The model name is extracted from the streaming events (e.g.
+  `claude-sonnet-4-20250514`).
+- Run artifacts are populated identically to other backends.
+  `raw-output.log` contains raw stream-json lines.
 
 ## Run Artifacts
 
