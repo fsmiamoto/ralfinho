@@ -233,6 +233,12 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 		return iterInterrupted, nil
 	}
 
+	// If the parent context was cancelled (e.g. user quit the TUI),
+	// treat it as an interruption rather than a failure.
+	if err != nil && ctx.Err() != nil {
+		return iterInterrupted, nil
+	}
+
 	// Surface agent errors.
 	if err != nil {
 		return iterContinue, err

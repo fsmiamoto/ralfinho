@@ -877,10 +877,10 @@ func TestRun_ContextCancellation(t *testing.T) {
 	cancel() // Cancel before running.
 	result := r.Run(ctx)
 
-	// The agent returns context.Canceled, which surfaces as a failed status
-	// since the runner treats all errors from the agent as failures.
-	if result.Status != StatusFailed {
-		t.Errorf("status = %s, want %s", result.Status, StatusFailed)
+	// The agent returns context.Canceled, which the runner recognises as an
+	// interruption (e.g. user quit the TUI) rather than a failure.
+	if result.Status != StatusInterrupted {
+		t.Errorf("status = %s, want %s", result.Status, StatusInterrupted)
 	}
 }
 
