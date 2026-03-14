@@ -172,6 +172,8 @@ func newACPClient(ctx context.Context, rawWriter io.Writer, logWriter io.Writer)
 	}
 
 	if err := cmd.Start(); err != nil {
+		stdin.Close()
+		stdout.Close()
 		if errors.Is(err, exec.ErrNotFound) {
 			return nil, fmt.Errorf("kiro-cli not found in PATH. Install from https://kiro.dev/cli/")
 		}

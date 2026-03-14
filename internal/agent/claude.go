@@ -77,6 +77,7 @@ func (a *ClaudeAgent) RunIteration(ctx context.Context, prompt string, onEvent f
 	}
 
 	if err := cmd.Start(); err != nil {
+		stdout.Close()
 		return "", fmt.Errorf("claude: starting agent: %w", err)
 	}
 

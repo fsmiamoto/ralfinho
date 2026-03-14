@@ -66,6 +66,7 @@ func (a *PiAgent) RunIteration(ctx context.Context, prompt string, onEvent func(
 	}
 
 	if err := cmd.Start(); err != nil {
+		stdout.Close()
 		return "", fmt.Errorf("starting agent: %w", err)
 	}
 
