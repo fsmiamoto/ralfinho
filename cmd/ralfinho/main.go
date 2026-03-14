@@ -331,16 +331,14 @@ func formatRunSummaryDate(summary viewer.RunSummary) string {
 }
 
 // formatMetaDate parses an RFC3339 timestamp and returns a short date string.
+// RFC3339Nano handles both with and without fractional seconds.
 func formatMetaDate(s string) string {
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
-		t, err = time.Parse(time.RFC3339, s)
-		if err != nil {
-			if len(s) >= 16 {
-				return s[:16]
-			}
-			return s
+		if len(s) >= 16 {
+			return s[:16]
 		}
+		return s
 	}
 	return t.Format("2006-01-02 15:04")
 }

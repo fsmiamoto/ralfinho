@@ -358,10 +358,10 @@ func parseSummaryTime(raw string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 
+	// RFC3339Nano's reference format uses ".999999999" which means optional
+	// fractional seconds — it parses both "...T10:00:00Z" and
+	// "...T10:00:00.123456789Z" correctly.
 	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-		return t, true
-	}
-	if t, err := time.Parse(time.RFC3339, raw); err == nil {
 		return t, true
 	}
 	return time.Time{}, false
