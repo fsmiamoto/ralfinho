@@ -318,6 +318,19 @@ func (r *Runner) handleEvent(ev *Event) {
 			}
 		}
 
+	case EventToolExecutionUpdate:
+		// Log tool args that arrive after tool_start (common with Claude backend
+		// where args are streamed incrementally and only emitted in the update).
+		if ev.Args != nil {
+			var args ToolArgs
+			if err := json.Unmarshal(ev.Args, &args); err == nil && args.Command != "" {
+				r.logf("    cmd: %s\n", truncate(args.Command, 120))
+				r.sessionLogf("    cmd: %s\n", truncate(args.Command, 120))
+			} else {
+				r.sessionLogf("    args: %s\n", truncate(string(ev.Args), 200))
+			}
+		}
+
 	case EventToolExecutionEnd:
 		errStr := ""
 		if ev.IsError != nil && *ev.IsError {
