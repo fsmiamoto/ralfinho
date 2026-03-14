@@ -2401,6 +2401,534 @@ func TestBrowserJoinHints(t *testing.T) {
 	}
 }
 
+func TestBrowserDateOptions(t *testing.T) {
+	t.Run("empty input", func(t *testing.T) {
+		got := browserDateOptions(nil)
+		if len(got) != 0 {
+			t.Fatalf("browserDateOptions(nil) = %v, want []", got)
+		}
+	})
+
+	t.Run("deduplicates dates", func(t *testing.T) {
+		summaries := []viewer.RunSummary{
+			browserTestSummary("run-a", time.Date(2026, 3, 10, 9, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+			browserTestSummary("run-b", time.Date(2026, 3, 10, 14, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+			browserTestSummary("run-c", time.Date(2026, 3, 8, 9, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+		}
+		got := browserDateOptions(summaries)
+		want := []string{"2026-03-10", "2026-03-08"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("sorts descending with unknown last", func(t *testing.T) {
+		summaries := []viewer.RunSummary{
+			browserTestSummary("run-a", time.Date(2026, 3, 8, 9, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+			{RunID: "run-b"}, // zero time → "unknown"
+			browserTestSummary("run-c", time.Date(2026, 3, 10, 9, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+			browserTestSummary("run-d", time.Date(2026, 3, 9, 9, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+		}
+		got := browserDateOptions(summaries)
+		want := []string{"2026-03-10", "2026-03-09", "2026-03-08", "unknown"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("single entry", func(t *testing.T) {
+		summaries := []viewer.RunSummary{
+			browserTestSummary("run-a", time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC), "pi", "completed", "default"),
+		}
+		got := browserDateOptions(summaries)
+		want := []string{"2026-03-15"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+}
+
+func TestCycleBrowserOption(t *testing.T) {
+	options := []string{"alpha", "beta", "gamma"}
+
+	tests := []struct {
+		name    string
+		current string
+		options []string
+		want    string
+	}{
+		{
+			name:    "empty current returns first option",
+			current: "",
+			options: options,
+			want:    "alpha",
+		},
+		{
+			name:    "advances to next option",
+			current: "alpha",
+			options: options,
+			want:    "beta",
+		},
+		{
+			name:    "advances from middle",
+			current: "beta",
+			options: options,
+			want:    "gamma",
+		},
+		{
+			name:    "last option wraps to empty",
+			current: "gamma",
+			options: options,
+			want:    "",
+		},
+		{
+			name:    "not found returns empty",
+			current: "delta",
+			options: options,
+			want:    "",
+		},
+		{
+			name:    "case-insensitive match advances correctly",
+			current: "ALPHA",
+			options: options,
+			want:    "beta",
+		},
+		{
+			name:    "case-insensitive match on last wraps to empty",
+			current: "GAMMA",
+			options: options,
+			want:    "",
+		},
+		{
+			name:    "empty options returns empty",
+			current: "",
+			options: nil,
+			want:    "",
+		},
+		{
+			name:    "empty options with non-empty current returns empty",
+			current: "alpha",
+			options: nil,
+			want:    "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cycleBrowserOption(tc.current, tc.options)
+			if got != tc.want {
+				t.Errorf("cycleBrowserOption(%q, %v) = %q, want %q", tc.current, tc.options, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBrowserSummaryLess(t *testing.T) {
+	t0 := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+	t1 := time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC)
+
+	newer := browserTestSummary("run-b", t0, "kiro", "completed", "default")
+	older := browserTestSummary("run-a", t1, "pi", "failed", "plan")
+
+	tests := []struct {
+		name string
+		a, b viewer.RunSummary
+		mode browserSortMode
+		want bool
+	}{
+		// browserSortNewest: more recent time sorts first
+		{
+			name: "newest: newer before older",
+			a:    newer,
+			b:    older,
+			mode: browserSortNewest,
+			want: true,
+		},
+		{
+			name: "newest: older not before newer",
+			a:    older,
+			b:    newer,
+			mode: browserSortNewest,
+			want: false,
+		},
+		// browserSortOldest: earlier time sorts first
+		{
+			name: "oldest: older before newer",
+			a:    older,
+			b:    newer,
+			mode: browserSortOldest,
+			want: true,
+		},
+		{
+			name: "oldest: newer not before older",
+			a:    newer,
+			b:    older,
+			mode: browserSortOldest,
+			want: false,
+		},
+		// browserSortRunID: alphabetical by run ID
+		{
+			name: "runID: run-a before run-b",
+			a:    older,
+			b:    newer,
+			mode: browserSortRunID,
+			want: true,
+		},
+		{
+			name: "runID: run-b not before run-a",
+			a:    newer,
+			b:    older,
+			mode: browserSortRunID,
+			want: false,
+		},
+		// browserSortAgent
+		{
+			name: "agent: kiro before pi alphabetically",
+			a:    newer, // kiro
+			b:    older, // pi
+			mode: browserSortAgent,
+			want: true,
+		},
+		{
+			name: "agent: pi not before kiro",
+			a:    older, // pi
+			b:    newer, // kiro
+			mode: browserSortAgent,
+			want: false,
+		},
+		// browserSortStatus
+		{
+			name: "status: completed before failed",
+			a:    newer, // completed
+			b:    older, // failed
+			mode: browserSortStatus,
+			want: true,
+		},
+		// browserSortPrompt
+		{
+			name: "prompt: default before plan",
+			a:    newer, // default
+			b:    older, // plan
+			mode: browserSortPrompt,
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := browserSummaryLess(tc.a, tc.b, tc.mode)
+			if got != tc.want {
+				t.Errorf("browserSummaryLess(a, b, %q) = %v, want %v", tc.mode, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("newest tiebreak by runID descending", func(t *testing.T) {
+		a := browserTestSummary("run-z", t0, "pi", "completed", "default")
+		b := browserTestSummary("run-a", t0, "pi", "completed", "default")
+		// same time; "run-z" > "run-a" so a sorts first in newest mode
+		if !browserSummaryLess(a, b, browserSortNewest) {
+			t.Errorf("expected run-z to sort before run-a in newest mode (tiebreak)")
+		}
+		if browserSummaryLess(b, a, browserSortNewest) {
+			t.Errorf("expected run-a NOT to sort before run-z in newest mode (tiebreak)")
+		}
+	})
+
+	t.Run("oldest tiebreak by runID ascending", func(t *testing.T) {
+		a := browserTestSummary("run-a", t0, "pi", "completed", "default")
+		b := browserTestSummary("run-z", t0, "pi", "completed", "default")
+		// same time; "run-a" < "run-z" so a sorts first in oldest mode
+		if !browserSummaryLess(a, b, browserSortOldest) {
+			t.Errorf("expected run-a to sort before run-z in oldest mode (tiebreak)")
+		}
+	})
+}
+
+func TestBrowserCompareTextField(t *testing.T) {
+	t0 := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+	t1 := time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC)
+
+	a := browserTestSummary("run-a", t0, "pi", "completed", "default")
+	b := browserTestSummary("run-b", t1, "pi", "completed", "default")
+
+	t.Run("alphabetical order by value", func(t *testing.T) {
+		// "alpha" < "beta"
+		if !browserCompareTextField("alpha", "beta", a, b) {
+			t.Error("expected alpha < beta")
+		}
+		if browserCompareTextField("beta", "alpha", a, b) {
+			t.Error("expected beta not < alpha")
+		}
+	})
+
+	t.Run("empty/unknown ranks after normal values", func(t *testing.T) {
+		// "" has rank 1, "alpha" has rank 0
+		if browserCompareTextField("", "alpha", a, b) {
+			t.Error("expected empty string NOT to sort before alpha")
+		}
+		if !browserCompareTextField("alpha", "", a, b) {
+			t.Error("expected alpha to sort before empty string")
+		}
+	})
+
+	t.Run("equal value tiebreak by newer time first", func(t *testing.T) {
+		// a has newer time (t0 > t1), so a comes first when value is equal
+		if !browserCompareTextField("same", "same", a, b) {
+			t.Error("expected a (newer) to sort before b (older) on equal value")
+		}
+		if browserCompareTextField("same", "same", b, a) {
+			t.Error("expected b (older) NOT to sort before a (newer) on equal value")
+		}
+	})
+
+	t.Run("equal value equal time tiebreak by runID ascending", func(t *testing.T) {
+		// same time, run-a < run-b
+		x := browserTestSummary("run-a", t0, "pi", "completed", "default")
+		y := browserTestSummary("run-b", t0, "pi", "completed", "default")
+		if !browserCompareTextField("same", "same", x, y) {
+			t.Error("expected run-a to sort before run-b on equal value and equal time")
+		}
+		if browserCompareTextField("same", "same", y, x) {
+			t.Error("expected run-b NOT to sort before run-a on equal value and equal time")
+		}
+	})
+}
+
+func TestBrowserPrimaryRow(t *testing.T) {
+	startedAt := time.Date(2026, 3, 10, 9, 5, 0, 0, time.UTC)
+	summary := browserTestSummary("abc12345xyz", startedAt, "pi", "completed", "default")
+
+	t.Run("contains short ID and compact date", func(t *testing.T) {
+		row := browserPrimaryRow(summary, 80)
+		if !strings.Contains(row, "abc12345") {
+			t.Errorf("primaryRow %q does not contain short ID %q", row, "abc12345")
+		}
+		if !strings.Contains(row, "03-10 09:05") {
+			t.Errorf("primaryRow %q does not contain date %q", row, "03-10 09:05")
+		}
+	})
+
+	t.Run("no warning icon when no artifact issues", func(t *testing.T) {
+		row := browserPrimaryRow(summary, 80)
+		if strings.Contains(row, "⚠") {
+			t.Errorf("primaryRow %q unexpectedly contains warning icon", row)
+		}
+	})
+
+	t.Run("warning icon shown when artifact issues exist", func(t *testing.T) {
+		bad := summary
+		bad.ArtifactError = "meta.json missing"
+		row := browserPrimaryRow(bad, 80)
+		if !strings.Contains(row, "⚠") {
+			t.Errorf("primaryRow %q should contain warning icon for artifact issues", row)
+		}
+	})
+
+	t.Run("truncated to width", func(t *testing.T) {
+		row := browserPrimaryRow(summary, 10)
+		if w := len([]rune(row)); w > 10 {
+			t.Errorf("primaryRow rune width %d > max 10, row = %q", w, row)
+		}
+	})
+}
+
+func TestBrowserSecondaryRow(t *testing.T) {
+	startedAt := time.Date(2026, 3, 10, 9, 5, 0, 0, time.UTC)
+	summary := browserTestSummary("run-abc", startedAt, "pi", "completed", "default")
+
+	t.Run("contains agent, status, and prompt separated by bullets", func(t *testing.T) {
+		row := browserSecondaryRow(summary, 80)
+		if !strings.Contains(row, "pi") {
+			t.Errorf("secondaryRow %q does not contain agent %q", row, "pi")
+		}
+		if !strings.Contains(row, "completed") {
+			t.Errorf("secondaryRow %q does not contain status %q", row, "completed")
+		}
+		if !strings.Contains(row, "default") {
+			t.Errorf("secondaryRow %q does not contain prompt %q", row, "default")
+		}
+		if !strings.Contains(row, "•") {
+			t.Errorf("secondaryRow %q does not contain bullet separator", row)
+		}
+	})
+
+	t.Run("truncated to width", func(t *testing.T) {
+		row := browserSecondaryRow(summary, 10)
+		if w := len([]rune(row)); w > 10 {
+			t.Errorf("secondaryRow rune width %d > max 10, row = %q", w, row)
+		}
+	})
+}
+
+func TestBrowserLayoutHelpers(t *testing.T) {
+	newModel := func(width, height int) BrowserModel {
+		m := NewBrowserModel(nil)
+		m.width = width
+		m.height = height
+		return m
+	}
+
+	t.Run("browserPaneHeight is height-4, min 6", func(t *testing.T) {
+		tests := []struct {
+			height int
+			want   int
+		}{
+			{height: 30, want: 26},
+			{height: 10, want: 6},
+			{height: 8, want: 6},   // 8-4=4 < 6, clamped to 6
+			{height: 100, want: 96},
+		}
+		for _, tc := range tests {
+			m := newModel(100, tc.height)
+			got := m.browserPaneHeight()
+			if got != tc.want {
+				t.Errorf("browserPaneHeight(height=%d) = %d, want %d", tc.height, got, tc.want)
+			}
+		}
+	})
+
+	t.Run("useStackedBrowserLayout returns true when width < 80", func(t *testing.T) {
+		if !newModel(79, 40).useStackedBrowserLayout() {
+			t.Error("expected stacked layout for width 79")
+		}
+		if newModel(80, 40).useStackedBrowserLayout() {
+			t.Error("expected side-by-side layout for width 80")
+		}
+		if newModel(100, 40).useStackedBrowserLayout() {
+			t.Error("expected side-by-side layout for width 100")
+		}
+	})
+
+	t.Run("sessionsWidth returns full width in stacked layout", func(t *testing.T) {
+		m := newModel(60, 40)
+		if got := m.sessionsWidth(); got != 60 {
+			t.Errorf("sessionsWidth(stacked, width=60) = %d, want 60", got)
+		}
+	})
+
+	t.Run("sessionsWidth is 38% of width clamped between 20 and width-26", func(t *testing.T) {
+		// width=200: 38% = 76, maxW=174, min=20 → 76
+		m := newModel(200, 40)
+		got := m.sessionsWidth()
+		want := 76 // int(200*0.38) = 76
+		if got != want {
+			t.Errorf("sessionsWidth(width=200) = %d, want %d", got, want)
+		}
+
+		// width=100: 38% = 38, maxW=74, min=20 → 38
+		m = newModel(100, 40)
+		got = m.sessionsWidth()
+		want = 38
+		if got != want {
+			t.Errorf("sessionsWidth(width=100) = %d, want %d", got, want)
+		}
+	})
+
+	t.Run("sessionsWidth is clamped to min 34 for narrow side-by-side", func(t *testing.T) {
+		// width=85: 38% = 32, which is < 34, so clamped to 34; maxW=59 → 34
+		m := newModel(85, 40)
+		got := m.sessionsWidth()
+		if got < 20 {
+			t.Errorf("sessionsWidth(width=85) = %d, below absolute minimum 20", got)
+		}
+	})
+
+	t.Run("previewWidth returns full width in stacked layout", func(t *testing.T) {
+		m := newModel(60, 40)
+		if got := m.previewWidth(); got != 60 {
+			t.Errorf("previewWidth(stacked, width=60) = %d, want 60", got)
+		}
+	})
+
+	t.Run("previewWidth is width minus sessionsWidth, min 26", func(t *testing.T) {
+		m := newModel(100, 40)
+		sw := m.sessionsWidth()
+		got := m.previewWidth()
+		want := 100 - sw
+		if want < 26 {
+			want = 26
+		}
+		if got != want {
+			t.Errorf("previewWidth(width=100) = %d, want %d", got, want)
+		}
+	})
+
+	t.Run("visibleSessionRows is (sessionsPaneHeight-1)/2, min 1", func(t *testing.T) {
+		// side-by-side: paneHeight=height-4; sessionsPaneHeight=paneHeight
+		// height=40 → paneHeight=36 → rows=(36-1)/2=17
+		m := newModel(100, 40)
+		got := m.visibleSessionRows()
+		want := (m.sessionsPaneHeight() - 1) / 2
+		if want < 1 {
+			want = 1
+		}
+		if got != want {
+			t.Errorf("visibleSessionRows(width=100,height=40) = %d, want %d", got, want)
+		}
+		if got < 1 {
+			t.Errorf("visibleSessionRows should be at least 1, got %d", got)
+		}
+	})
+
+	t.Run("visibleSessionRows min 1 for very small pane", func(t *testing.T) {
+		// pathological small size: paneHeight clamps to 6; stacked: sessionsPaneHeight=40% of 6=2; rows=(2-1)/2=0 → clamped to 1
+		m := newModel(50, 8)
+		got := m.visibleSessionRows()
+		if got < 1 {
+			t.Errorf("visibleSessionRows should be at least 1, got %d", got)
+		}
+	})
+
+	t.Run("visiblePreviewLines is previewPaneHeight-1, min 1", func(t *testing.T) {
+		m := newModel(100, 40)
+		got := m.visiblePreviewLines()
+		want := m.previewPaneHeight() - 1
+		if want < 1 {
+			want = 1
+		}
+		if got != want {
+			t.Errorf("visiblePreviewLines(width=100,height=40) = %d, want %d", got, want)
+		}
+		if got < 1 {
+			t.Errorf("visiblePreviewLines should be at least 1, got %d", got)
+		}
+	})
+
+	t.Run("sessionsPaneHeight equals browserPaneHeight in side-by-side layout", func(t *testing.T) {
+		m := newModel(120, 40)
+		if m.useStackedBrowserLayout() {
+			t.Skip("layout is stacked, not side-by-side")
+		}
+		if got, want := m.sessionsPaneHeight(), m.browserPaneHeight(); got != want {
+			t.Errorf("sessionsPaneHeight = %d, want %d (browserPaneHeight)", got, want)
+		}
+	})
+
+	t.Run("previewPaneHeight equals browserPaneHeight in side-by-side layout", func(t *testing.T) {
+		m := newModel(120, 40)
+		if m.useStackedBrowserLayout() {
+			t.Skip("layout is stacked, not side-by-side")
+		}
+		if got, want := m.previewPaneHeight(), m.browserPaneHeight(); got != want {
+			t.Errorf("previewPaneHeight = %d, want %d (browserPaneHeight)", got, want)
+		}
+	})
+
+	t.Run("stacked: sessionsPaneHeight + previewPaneHeight equals browserPaneHeight", func(t *testing.T) {
+		m := newModel(60, 40)
+		if !m.useStackedBrowserLayout() {
+			t.Skip("layout is not stacked")
+		}
+		sh := m.sessionsPaneHeight()
+		ph := m.previewPaneHeight()
+		total := m.browserPaneHeight()
+		if sh+ph != total {
+			t.Errorf("sessionsPaneHeight(%d) + previewPaneHeight(%d) = %d, want %d (browserPaneHeight)", sh, ph, sh+ph, total)
+		}
+	})
+}
+
 // ===== Test helpers =====
 
 // makeSummaries creates N test summaries ordered by decreasing time.
