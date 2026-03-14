@@ -96,16 +96,7 @@ func runPlain(cfg *cli.Config, promptText string) {
 
 // runTUI runs the agent with the Bubble Tea TUI.
 func runTUI(cfg *cli.Config, promptText string) {
-	// Use a cancellable context so the runner (and its agent subprocess)
-	// is stopped when the user quits the TUI. Without this, the runner
-	// goroutine keeps running and meta.json may not be written before
-	// the process exits.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	eventCh := make(chan runner.Event, 256)
-
-	r := runner.New(runner.RunConfig{
+	result, err := runAgentWithTUI(runner.RunConfig{
 		Agent:         cfg.Agent,
 		Prompt:        promptText,
 		MaxIterations: cfg.MaxIterations,
@@ -113,8 +104,28 @@ func runTUI(cfg *cli.Config, promptText string) {
 		PromptSource:  cfg.InputMode,
 		PromptFile:    cfg.PromptFile,
 		PlanFile:      cfg.PlanFile,
-		EventChan:     eventCh,
 	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ralfinho: %v\n", err)
+		os.Exit(1)
+	}
+
+	printRunSummary("run summary", result)
+	exitForStatus(result.Status)
+}
+
+// runAgentWithTUI runs the agent in a background goroutine with a Bubble Tea
+// TUI in the foreground. It handles context cancellation, event forwarding,
+// and waiting for the runner to finish writing artifacts when the user quits
+// the TUI early. The caller is responsible for printing the result summary.
+func runAgentWithTUI(runCfg runner.RunConfig) (runner.RunResult, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eventCh := make(chan runner.Event, 256)
+	runCfg.EventChan = eventCh
+
+	r := runner.New(runCfg)
 
 	// Start the runner in a goroutine. Use a close-signal pattern instead
 	// of a buffered channel so both the DoneMsg goroutine and the early-quit
@@ -138,24 +149,20 @@ func runTUI(cfg *cli.Config, promptText string) {
 
 	finalModel, err := p.Run()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ralfinho: TUI error: %v\n", err)
-		os.Exit(1)
+		return runner.RunResult{}, fmt.Errorf("TUI error: %v", err)
 	}
 
-	// Print session summary to stderr.
 	if m, ok := finalModel.(tui.Model); ok {
-		if r := m.RunResult(); r != nil {
-			printRunSummary("run summary", *r)
-			exitForStatus(r.Status)
-		} else {
-			// User quit before runner finished — cancel the runner and
-			// wait for it to write meta.json before exiting.
-			cancel()
-			<-runDone
-			printRunSummary("run summary", runResult)
-			exitForStatus(runResult.Status)
+		if res := m.RunResult(); res != nil {
+			return *res, nil
 		}
+		// User quit before runner finished — cancel the runner and
+		// wait for it to write meta.json before returning.
+		cancel()
+		<-runDone
 	}
+
+	return runResult, nil
 }
 
 // printRunSummary prints a run summary to stderr.
@@ -359,15 +366,7 @@ func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
 	// accurately describes how the prompt was obtained.
 	inputMode, promptFile, planFile := resumePromptMeta(result.ResumeSource, result.ResumePath)
 
-	// Use a cancellable context so the runner (and its agent subprocess)
-	// is stopped when the TUI exits. Without this, quitting the TUI early
-	// leaves the runner goroutine running in the background, and re-opening
-	// the browser could accumulate multiple concurrent runners.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	eventCh := make(chan runner.Event, 256)
-	r := runner.New(runner.RunConfig{
+	runResult, err := runAgentWithTUI(runner.RunConfig{
 		Agent:         agentName,
 		Prompt:        promptText,
 		MaxIterations: cfg.MaxIterations,
@@ -375,42 +374,12 @@ func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
 		PromptSource:  inputMode,
 		PromptFile:    promptFile,
 		PlanFile:      planFile,
-		EventChan:     eventCh,
 	})
-
-	var runResult runner.RunResult
-	runDone := make(chan struct{})
-	go func() {
-		runResult = r.Run(ctx)
-		close(runDone)
-		close(eventCh)
-	}()
-
-	model := tui.NewModel(eventCh)
-	p := tea.NewProgram(model, tea.WithAltScreen())
-
-	go func() {
-		<-runDone
-		p.Send(tui.DoneMsg{Result: runResult})
-	}()
-
-	finalModel, err := p.Run()
 	if err != nil {
-		return fmt.Errorf("TUI error: %v", err)
+		return err
 	}
 
-	if m, ok := finalModel.(tui.Model); ok {
-		if res := m.RunResult(); res != nil {
-			printRunSummary("resumed run summary", *res)
-		} else {
-			// User quit before runner finished — cancel the runner and
-			// wait for it to write meta.json before returning.
-			cancel()
-			<-runDone
-			printRunSummary("resumed run summary", runResult)
-		}
-	}
-
+	printRunSummary("resumed run summary", runResult)
 	return nil
 }
 
