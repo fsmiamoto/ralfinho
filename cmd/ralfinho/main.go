@@ -398,6 +398,12 @@ func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
 	if m, ok := finalModel.(tui.Model); ok {
 		if runResult := m.RunResult(); runResult != nil {
 			printRunSummary("resumed run summary", *runResult)
+		} else {
+			// User quit before runner finished — cancel the runner and
+			// wait for it to write meta.json before returning.
+			cancel()
+			result := <-resultCh
+			printRunSummary("resumed run summary", result)
 		}
 	}
 
