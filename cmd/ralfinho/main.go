@@ -88,12 +88,7 @@ func runPlain(cfg *cli.Config, promptText string) {
 
 	result := r.Run(context.Background())
 
-	fmt.Fprintf(os.Stderr, "\n=== run summary ===\n")
-	fmt.Fprintf(os.Stderr, "run-id:     %s\n", result.RunID)
-	fmt.Fprintf(os.Stderr, "agent:      %s\n", result.Agent)
-	fmt.Fprintf(os.Stderr, "iterations: %d\n", result.Iterations)
-	fmt.Fprintf(os.Stderr, "status:     %s\n", result.Status)
-
+	printRunSummary("run summary", result)
 	exitForStatus(result.Status)
 }
 
@@ -138,27 +133,28 @@ func runTUI(cfg *cli.Config, promptText string) {
 	// Print session summary to stderr.
 	if m, ok := finalModel.(tui.Model); ok {
 		if r := m.RunResult(); r != nil {
-			fmt.Fprintf(os.Stderr, "\n=== run summary ===\n")
-			fmt.Fprintf(os.Stderr, "run-id:     %s\n", r.RunID)
-			fmt.Fprintf(os.Stderr, "agent:      %s\n", r.Agent)
-			fmt.Fprintf(os.Stderr, "iterations: %d\n", r.Iterations)
-			fmt.Fprintf(os.Stderr, "status:     %s\n", r.Status)
+			printRunSummary("run summary", *r)
 			exitForStatus(r.Status)
 		} else {
 			// User quit before runner finished — try to get result with a short timeout.
 			select {
 			case result := <-resultCh:
-				fmt.Fprintf(os.Stderr, "\n=== run summary ===\n")
-				fmt.Fprintf(os.Stderr, "run-id:     %s\n", result.RunID)
-				fmt.Fprintf(os.Stderr, "agent:      %s\n", result.Agent)
-				fmt.Fprintf(os.Stderr, "iterations: %d\n", result.Iterations)
-				fmt.Fprintf(os.Stderr, "status:     %s\n", result.Status)
+				printRunSummary("run summary", result)
 				exitForStatus(result.Status)
 			case <-time.After(500 * time.Millisecond):
 				// Runner still going; exit without summary.
 			}
 		}
 	}
+}
+
+// printRunSummary prints a run summary to stderr.
+func printRunSummary(label string, result runner.RunResult) {
+	fmt.Fprintf(os.Stderr, "\n=== %s ===\n", label)
+	fmt.Fprintf(os.Stderr, "run-id:     %s\n", result.RunID)
+	fmt.Fprintf(os.Stderr, "agent:      %s\n", result.Agent)
+	fmt.Fprintf(os.Stderr, "iterations: %d\n", result.Iterations)
+	fmt.Fprintf(os.Stderr, "status:     %s\n", result.Status)
 }
 
 func exitForStatus(status runner.Status) {
@@ -387,11 +383,7 @@ func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
 
 	if m, ok := finalModel.(tui.Model); ok {
 		if runResult := m.RunResult(); runResult != nil {
-			fmt.Fprintf(os.Stderr, "\n=== resumed run summary ===\n")
-			fmt.Fprintf(os.Stderr, "run-id:     %s\n", runResult.RunID)
-			fmt.Fprintf(os.Stderr, "agent:      %s\n", runResult.Agent)
-			fmt.Fprintf(os.Stderr, "iterations: %d\n", runResult.Iterations)
-			fmt.Fprintf(os.Stderr, "status:     %s\n", runResult.Status)
+			printRunSummary("resumed run summary", *runResult)
 		}
 	}
 
