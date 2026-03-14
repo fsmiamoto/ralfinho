@@ -45,6 +45,7 @@ func (a *PiAgent) RunIteration(ctx context.Context, prompt string, onEvent func(
 	defer os.Remove(tmpPath)
 
 	if err := os.Chmod(tmpPath, 0600); err != nil {
+		tmpFile.Close()
 		return "", fmt.Errorf("setting temp file permissions: %w", err)
 	}
 
