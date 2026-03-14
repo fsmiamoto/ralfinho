@@ -1109,3 +1109,113 @@ func TestACPClient_Notify(t *testing.T) {
 		t.Error("notification should not have an id")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// limitedBuffer tests
+// ---------------------------------------------------------------------------
+
+func TestLimitedBuffer_Empty(t *testing.T) {
+	b := newLimitedBuffer(16)
+	if got := b.String(); got != "" {
+		t.Errorf("empty buffer: String() = %q, want %q", got, "")
+	}
+}
+
+func TestLimitedBuffer_WriteFitsInBuffer(t *testing.T) {
+	b := newLimitedBuffer(16)
+	n, err := b.Write([]byte("hello"))
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if n != 5 {
+		t.Errorf("Write returned n=%d, want 5", n)
+	}
+	if got := b.String(); got != "hello" {
+		t.Errorf("String() = %q, want %q", got, "hello")
+	}
+}
+
+func TestLimitedBuffer_MultipleWritesFitInBuffer(t *testing.T) {
+	b := newLimitedBuffer(16)
+	b.Write([]byte("hello"))
+	b.Write([]byte(" "))
+	b.Write([]byte("world"))
+	if got := b.String(); got != "hello world" {
+		t.Errorf("String() = %q, want %q", got, "hello world")
+	}
+}
+
+func TestLimitedBuffer_ExactlyFillsBuffer(t *testing.T) {
+	b := newLimitedBuffer(5)
+	b.Write([]byte("abcde"))
+	if got := b.String(); got != "abcde" {
+		t.Errorf("String() = %q, want %q", got, "abcde")
+	}
+}
+
+func TestLimitedBuffer_Wraps_KeepsLastNBytes(t *testing.T) {
+	b := newLimitedBuffer(5)
+	b.Write([]byte("abcdefgh"))
+	// Buffer holds last 5 bytes: "defgh"
+	if got := b.String(); got != "defgh" {
+		t.Errorf("String() = %q, want %q", got, "defgh")
+	}
+}
+
+func TestLimitedBuffer_WrapsMultipleTimes(t *testing.T) {
+	b := newLimitedBuffer(4)
+	// Write more than 2x the buffer size to wrap multiple times.
+	b.Write([]byte("abcdefghijklm"))
+	// Buffer holds last 4 bytes: "jklm"
+	if got := b.String(); got != "jklm" {
+		t.Errorf("String() = %q, want %q", got, "jklm")
+	}
+}
+
+func TestLimitedBuffer_IncrementalWrapAcrossWrites(t *testing.T) {
+	b := newLimitedBuffer(6)
+	b.Write([]byte("abcd")) // 4 bytes, no wrap yet
+	b.Write([]byte("efgh")) // wraps: buffer now holds "efgh" in last 6 = "cdefgh"
+	if got := b.String(); got != "cdefgh" {
+		t.Errorf("String() = %q, want %q", got, "cdefgh")
+	}
+}
+
+func TestLimitedBuffer_SingleByteWrites(t *testing.T) {
+	b := newLimitedBuffer(3)
+	for _, c := range []byte("abcde") {
+		b.Write([]byte{c})
+	}
+	// Last 3 bytes: "cde"
+	if got := b.String(); got != "cde" {
+		t.Errorf("String() = %q, want %q", got, "cde")
+	}
+}
+
+func TestLimitedBuffer_WriteLargerThanBuffer(t *testing.T) {
+	b := newLimitedBuffer(3)
+	n, err := b.Write([]byte("hello world"))
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if n != 11 {
+		t.Errorf("Write returned n=%d, want 11", n)
+	}
+	// Last 3 bytes: "rld"
+	if got := b.String(); got != "rld" {
+		t.Errorf("String() = %q, want %q", got, "rld")
+	}
+}
+
+func TestLimitedBuffer_ImplementsIOWriter(t *testing.T) {
+	b := newLimitedBuffer(64)
+	// Verify it satisfies io.Writer at compile time via the variable.
+	var w io.Writer = b
+	_, err := w.Write([]byte("test"))
+	if err != nil {
+		t.Fatalf("Write via io.Writer: %v", err)
+	}
+	if got := b.String(); got != "test" {
+		t.Errorf("String() = %q, want %q", got, "test")
+	}
+}
