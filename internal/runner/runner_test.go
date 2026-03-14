@@ -75,6 +75,50 @@ func TestCompletionMarker_DetectedInText(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// askContinue
+// ---------------------------------------------------------------------------
+
+func TestRunner_AskContinue(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"y", "y\n", true},
+		{"yes", "yes\n", true},
+		{"Y uppercase", "Y\n", true},
+		{"YES uppercase", "YES\n", true},
+		{"n", "n\n", false},
+		{"no", "no\n", false},
+		{"empty", "\n", false},
+		{"random text", "maybe\n", false},
+		{"y with spaces", "  y  \n", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Runner{
+				stdin:  strings.NewReader(tt.input),
+				stderr: io.Discard,
+			}
+			if got := r.askContinue(); got != tt.want {
+				t.Errorf("askContinue() with input %q = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunner_AskContinue_ReadError(t *testing.T) {
+	// Empty reader simulates EOF / read error.
+	r := &Runner{
+		stdin:  strings.NewReader(""),
+		stderr: io.Discard,
+	}
+	if r.askContinue() {
+		t.Error("askContinue() should return false on read error")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // handleEvent
 // ---------------------------------------------------------------------------
 

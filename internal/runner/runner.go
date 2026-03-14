@@ -55,6 +55,7 @@ type RunResult struct {
 type Runner struct {
 	cfg         RunConfig
 	runID       string
+	stdin       io.Reader // user input (for interactive prompts)
 	stderr      io.Writer // progress output goes here
 	events      []Event   // all parsed events across all iterations
 	eventsFile  *os.File  // events.jsonl
@@ -71,6 +72,7 @@ func New(cfg RunConfig) *Runner {
 	return &Runner{
 		cfg:    cfg,
 		runID:  newUUID(),
+		stdin:  os.Stdin,
 		stderr: os.Stderr,
 	}
 }
@@ -345,7 +347,7 @@ func (r *Runner) askContinue() bool {
 	fmt.Fprintf(r.stderr, "\nInterrupted. Continue to next iteration? [y/n]: ")
 
 	var input string
-	if _, err := fmt.Fscan(os.Stdin, &input); err != nil {
+	if _, err := fmt.Fscan(r.stdin, &input); err != nil {
 		return false
 	}
 	input = strings.TrimSpace(strings.ToLower(input))
