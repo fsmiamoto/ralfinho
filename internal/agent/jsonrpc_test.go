@@ -480,6 +480,78 @@ func TestReadMessage_IOError_NotMalformedError(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Partial line before EOF (no trailing newline)
+// ---------------------------------------------------------------------------
+
+func TestCodec_ReadMessage_PartialLineValidJSON(t *testing.T) {
+	// A valid JSON message without a trailing newline (subprocess exited
+	// before writing the newline). readMessage should parse it successfully.
+	wire := `{"jsonrpc":"2.0","method":"last/message","params":{"done":true}}`
+	// No trailing "\n" — simulates EOF after the JSON body.
+
+	codec := newRPCCodec(strings.NewReader(wire), io.Discard)
+	msg, err := codec.readMessage()
+	if err != nil {
+		t.Fatalf("readMessage: expected success for partial valid JSON before EOF, got: %v", err)
+	}
+	if msg.Method != "last/message" {
+		t.Errorf("method = %q, want %q", msg.Method, "last/message")
+	}
+}
+
+func TestCodec_ReadMessage_PartialLineInvalidJSON(t *testing.T) {
+	// An invalid JSON fragment without a trailing newline before EOF.
+	// readMessage should return the underlying read error (wrapping EOF),
+	// not a malformedError.
+	wire := `{"incomplete": true, "no_close`
+	// No trailing "\n" — incomplete JSON before EOF.
+
+	codec := newRPCCodec(strings.NewReader(wire), io.Discard)
+	_, err := codec.readMessage()
+	if err == nil {
+		t.Fatal("expected error for partial invalid JSON before EOF, got nil")
+	}
+	// Should be an I/O error (wrapping EOF), not a malformedError.
+	var me *malformedError
+	if errors.As(err, &me) {
+		t.Error("partial line before EOF should produce an I/O error, not a *malformedError")
+	}
+}
+
+func TestCodec_ReadMessage_PartialLineEmptyAfterTrim(t *testing.T) {
+	// Whitespace-only partial line before EOF should return an I/O error.
+	wire := "   \t  "
+
+	codec := newRPCCodec(strings.NewReader(wire), io.Discard)
+	_, err := codec.readMessage()
+	if err == nil {
+		t.Fatal("expected error for whitespace-only input before EOF, got nil")
+	}
+}
+
+func TestCodec_ReadMessage_PartialLineResponse(t *testing.T) {
+	// A valid JSON-RPC response without a trailing newline.
+	wire := `{"jsonrpc":"2.0","id":5,"result":"final"}`
+
+	codec := newRPCCodec(strings.NewReader(wire), io.Discard)
+	msg, err := codec.readMessage()
+	if err != nil {
+		t.Fatalf("readMessage: expected success, got: %v", err)
+	}
+	id, ok := rpcIDInt(msg.ID)
+	if !ok || id != 5 {
+		t.Errorf("id = %v (ok=%v), want 5", id, ok)
+	}
+	var result string
+	if err := json.Unmarshal(msg.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if result != "final" {
+		t.Errorf("result = %q, want %q", result, "final")
+	}
+}
+
 func TestReadMessage_MalformedJSON_StreamPositionValid(t *testing.T) {
 	// After a malformed message, the stream position should be valid for
 	// the next readMessage call.
