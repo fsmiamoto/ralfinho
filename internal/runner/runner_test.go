@@ -515,7 +515,9 @@ func TestRunner_EventPersistence(t *testing.T) {
 		if merr != nil {
 			t.Fatalf("marshal event %d: %v", i, merr)
 		}
-		fmt.Fprintln(r.eventsFile, string(data))
+		if _, werr := fmt.Fprintln(r.eventsFile, string(data)); werr != nil {
+			t.Fatalf("write event %d: %v", i, werr)
+		}
 	}
 	r.eventsFile.Close()
 
