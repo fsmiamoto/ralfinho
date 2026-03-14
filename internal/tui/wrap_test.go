@@ -217,3 +217,102 @@ func TestWrapText_SingleLine(t *testing.T) {
 		t.Errorf("WrapText single line = %q, want %q", got, input)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// clipToWidth
+// ---------------------------------------------------------------------------
+
+func TestClipToWidth_ShortString(t *testing.T) {
+	got := clipToWidth("hello", 80)
+	if got != "hello" {
+		t.Errorf("clipToWidth short = %q, want %q", got, "hello")
+	}
+}
+
+func TestClipToWidth_ExactFit(t *testing.T) {
+	got := clipToWidth("abcde", 5)
+	if got != "abcde" {
+		t.Errorf("clipToWidth exact = %q, want %q", got, "abcde")
+	}
+}
+
+func TestClipToWidth_Truncates(t *testing.T) {
+	got := clipToWidth("hello world", 5)
+	if got != "hello" {
+		t.Errorf("clipToWidth truncate = %q, want %q", got, "hello")
+	}
+}
+
+func TestClipToWidth_Empty(t *testing.T) {
+	got := clipToWidth("", 10)
+	if got != "" {
+		t.Errorf("clipToWidth empty = %q, want %q", got, "")
+	}
+}
+
+func TestClipToWidth_CJK(t *testing.T) {
+	// CJK characters are 2 columns wide.
+	// "你好世" = 6 columns. With maxW=5, only "你好" (4 cols) fits.
+	got := clipToWidth("你好世", 5)
+	if got != "你好" {
+		t.Errorf("clipToWidth CJK = %q, want %q", got, "你好")
+	}
+}
+
+func TestClipToWidth_MixedASCIICJK(t *testing.T) {
+	// "a你b" = 1+2+1 = 4 columns. With maxW=3, only "a你" won't fit (3 cols needed for 你).
+	// "a" (1 col) fits, "你" needs 2 more → total 3, fits maxW=3.
+	got := clipToWidth("a你b", 3)
+	if got != "a你" {
+		t.Errorf("clipToWidth mixed = %q, want %q", got, "a你")
+	}
+}
+
+func TestClipToWidth_ZeroWidth(t *testing.T) {
+	got := clipToWidth("hello", 0)
+	if got != "" {
+		t.Errorf("clipToWidth zero = %q, want %q", got, "")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// truncateToWidth
+// ---------------------------------------------------------------------------
+
+func TestTruncateToWidth_ShortString(t *testing.T) {
+	got := truncateToWidth("hello", 80)
+	if got != "hello" {
+		t.Errorf("truncateToWidth short = %q, want %q", got, "hello")
+	}
+}
+
+func TestTruncateToWidth_Truncates(t *testing.T) {
+	got := truncateToWidth("hello world!", 8)
+	// maxW=8, reserves 3 for "...", clips to 5 cols → "hello" + "..."
+	if got != "hello..." {
+		t.Errorf("truncateToWidth truncate = %q, want %q", got, "hello...")
+	}
+}
+
+func TestTruncateToWidth_MinWidth(t *testing.T) {
+	// maxW < 4 is clamped to 4, so reserves 3 for "...", clips to 1 col.
+	got := truncateToWidth("hello world", 2)
+	if got != "h..." {
+		t.Errorf("truncateToWidth minWidth = %q, want %q", got, "h...")
+	}
+}
+
+func TestTruncateToWidth_ExactFit(t *testing.T) {
+	got := truncateToWidth("abcde", 5)
+	if got != "abcde" {
+		t.Errorf("truncateToWidth exact = %q, want %q", got, "abcde")
+	}
+}
+
+func TestTruncateToWidth_CJK(t *testing.T) {
+	// "你好世界" = 8 columns. With maxW=7, reserves 3 for "...", clips to 4 cols → "你好" + "..."
+	got := truncateToWidth("你好世界", 7)
+	if got != "你好..." {
+		t.Errorf("truncateToWidth CJK = %q, want %q", got, "你好...")
+	}
+}
