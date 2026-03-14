@@ -183,16 +183,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleRawEvent(ev runner.Event) (tea.Model, tea.Cmd) {
 	displayEvents := m.converter.Convert(&ev)
-	var cmds []tea.Cmd
-
 	for _, de := range displayEvents {
 		updated, _ := m.addDisplayEvent(de)
 		m = updated.(Model)
 	}
-
-	// Continue listening for more events.
-	cmds = append(cmds, m.waitForEvent())
-	return m, tea.Batch(cmds...)
+	return m, m.waitForEvent()
 }
 
 func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
