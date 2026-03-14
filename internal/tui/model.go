@@ -593,21 +593,7 @@ func (m Model) renderMain() string {
 
 	var lines []string
 	for i := start; i < end; i++ {
-		line := allLines[i]
-		if lipgloss.Width(line) > contentWidth {
-			w := 0
-			truncated := ""
-			for _, r := range line {
-				rw := runewidth.RuneWidth(r)
-				if w+rw > contentWidth {
-					break
-				}
-				truncated += string(r)
-				w += rw
-			}
-			line = truncated
-		}
-		lines = append(lines, line)
+		lines = append(lines, clipToWidth(allLines[i], contentWidth))
 	}
 
 	// Pad remaining.
@@ -692,17 +678,7 @@ func (m Model) renderStream() string {
 		ev := m.events[i]
 		line := ev.Summary
 		if lineWidth > 0 && lipgloss.Width(line) > lineWidth {
-			w := 0
-			truncated := ""
-			for _, r := range line {
-				rw := runewidth.RuneWidth(r)
-				if w+rw > lineWidth-3 {
-					break
-				}
-				truncated += string(r)
-				w += rw
-			}
-			line = truncated + "..."
+			line = truncateToWidth(line, lineWidth)
 		}
 
 		// Pad to fill width.
@@ -789,21 +765,7 @@ func (m Model) renderDetail() string {
 
 	var lines []string
 	for i := start; i < end; i++ {
-		line := allLines[i]
-		if lipgloss.Width(line) > contentWidth {
-			w := 0
-			truncated := ""
-			for _, r := range line {
-				rw := runewidth.RuneWidth(r)
-				if w+rw > contentWidth {
-					break
-				}
-				truncated += string(r)
-				w += rw
-			}
-			line = truncated
-		}
-		lines = append(lines, line)
+		lines = append(lines, clipToWidth(allLines[i], contentWidth))
 	}
 
 	// Pad.
@@ -894,20 +856,33 @@ func (m Model) renderStatus() string {
 	return statusBarStyle.Width(m.width).Render(bar)
 }
 
-// truncateToWidth truncates a string to fit within maxW visual columns.
-func truncateToWidth(s string, maxW int) string {
-	if maxW < 4 {
-		maxW = 4
+// clipToWidth truncates s so its visual width does not exceed maxW columns.
+// No suffix is appended; the string is simply clipped.
+func clipToWidth(s string, maxW int) string {
+	if lipgloss.Width(s) <= maxW {
+		return s
 	}
 	w := 0
 	truncated := ""
 	for _, r := range s {
 		rw := runewidth.RuneWidth(r)
-		if w+rw > maxW-3 {
-			return truncated + "..."
+		if w+rw > maxW {
+			break
 		}
 		truncated += string(r)
 		w += rw
 	}
-	return s
+	return truncated
+}
+
+// truncateToWidth truncates a string to fit within maxW visual columns,
+// appending "..." when truncation occurs.
+func truncateToWidth(s string, maxW int) string {
+	if maxW < 4 {
+		maxW = 4
+	}
+	if lipgloss.Width(s) <= maxW {
+		return s
+	}
+	return clipToWidth(s, maxW-3) + "..."
 }
