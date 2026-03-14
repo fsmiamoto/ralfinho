@@ -34,11 +34,6 @@ var (
 			Bold(true).
 			Padding(0, 1)
 
-	headerDimStyle = lipgloss.NewStyle().
-			Background(ColorAccent).
-			Foreground(lipgloss.Color("153")).
-			Bold(true).
-			Padding(0, 1)
 )
 
 // Selection styles.
@@ -74,8 +69,6 @@ var (
 			Foreground(ColorAccent).
 			Bold(true)
 
-	titleCountStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("245"))
 )
 
 // iterationBarStyle is used for iteration separators in the stream.
