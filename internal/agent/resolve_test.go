@@ -26,6 +26,16 @@ func TestResolve_Kiro(t *testing.T) {
 	}
 }
 
+func TestResolve_Claude(t *testing.T) {
+	a, err := Resolve("claude")
+	if err != nil {
+		t.Fatalf("Resolve('claude') error: %v", err)
+	}
+	if _, ok := a.(*ClaudeAgent); !ok {
+		t.Errorf("expected *ClaudeAgent, got %T", a)
+	}
+}
+
 func TestResolve_Unknown(t *testing.T) {
 	_, err := Resolve("unknown-agent")
 	if err == nil {
@@ -34,7 +44,7 @@ func TestResolve_Unknown(t *testing.T) {
 	if !strings.Contains(err.Error(), "unknown agent") {
 		t.Errorf("error should mention 'unknown agent', got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "pi, kiro") {
+	if !strings.Contains(err.Error(), "pi, kiro, claude") {
 		t.Errorf("error should list supported agents, got: %v", err)
 	}
 }
@@ -60,5 +70,17 @@ func TestResolve_ForwardsOptionsToKiro(t *testing.T) {
 	ka := a.(*KiroAgent)
 	if ka.opts.RawWriter != &buf {
 		t.Error("RawWriter option was not forwarded to KiroAgent")
+	}
+}
+
+func TestResolve_ForwardsOptionsToClaude(t *testing.T) {
+	var buf bytes.Buffer
+	a, err := Resolve("claude", WithRawWriter(&buf))
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	ca := a.(*ClaudeAgent)
+	if ca.opts.RawWriter != &buf {
+		t.Error("RawWriter option was not forwarded to ClaudeAgent")
 	}
 }
