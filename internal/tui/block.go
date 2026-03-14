@@ -220,11 +220,12 @@ func formatToolArgs(toolName string, rawArgs json.RawMessage) string {
 		}
 	}
 
-	// Last resort: first 80 chars of raw JSON.
+	// Last resort: first 80 runes of raw JSON.
 	s := string(rawArgs)
 	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > 80 {
-		return s[:77] + "..."
+	runes := []rune(s)
+	if len(runes) > 80 {
+		return string(runes[:77]) + "..."
 	}
 	return s
 }
