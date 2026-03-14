@@ -226,8 +226,7 @@ func (m *kiroEventMapper) mapAgentMessage(u sessionUpdate) {
 //   - "in_progress" with rawInput → immediate EventToolExecutionStart
 //   - "in_progress" without rawInput → buffer in pendingTool
 //   - no status, has rawInput → merge with pending buffer → emit EventToolExecutionStart
-//   - "completed" → flush pending start if needed, then EventToolExecutionEnd(isError=false)
-//   - "error" → flush pending start if needed, then EventToolExecutionEnd(isError=true)
+//   - "completed"/"error" → flush pending start if needed, then EventToolExecutionEnd
 func (m *kiroEventMapper) mapToolCall(u sessionUpdate) {
 	var tc struct {
 		ToolCallID string          `json:"toolCallId"`
@@ -265,26 +264,12 @@ func (m *kiroEventMapper) mapToolCall(u sessionUpdate) {
 			}
 		}
 
-	case "completed":
+	case "completed", "error":
 		// Flush any pending start before emitting the end event.
 		if m.pendingTool != nil && m.pendingTool.toolCallID == tc.ToolCallID {
 			m.flushPendingTool()
 		}
-		isErr := false
-		m.onEvent(events.Event{
-			Type:       events.EventToolExecutionEnd,
-			ToolCallID: tc.ToolCallID,
-			ToolName:   tc.Title,
-			Result:     tc.RawOutput,
-			IsError:    &isErr,
-		})
-
-	case "error":
-		// Flush any pending start before emitting the end event.
-		if m.pendingTool != nil && m.pendingTool.toolCallID == tc.ToolCallID {
-			m.flushPendingTool()
-		}
-		isErr := true
+		isErr := tc.Status == "error"
 		m.onEvent(events.Event{
 			Type:       events.EventToolExecutionEnd,
 			ToolCallID: tc.ToolCallID,
