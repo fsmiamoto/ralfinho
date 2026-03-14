@@ -254,6 +254,96 @@ func TestRunner_HandleEvent_ToolError(t *testing.T) {
 	}
 }
 
+func TestRunner_HandleEvent_ToolUpdate_LogsArgs(t *testing.T) {
+	r, runDir := newTestRunner(t)
+
+	var err error
+	r.sessionFile, err = os.Create(filepath.Join(runDir, "session.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.sessionFile.Close()
+
+	// Simulate tool start without args (Claude pattern), then update with args.
+	r.handleEvent(&Event{
+		Type:       EventToolExecutionStart,
+		ToolCallID: "tc-claude-1",
+		ToolName:   "bash",
+		// No Args — Claude sends them in the follow-up update.
+	})
+	r.handleEvent(&Event{
+		Type:       EventToolExecutionUpdate,
+		ToolCallID: "tc-claude-1",
+		ToolName:   "bash",
+		Args:       json.RawMessage(`{"command":"git status"}`),
+	})
+
+	data, err := os.ReadFile(filepath.Join(runDir, "session.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "git status") {
+		t.Errorf("session.log should contain tool args from update event, got: %s", content)
+	}
+}
+
+func TestRunner_HandleEvent_ToolUpdate_LogsNonCommandArgs(t *testing.T) {
+	r, runDir := newTestRunner(t)
+
+	var err error
+	r.sessionFile, err = os.Create(filepath.Join(runDir, "session.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.sessionFile.Close()
+
+	r.handleEvent(&Event{
+		Type:       EventToolExecutionUpdate,
+		ToolCallID: "tc-update-2",
+		ToolName:   "read",
+		Args:       json.RawMessage(`{"file_path":"/home/user/file.go"}`),
+	})
+
+	data, err := os.ReadFile(filepath.Join(runDir, "session.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "/home/user/file.go") {
+		t.Errorf("session.log should contain non-command args from update, got: %s", content)
+	}
+}
+
+func TestRunner_HandleEvent_ToolUpdate_NoArgsNoOutput(t *testing.T) {
+	r, runDir := newTestRunner(t)
+
+	var err error
+	r.sessionFile, err = os.Create(filepath.Join(runDir, "session.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.sessionFile.Close()
+
+	// Update without args (e.g. partial result only) — should not crash or log args.
+	r.handleEvent(&Event{
+		Type:       EventToolExecutionUpdate,
+		ToolCallID: "tc-update-3",
+		ToolName:   "bash",
+		// No Args.
+	})
+
+	data, err := os.ReadFile(filepath.Join(runDir, "session.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) > 0 {
+		t.Errorf("session.log should be empty when update has no args, got: %s", string(data))
+	}
+}
+
 func TestRunner_HandleEvent_TurnEnd_FlushesRemainingText(t *testing.T) {
 	r, runDir := newTestRunner(t)
 
