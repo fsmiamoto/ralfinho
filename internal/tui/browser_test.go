@@ -89,7 +89,7 @@ func TestBrowserModelSearchEditingAndSortCyclePreserveSelection(t *testing.T) {
 	if !m.searching {
 		t.Fatal("searching = false, want true after /")
 	}
-	for _, r := range []rune("kiro") {
+	for _, r := range "kiro" {
 		m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{r}}))
 	}
 	if m.searchQuery != "kiro" {
