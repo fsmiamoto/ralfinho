@@ -1052,13 +1052,11 @@ func renderBrowserStateCard(contentWidth, visibleLines int, title string, body [
 		cardWidth = contentWidth
 	}
 
-	cardBorder := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-	titleRenderer := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
+	cardBorder := browserCardBorder
+	titleRenderer := browserCardTitle
 	if warning {
-		cardBorder = cardBorder.BorderForeground(colorTool)
-		titleRenderer = titleRenderer.Foreground(colorTool)
-	} else {
-		cardBorder = cardBorder.BorderForeground(colorDim)
+		cardBorder = browserCardBorderWarning
+		titleRenderer = browserCardTitleWarning
 	}
 
 	bodyWidth := cardWidth - 4

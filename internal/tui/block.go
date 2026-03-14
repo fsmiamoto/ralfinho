@@ -160,7 +160,7 @@ func (b *MainBlock) renderToolCall(width int, spinnerView string) string {
 }
 
 func (b *MainBlock) renderInfo() string {
-	return lipgloss.NewStyle().Foreground(colorInfo).Render(b.InfoText)
+	return infoTextStyle.Render(b.InfoText)
 }
 
 // formatToolArgs extracts a human-friendly summary from tool arguments.
