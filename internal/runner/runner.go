@@ -244,15 +244,6 @@ func (r *Runner) sendEvent(ev Event) {
 	}
 }
 
-// sendSynthetic sends a synthetic event (e.g. iteration boundary) to the TUI.
-func (r *Runner) sendSynthetic(evType EventType, id string) {
-	r.sendEvent(Event{
-		Type:      evType,
-		ID:        id,
-		Timestamp: time.Now().Format(time.RFC3339),
-	})
-}
-
 // handleEvent processes a single parsed event, printing a summary to stderr,
 // accumulating assistant text, and writing to session.log.
 func (r *Runner) handleEvent(ev *Event) {
@@ -461,13 +452,14 @@ func newUUID() string {
 		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
 }
 
-// truncate shortens s to at most n characters, adding "…" if truncated.
+// truncate shortens s to at most n runes, adding "…" if truncated.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
 	if n < 1 {
 		return "…"
 	}
-	return s[:n-1] + "…"
+	return string(runes[:n-1]) + "…"
 }
