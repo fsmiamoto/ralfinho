@@ -1956,6 +1956,451 @@ func TestBrowserResumeResultIncludesAllFields(t *testing.T) {
 	}
 }
 
+// ===== Pure helper function tests =====
+
+func TestBrowserPromptDescriptor(t *testing.T) {
+	tests := []struct {
+		name   string
+		s      viewer.RunSummary
+		want   string
+	}{
+		{
+			name: "label and source",
+			s:    viewer.RunSummary{PromptLabel: "my-plan", PromptSource: "plan"},
+			want: "my-plan (plan)",
+		},
+		{
+			name: "label same as source",
+			s:    viewer.RunSummary{PromptLabel: "plan", PromptSource: "plan"},
+			want: "plan",
+		},
+		{
+			name: "empty label with effective prompt",
+			s:    viewer.RunSummary{PromptLabel: "", HasEffectivePrompt: true},
+			want: "saved prompt",
+		},
+		{
+			name: "unknown label with effective prompt",
+			s:    viewer.RunSummary{PromptLabel: "unknown", HasEffectivePrompt: true},
+			want: "saved prompt",
+		},
+		{
+			name: "empty label without effective prompt",
+			s:    viewer.RunSummary{PromptLabel: ""},
+			want: "unknown",
+		},
+		{
+			name: "source is unknown",
+			s:    viewer.RunSummary{PromptLabel: "my-plan", PromptSource: "unknown"},
+			want: "my-plan",
+		},
+		{
+			name: "source is empty",
+			s:    viewer.RunSummary{PromptLabel: "my-plan", PromptSource: ""},
+			want: "my-plan",
+		},
+		{
+			name: "whitespace label trimmed",
+			s:    viewer.RunSummary{PromptLabel: "  ", HasEffectivePrompt: false},
+			want: "unknown",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := browserPromptDescriptor(tt.s)
+			if got != tt.want {
+				t.Errorf("browserPromptDescriptor() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBrowserResumeSourceLabel(t *testing.T) {
+	tests := []struct {
+		source viewer.ResumeSource
+		want   string
+	}{
+		{viewer.ResumeSourceEffectivePrompt, "effective prompt"},
+		{viewer.ResumeSourcePromptFile, "prompt file"},
+		{viewer.ResumeSourcePlanFile, "plan file"},
+		{viewer.ResumeSourceDefault, "default prompt"},
+		{viewer.ResumeSource("something_else"), "saved artifacts"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got := browserResumeSourceLabel(tt.source)
+			if got != tt.want {
+				t.Errorf("browserResumeSourceLabel(%q) = %q, want %q", tt.source, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBrowserSummaryTime(t *testing.T) {
+	now := time.Date(2026, 3, 8, 12, 0, 0, 0, time.UTC)
+	earlier := now.Add(-time.Hour)
+
+	tests := []struct {
+		name string
+		s    viewer.RunSummary
+		want time.Time
+	}{
+		{"prefers StartedAt", viewer.RunSummary{StartedAt: now, SortTime: earlier}, now},
+		{"falls back to SortTime", viewer.RunSummary{SortTime: earlier}, earlier},
+		{"zero when both empty", viewer.RunSummary{}, time.Time{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := browserSummaryTime(tt.s)
+			if !got.Equal(tt.want) {
+				t.Errorf("browserSummaryTime() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBrowserCompactDate(t *testing.T) {
+	now := time.Date(2026, 3, 8, 14, 30, 0, 0, time.UTC)
+	got := browserCompactDate(viewer.RunSummary{StartedAt: now})
+	if got != "03-08 14:30" {
+		t.Errorf("browserCompactDate() = %q, want %q", got, "03-08 14:30")
+	}
+
+	got = browserCompactDate(viewer.RunSummary{})
+	if got != "unknown" {
+		t.Errorf("browserCompactDate(zero) = %q, want %q", got, "unknown")
+	}
+}
+
+func TestBrowserLongDate(t *testing.T) {
+	now := time.Date(2026, 3, 8, 14, 30, 45, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		s    viewer.RunSummary
+		want string
+	}{
+		{"with time", viewer.RunSummary{StartedAt: now}, "2026-03-08 14:30:45"},
+		{"zero with text", viewer.RunSummary{StartedAtText: "march 8"}, "march 8"},
+		{"zero without text", viewer.RunSummary{}, "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := browserLongDate(tt.s)
+			if got != tt.want {
+				t.Errorf("browserLongDate() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBrowserFilterLabel(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"", "all"},
+		{"  ", "all"},
+		{"pi", "pi"},
+	}
+	for _, tt := range tests {
+		got := browserFilterLabel(tt.input)
+		if got != tt.want {
+			t.Errorf("browserFilterLabel(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestBrowserSearchLabel(t *testing.T) {
+	tests := []struct {
+		query     string
+		searching bool
+		want      string
+	}{
+		{"", false, "all"},
+		{"", true, "(editing)"},
+		{"foo", false, "foo"},
+		{"foo", true, "foo_"},
+	}
+	for _, tt := range tests {
+		got := browserSearchLabel(tt.query, tt.searching)
+		if got != tt.want {
+			t.Errorf("browserSearchLabel(%q, %v) = %q, want %q", tt.query, tt.searching, got, tt.want)
+		}
+	}
+}
+
+func TestPadToWidth(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		width int
+		want  string
+	}{
+		{"pad short string", "hi", 5, "hi   "},
+		{"exact width", "hello", 5, "hello"},
+		{"truncate long", "hello world", 5, "he..."},
+		{"zero width", "hi", 0, "hi"},
+		{"negative width", "hi", -1, "hi"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := padToWidth(tt.input, tt.width)
+			if got != tt.want {
+				t.Errorf("padToWidth(%q, %d) = %q, want %q", tt.input, tt.width, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBrowserFacetSortKey(t *testing.T) {
+	tests := []struct {
+		input    string
+		wantRank int
+		wantKey  string
+	}{
+		{"Pi", 0, "pi"},
+		{"unknown", 1, "unknown"},
+		{"", 1, ""},
+		{"  ", 1, ""},
+		{"Kiro", 0, "kiro"},
+	}
+	for _, tt := range tests {
+		rank, key := browserFacetSortKey(tt.input)
+		if rank != tt.wantRank || key != tt.wantKey {
+			t.Errorf("browserFacetSortKey(%q) = (%d, %q), want (%d, %q)", tt.input, rank, key, tt.wantRank, tt.wantKey)
+		}
+	}
+}
+
+func TestBrowserFacetLess(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want bool
+	}{
+		{"pi", "unknown", true},         // known < unknown
+		{"unknown", "pi", false},        // unknown > known
+		{"alpha", "beta", true},         // alphabetical within same rank
+		{"", "unknown", true},           // both rank 1, "" < "unknown" alphabetically
+		{"unknown", "", false},          // both rank 1, "unknown" > "" alphabetically
+	}
+	for _, tt := range tests {
+		got := browserFacetLess(tt.a, tt.b)
+		if got != tt.want {
+			t.Errorf("browserFacetLess(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
+func TestBrowserArtifactState(t *testing.T) {
+	tests := []struct {
+		ok   bool
+		err  string
+		want string
+	}{
+		{true, "", "ok"},
+		{true, "ignored error", "ok"},
+		{false, "corrupt file", "corrupt file"},
+		{false, "", "unavailable"},
+	}
+	for _, tt := range tests {
+		got := browserArtifactState(tt.ok, tt.err)
+		if got != tt.want {
+			t.Errorf("browserArtifactState(%v, %q) = %q, want %q", tt.ok, tt.err, got, tt.want)
+		}
+	}
+}
+
+func TestBrowserMetaState(t *testing.T) {
+	tests := []struct {
+		name string
+		s    viewer.RunSummary
+		want string
+	}{
+		{"has meta", viewer.RunSummary{HasMeta: true}, "ok"},
+		{"no meta with error", viewer.RunSummary{ArtifactError: "missing"}, "missing"},
+		{"no meta no error", viewer.RunSummary{}, "unavailable"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := browserMetaState(tt.s)
+			if got != tt.want {
+				t.Errorf("browserMetaState() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBrowserOpenState(t *testing.T) {
+	got := browserOpenState(viewer.RunActionState{Available: true})
+	if got != "available" {
+		t.Errorf("browserOpenState(available) = %q, want %q", got, "available")
+	}
+
+	got = browserOpenState(viewer.RunActionState{DisabledReason: "no events"})
+	if got != "unavailable — no events" {
+		t.Errorf("browserOpenState(disabled) = %q, want %q", got, "unavailable — no events")
+	}
+}
+
+func TestBrowserDeleteState(t *testing.T) {
+	got := browserDeleteState(viewer.RunActionState{Available: true})
+	if got != "available" {
+		t.Errorf("browserDeleteState(available) = %q, want %q", got, "available")
+	}
+
+	got = browserDeleteState(viewer.RunActionState{DisabledReason: "protected"})
+	if got != "unavailable — protected" {
+		t.Errorf("browserDeleteState(disabled) = %q, want %q", got, "unavailable — protected")
+	}
+}
+
+func TestBrowserResumeState(t *testing.T) {
+	got := browserResumeState(viewer.ResumeActionState{
+		RunActionState: viewer.RunActionState{Available: true},
+		Source:         viewer.ResumeSourcePlanFile,
+	})
+	if got != "available from plan file" {
+		t.Errorf("browserResumeState(available) = %q, want %q", got, "available from plan file")
+	}
+
+	got = browserResumeState(viewer.ResumeActionState{
+		RunActionState: viewer.RunActionState{DisabledReason: "no prompt"},
+	})
+	if got != "unavailable — no prompt" {
+		t.Errorf("browserResumeState(disabled) = %q, want %q", got, "unavailable — no prompt")
+	}
+}
+
+func TestDefaultBrowserReason(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"", "not available"},
+		{"  ", "not available"},
+		{"missing file", "missing file"},
+	}
+	for _, tt := range tests {
+		got := defaultBrowserReason(tt.input)
+		if got != tt.want {
+			t.Errorf("defaultBrowserReason(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestBrowserPreviewTextStandalone(t *testing.T) {
+	t.Run("nil summary", func(t *testing.T) {
+		got := browserPreviewText(nil)
+		if !strings.Contains(got, "No saved runs") {
+			t.Errorf("nil summary text should mention no saved runs, got %q", got)
+		}
+	})
+
+	t.Run("full summary", func(t *testing.T) {
+		now := time.Date(2026, 3, 8, 14, 30, 45, 0, time.UTC)
+		s := &viewer.RunSummary{
+			RunID:               "abc-123",
+			Dir:                 "/tmp/abc-123",
+			StartedAt:           now,
+			Agent:               "pi",
+			Status:              "completed",
+			IterationsCompleted: 3,
+			PromptLabel:         "my-plan",
+			PromptSource:        "plan",
+			PromptPath:          "/path/to/plan.md",
+			HasMeta:             true,
+			HasEvents:           true,
+			HasEffectivePrompt:  true,
+			Actions: viewer.RunActions{
+				Open:   viewer.RunActionState{Available: true},
+				Delete: viewer.RunActionState{Available: true},
+				Resume: viewer.ResumeActionState{
+					RunActionState: viewer.RunActionState{Available: true},
+					Source:         viewer.ResumeSourcePlanFile,
+					Path:           "/path/to/plan.md",
+				},
+			},
+		}
+		got := browserPreviewText(s)
+		for _, want := range []string{
+			"abc-123", "pi", "completed", "3", "/tmp/abc-123",
+			"my-plan (plan)", "/path/to/plan.md",
+			"meta.json: ok", "events.jsonl: ok", "effective-prompt.md: ok",
+			"open: available", "resume: available from plan file", "delete: available",
+			"source path: /path/to/plan.md",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("browserPreviewText missing %q in:\n%s", want, got)
+			}
+		}
+	})
+
+	t.Run("summary with errors shows notes", func(t *testing.T) {
+		s := &viewer.RunSummary{
+			RunID:         "err-run",
+			Dir:           "/tmp/err-run",
+			Agent:         "pi",
+			Status:        "failed",
+			ArtifactError: "meta.json missing",
+			EventsError:   "events corrupt",
+		}
+		got := browserPreviewText(s)
+		if !strings.Contains(got, "Notes") {
+			t.Error("expected Notes section for errors")
+		}
+		if !strings.Contains(got, "meta.json missing") {
+			t.Error("expected artifact error in notes")
+		}
+		if !strings.Contains(got, "events corrupt") {
+			t.Error("expected events error in notes")
+		}
+	})
+
+	t.Run("zero time with text shows raw date", func(t *testing.T) {
+		s := &viewer.RunSummary{
+			RunID:         "raw-date",
+			Dir:           "/tmp/raw-date",
+			Agent:         "pi",
+			Status:        "completed",
+			StartedAtText: "march 8 2026",
+		}
+		got := browserPreviewText(s)
+		if !strings.Contains(got, "Started raw: march 8 2026") {
+			t.Errorf("expected raw date in output, got:\n%s", got)
+		}
+	})
+}
+
+func TestBrowserSummaryDate(t *testing.T) {
+	now := time.Date(2026, 3, 8, 14, 30, 0, 0, time.UTC)
+
+	got := browserSummaryDate(viewer.RunSummary{StartedAt: now})
+	if got != "2026-03-08" {
+		t.Errorf("browserSummaryDate() = %q, want %q", got, "2026-03-08")
+	}
+
+	got = browserSummaryDate(viewer.RunSummary{})
+	if got != "unknown" {
+		t.Errorf("browserSummaryDate(zero) = %q, want %q", got, "unknown")
+	}
+}
+
+func TestBrowserJoinHints(t *testing.T) {
+	prefix := []browserHint{{Key: "a", Label: "1"}}
+	rest := browserHint{Key: "b", Label: "2"}
+
+	got := browserJoinHints(prefix, rest)
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].Key != "a" || got[1].Key != "b" {
+		t.Errorf("got %v, want [{a 1} {b 2}]", got)
+	}
+	// Verify it doesn't modify the prefix slice.
+	if len(prefix) != 1 {
+		t.Error("prefix was modified")
+	}
+}
+
 // ===== Test helpers =====
 
 // makeSummaries creates N test summaries ordered by decreasing time.
