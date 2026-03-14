@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -168,11 +169,30 @@ func TestFormatToolArgs_RawJSONFallback_Truncation(t *testing.T) {
 	longValue := `{"key":"` + string(make([]byte, 80)) + `"}`
 	args := json.RawMessage(longValue)
 	got := formatToolArgs("totally_unknown", args)
-	if len(got) > 80 {
-		t.Errorf("expected truncation to 80 chars, got %d chars", len(got))
+	if len([]rune(got)) > 80 {
+		t.Errorf("expected truncation to 80 runes, got %d runes", len([]rune(got)))
 	}
 	if got[len(got)-3:] != "..." {
 		t.Errorf("expected truncated string to end with ..., got %q", got[len(got)-3:])
+	}
+}
+
+func TestFormatToolArgs_RawJSONFallback_Truncation_MultiByte(t *testing.T) {
+	// Multi-byte characters must be truncated by rune, not by byte,
+	// to avoid splitting a character in the middle.
+	longValue := `{"key":"` + strings.Repeat("日本語", 30) + `"}`
+	args := json.RawMessage(longValue)
+	got := formatToolArgs("totally_unknown", args)
+	runes := []rune(got)
+	if len(runes) > 80 {
+		t.Errorf("expected truncation to ≤80 runes, got %d runes", len(runes))
+	}
+	if got[len(got)-3:] != "..." {
+		t.Errorf("expected truncated string to end with ..., got %q", got[len(got)-3:])
+	}
+	// Verify the result is valid UTF-8 by checking round-trip.
+	if string([]rune(got)) != got {
+		t.Error("truncated result is not valid UTF-8")
 	}
 }
 
