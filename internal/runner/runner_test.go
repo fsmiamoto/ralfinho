@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fsmiamoto/ralfinho/internal/events"
 )
 
 func TestNewUUID_Format(t *testing.T) {
@@ -559,5 +562,351 @@ func TestRunner_OpenCloseRunFiles(t *testing.T) {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			t.Errorf("expected %s to exist after openRunFiles", name)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fake agent for Run() integration tests
+// ---------------------------------------------------------------------------
+
+// fakeAgent implements the agent.Agent interface for testing the Run loop.
+type fakeAgent struct {
+	// responses is a queue of (assistantText, error) pairs, one per iteration.
+	responses []fakeResponse
+	callCount int
+}
+
+type fakeResponse struct {
+	text   string
+	err    error
+	events []events.Event // events to emit via onEvent
+}
+
+func (f *fakeAgent) RunIteration(_ context.Context, _ string, onEvent func(events.Event)) (string, error) {
+	if f.callCount >= len(f.responses) {
+		return "", fmt.Errorf("fakeAgent: no more responses (call %d)", f.callCount)
+	}
+	resp := f.responses[f.callCount]
+	f.callCount++
+
+	for _, ev := range resp.events {
+		onEvent(ev)
+	}
+
+	return resp.text, resp.err
+}
+
+// newTestRunnerWithAgent creates a Runner with a pre-injected fake agent.
+func newTestRunnerWithAgent(t *testing.T, fa *fakeAgent, cfg RunConfig) *Runner {
+	t.Helper()
+	if cfg.RunsDir == "" {
+		cfg.RunsDir = t.TempDir()
+	}
+	r := New(cfg)
+	r.iterAgent = fa
+	r.stderr = io.Discard
+	return r
+}
+
+// ---------------------------------------------------------------------------
+// Run() integration tests
+// ---------------------------------------------------------------------------
+
+func TestRun_SingleIterationComplete(t *testing.T) {
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{text: "Done! " + completionMarker},
+		},
+	}
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:  "test",
+		Prompt: "do something",
+	})
+
+	result := r.Run(context.Background())
+
+	if result.Status != StatusCompleted {
+		t.Errorf("status = %s, want %s", result.Status, StatusCompleted)
+	}
+	if result.Iterations != 1 {
+		t.Errorf("iterations = %d, want 1", result.Iterations)
+	}
+	if fa.callCount != 1 {
+		t.Errorf("agent called %d times, want 1", fa.callCount)
+	}
+}
+
+func TestRun_MultipleIterationsBeforeComplete(t *testing.T) {
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{text: "working..."},
+			{text: "still working..."},
+			{text: "all done " + completionMarker},
+		},
+	}
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:  "test",
+		Prompt: "do something complex",
+	})
+
+	result := r.Run(context.Background())
+
+	if result.Status != StatusCompleted {
+		t.Errorf("status = %s, want %s", result.Status, StatusCompleted)
+	}
+	if result.Iterations != 3 {
+		t.Errorf("iterations = %d, want 3", result.Iterations)
+	}
+}
+
+func TestRun_MaxIterationsReached(t *testing.T) {
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{text: "iteration 1"},
+			{text: "iteration 2"},
+			{text: "iteration 3 (should not run)"},
+		},
+	}
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:         "test",
+		Prompt:        "never finishes",
+		MaxIterations: 2,
+	})
+
+	result := r.Run(context.Background())
+
+	if result.Status != StatusMaxIterationsReached {
+		t.Errorf("status = %s, want %s", result.Status, StatusMaxIterationsReached)
+	}
+	if result.Iterations != 2 {
+		t.Errorf("iterations = %d, want 2", result.Iterations)
+	}
+	if fa.callCount != 2 {
+		t.Errorf("agent called %d times, want 2", fa.callCount)
+	}
+}
+
+func TestRun_AgentError(t *testing.T) {
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{text: "first ok"},
+			{text: "", err: fmt.Errorf("subprocess crashed")},
+		},
+	}
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:  "test",
+		Prompt: "will fail",
+	})
+
+	result := r.Run(context.Background())
+
+	if result.Status != StatusFailed {
+		t.Errorf("status = %s, want %s", result.Status, StatusFailed)
+	}
+	if result.Iterations != 2 {
+		t.Errorf("iterations = %d, want 2", result.Iterations)
+	}
+}
+
+func TestRun_WritesMetaJSON(t *testing.T) {
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{text: completionMarker},
+		},
+	}
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:        "test",
+		Prompt:       "check meta",
+		PromptSource: "prompt",
+		PromptFile:   "/tmp/test.md",
+	})
+
+	result := r.Run(context.Background())
+
+	metaPath := filepath.Join(r.cfg.RunsDir, r.runID, "meta.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("reading meta.json: %v", err)
+	}
+
+	var meta RunMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatalf("parsing meta.json: %v", err)
+	}
+
+	if meta.RunID != result.RunID {
+		t.Errorf("meta.run_id = %q, want %q", meta.RunID, result.RunID)
+	}
+	if meta.Status != "completed" {
+		t.Errorf("meta.status = %q, want %q", meta.Status, "completed")
+	}
+	if meta.Agent != "test" {
+		t.Errorf("meta.agent = %q, want %q", meta.Agent, "test")
+	}
+	if meta.PromptSource != "prompt" {
+		t.Errorf("meta.prompt_source = %q, want %q", meta.PromptSource, "prompt")
+	}
+	if meta.PromptFile != "/tmp/test.md" {
+		t.Errorf("meta.prompt_file = %q, want %q", meta.PromptFile, "/tmp/test.md")
+	}
+	if meta.IterationsCompleted != 1 {
+		t.Errorf("meta.iterations_completed = %d, want 1", meta.IterationsCompleted)
+	}
+}
+
+func TestRun_WritesEffectivePrompt(t *testing.T) {
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{text: completionMarker},
+		},
+	}
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:  "test",
+		Prompt: "the effective prompt text",
+	})
+
+	r.Run(context.Background())
+
+	promptPath := filepath.Join(r.cfg.RunsDir, r.runID, "effective-prompt.md")
+	data, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("reading effective-prompt.md: %v", err)
+	}
+	if string(data) != "the effective prompt text" {
+		t.Errorf("effective prompt = %q, want %q", string(data), "the effective prompt text")
+	}
+}
+
+func TestRun_PersistsEventsToJSONL(t *testing.T) {
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{
+				text: completionMarker,
+				events: []events.Event{
+					{Type: events.EventMessageStart, Message: json.RawMessage(`{"role":"assistant","model":"test"}`)},
+					{Type: events.EventMessageEnd},
+					{Type: events.EventTurnEnd},
+				},
+			},
+		},
+	}
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:  "test",
+		Prompt: "check events",
+	})
+
+	r.Run(context.Background())
+
+	eventsPath := filepath.Join(r.cfg.RunsDir, r.runID, "events.jsonl")
+	data, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatalf("reading events.jsonl: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	// 3 agent events emitted
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines in events.jsonl, got %d", len(lines))
+	}
+
+	// Verify first event type.
+	var first events.Event
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatalf("parsing first event: %v", err)
+	}
+	if first.Type != events.EventMessageStart {
+		t.Errorf("first event type = %s, want %s", first.Type, events.EventMessageStart)
+	}
+}
+
+func TestRun_ForwardsEventsToTUIChannel(t *testing.T) {
+	ch := make(chan Event, 100)
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{
+				text: completionMarker,
+				events: []events.Event{
+					{Type: events.EventMessageStart, Message: json.RawMessage(`{"role":"assistant","model":"test"}`)},
+					{Type: events.EventTurnEnd},
+				},
+			},
+		},
+	}
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:     "test",
+		Prompt:    "check tui",
+		EventChan: ch,
+	})
+
+	r.Run(context.Background())
+
+	// Drain the channel and count events.
+	// We expect: 1 synthetic iteration event + 2 agent events = 3.
+	var received []Event
+	for {
+		select {
+		case ev := <-ch:
+			received = append(received, ev)
+		default:
+			goto done
+		}
+	}
+done:
+	if len(received) < 3 {
+		t.Errorf("expected at least 3 events on TUI channel, got %d", len(received))
+	}
+
+	// First event should be the synthetic iteration event.
+	if received[0].Type != EventIteration {
+		t.Errorf("first TUI event type = %s, want %s", received[0].Type, EventIteration)
+	}
+}
+
+func TestRun_ContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{text: "", err: context.Canceled},
+		},
+	}
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:  "test",
+		Prompt: "will cancel",
+	})
+
+	cancel() // Cancel before running.
+	result := r.Run(ctx)
+
+	// The agent returns context.Canceled, which surfaces as a failed status
+	// since the runner treats all errors from the agent as failures.
+	if result.Status != StatusFailed {
+		t.Errorf("status = %s, want %s", result.Status, StatusFailed)
+	}
+}
+
+func TestRun_StoresEventsInMemory(t *testing.T) {
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{
+				text: completionMarker,
+				events: []events.Event{
+					{Type: events.EventSession, ID: "sess-1"},
+					{Type: events.EventTurnEnd},
+				},
+			},
+		},
+	}
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:  "test",
+		Prompt: "check memory",
+	})
+
+	r.Run(context.Background())
+
+	if len(r.events) != 2 {
+		t.Fatalf("expected 2 events in memory, got %d", len(r.events))
+	}
+	if r.events[0].Type != events.EventSession {
+		t.Errorf("first in-memory event = %s, want %s", r.events[0].Type, events.EventSession)
 	}
 }
