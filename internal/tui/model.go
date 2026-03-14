@@ -857,17 +857,18 @@ func clipToWidth(s string, maxW int) string {
 	if lipgloss.Width(s) <= maxW {
 		return s
 	}
+	var b strings.Builder
+	b.Grow(len(s)) // at most as long as the original
 	w := 0
-	truncated := ""
 	for _, r := range s {
 		rw := runewidth.RuneWidth(r)
 		if w+rw > maxW {
 			break
 		}
-		truncated += string(r)
+		b.WriteRune(r)
 		w += rw
 	}
-	return truncated
+	return b.String()
 }
 
 // truncateToWidth truncates a string to fit within maxW visual columns,
