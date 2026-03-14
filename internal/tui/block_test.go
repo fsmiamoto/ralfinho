@@ -223,6 +223,70 @@ func TestBuildBlock_ToolDisplayArgs_FallsBackWhenEmpty(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// truncateResult
+// ---------------------------------------------------------------------------
+
+func TestTruncateResult(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   string
+		maxLines int
+		want     string
+	}{
+		{
+			name:     "empty string",
+			result:   "",
+			maxLines: 6,
+			want:     "",
+		},
+		{
+			name:     "single line within limit",
+			result:   "hello world",
+			maxLines: 6,
+			want:     "hello world",
+		},
+		{
+			name:     "exactly at limit",
+			result:   "line1\nline2\nline3",
+			maxLines: 3,
+			want:     "line1\nline2\nline3",
+		},
+		{
+			name:     "exceeds limit by one",
+			result:   "line1\nline2\nline3\nline4",
+			maxLines: 3,
+			want:     "line1\nline2\nline3\n… (1 more lines)",
+		},
+		{
+			name:     "exceeds limit by many",
+			result:   "a\nb\nc\nd\ne\nf\ng\nh\ni\nj",
+			maxLines: 3,
+			want:     "a\nb\nc\n… (7 more lines)",
+		},
+		{
+			name:     "maxLines 1",
+			result:   "first\nsecond\nthird",
+			maxLines: 1,
+			want:     "first\n… (2 more lines)",
+		},
+		{
+			name:     "trailing newline counts as extra line",
+			result:   "line1\nline2\n",
+			maxLines: 2,
+			want:     "line1\nline2\n… (1 more lines)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateResult(tt.result, tt.maxLines)
+			if got != tt.want {
+				t.Errorf("truncateResult(%q, %d) = %q, want %q", tt.result, tt.maxLines, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildBlock_ToolUpdate_ToolDisplayArgs_UsedDirectly(t *testing.T) {
 	m := &Model{activeToolIdx: -1}
 
