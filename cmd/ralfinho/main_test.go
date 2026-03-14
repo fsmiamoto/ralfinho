@@ -375,3 +375,36 @@ func resolvePromptFromConfig(cfg *cliConfig) (string, error) {
 		return "", fmt.Errorf("unknown input mode %q", cfg.InputMode)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// isSubdir
+// ---------------------------------------------------------------------------
+
+func TestIsSubdir(t *testing.T) {
+	tests := []struct {
+		name   string
+		parent string
+		child  string
+		want   bool
+	}{
+		{"direct child", "/runs", "/runs/abc123", true},
+		{"same dir", "/runs", "/runs", false},
+		{"nested child rejected", "/runs", "/runs/abc/nested", false},
+		{"sibling dir", "/runs", "/other/abc123", false},
+		{"prefix attack", "/runs", "/runs-evil/abc123", false},
+		{"traversal attack", "/runs", "/runs/../etc/passwd", false},
+		{"trailing slash parent", "/runs/", "/runs/abc123", true},
+		{"dot in parent", "/home/user/./runs", "/home/user/runs/abc123", true},
+		{"dotdot in child", "/home/user/runs", "/home/user/runs/abc/../def", true},
+		{"empty child", "/runs", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isSubdir(tt.parent, tt.child)
+			if got != tt.want {
+				t.Errorf("isSubdir(%q, %q) = %v, want %v", tt.parent, tt.child, got, tt.want)
+			}
+		})
+	}
+}

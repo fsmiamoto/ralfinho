@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/term"
@@ -247,7 +249,7 @@ func runBrowser(cfg *cli.Config) {
 			// Loop back to re-open the browser (the new run now appears
 			// in the session list after the rescan).
 		case tui.BrowserActionDelete:
-			if result.DeleteDir != "" {
+			if result.DeleteDir != "" && isSubdir(cfg.RunsDir, result.DeleteDir) {
 				if err := os.RemoveAll(result.DeleteDir); err != nil {
 					fmt.Fprintf(os.Stderr, "ralfinho view: delete: %v\n", err)
 				}
@@ -448,6 +450,14 @@ func resolvePrompt(cfg *cli.Config) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown input mode %q", cfg.InputMode)
 	}
+}
+
+// isSubdir reports whether child is a direct subdirectory of parent.
+// Both paths are cleaned before comparison to prevent path traversal.
+func isSubdir(parent, child string) bool {
+	parent = filepath.Clean(parent) + string(filepath.Separator)
+	child = filepath.Clean(child)
+	return strings.HasPrefix(child, parent) && !strings.Contains(child[len(parent):], string(filepath.Separator))
 }
 
 // isTerminal reports whether stderr is connected to a terminal.
