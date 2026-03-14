@@ -94,6 +94,17 @@ func (a *KiroAgent) RunIteration(ctx context.Context, prompt string, onEvent fun
 // Event mapper: ACP session updates → events.Event values
 // ---------------------------------------------------------------------------
 
+// pendingToolCall buffers a tool_call(status=in_progress) update that arrived
+// without rawInput. It is held until a matching follow-up update with rawInput
+// arrives, at which point a single complete EventToolExecutionStart is emitted.
+type pendingToolCall struct {
+	toolCallID   string
+	title        string
+	kind         string
+	rawInput     json.RawMessage
+	displayTitle string // phase 2 title (e.g. "Running: git status") used for ToolDisplayArgs
+}
+
 // kiroEventMapper translates ACP session updates into events.Event values,
 // maintaining the MessageStart/MessageEnd lifecycle around text chunks that
 // the TUI's EventConverter expects.
@@ -105,10 +116,11 @@ func (a *KiroAgent) RunIteration(ctx context.Context, prompt string, onEvent fun
 //     emit MessageEnd first, then ToolExecutionStart.
 //   - On TurnEnd, close any open message block, then emit TurnEnd.
 type kiroEventMapper struct {
-	onEvent   func(events.Event)
-	text      strings.Builder // accumulated assistant text for the return value
-	inMessage bool            // true between MessageStart and MessageEnd
-	turnEnded bool            // true after TurnEnd was emitted
+	onEvent     func(events.Event)
+	text        strings.Builder // accumulated assistant text for the return value
+	inMessage   bool            // true between MessageStart and MessageEnd
+	turnEnded   bool            // true after TurnEnd was emitted
+	pendingTool *pendingToolCall // buffered in_progress tool call waiting for args
 }
 
 // newKiroEventMapper creates a mapper that forwards events through onEvent.
@@ -139,6 +151,10 @@ func (m *kiroEventMapper) handleUpdate(u sessionUpdate) {
 // TurnEnd update), so finalize always closes the message block and emits
 // TurnEnd.
 func (m *kiroEventMapper) finalize() {
+	// Flush any tool call that was buffered but never received its args.
+	if m.pendingTool != nil {
+		m.flushPendingTool()
+	}
 	if m.inMessage {
 		m.emitMessageEnd()
 	}
@@ -197,14 +213,26 @@ func (m *kiroEventMapper) mapAgentMessage(u sessionUpdate) {
 // rawInput, rawOutput. Multiple tool_call updates may arrive for the same
 // toolCallId as its status progresses.
 //
+// Two-phase pattern:
+//
+//	phase 1: tool_call(status=in_progress, no rawInput) — signals a tool is starting
+//	phase 2: tool_call(no status, rawInput present)     — provides the actual args
+//
+// To avoid an empty tool box flash in the TUI, phase 1 is buffered and no event
+// is emitted until phase 2 arrives with the complete args. If rawInput is already
+// present in phase 1, the start event is emitted immediately (no buffering needed).
+//
 // Status mapping:
-//   - "in_progress" → EventToolExecutionStart (close message block first)
-//   - "completed" → EventToolExecutionEnd with isError=false
-//   - "error" → EventToolExecutionEnd with isError=true
+//   - "in_progress" with rawInput → immediate EventToolExecutionStart
+//   - "in_progress" without rawInput → buffer in pendingTool
+//   - no status, has rawInput → merge with pending buffer → emit EventToolExecutionStart
+//   - "completed" → flush pending start if needed, then EventToolExecutionEnd(isError=false)
+//   - "error" → flush pending start if needed, then EventToolExecutionEnd(isError=true)
 func (m *kiroEventMapper) mapToolCall(u sessionUpdate) {
 	var tc struct {
 		ToolCallID string          `json:"toolCallId"`
 		Title      string          `json:"title"`
+		Kind       string          `json:"kind"`
 		Status     string          `json:"status"`
 		RawInput   json.RawMessage `json:"rawInput"`
 		RawOutput  json.RawMessage `json:"rawOutput"`
@@ -219,14 +247,29 @@ func (m *kiroEventMapper) mapToolCall(u sessionUpdate) {
 		if m.inMessage {
 			m.emitMessageEnd()
 		}
-		m.onEvent(events.Event{
-			Type:       events.EventToolExecutionStart,
-			ToolCallID: tc.ToolCallID,
-			ToolName:   tc.Title,
-			Args:       tc.RawInput,
-		})
+
+		if tc.RawInput != nil {
+			// Args already present — emit immediately, no buffering needed.
+			m.onEvent(events.Event{
+				Type:       events.EventToolExecutionStart,
+				ToolCallID: tc.ToolCallID,
+				ToolName:   tc.Title,
+				Args:       tc.RawInput,
+			})
+		} else {
+			// Buffer until the follow-up message arrives with the real args.
+			m.pendingTool = &pendingToolCall{
+				toolCallID: tc.ToolCallID,
+				title:      tc.Title,
+				kind:       tc.Kind,
+			}
+		}
 
 	case "completed":
+		// Flush any pending start before emitting the end event.
+		if m.pendingTool != nil && m.pendingTool.toolCallID == tc.ToolCallID {
+			m.flushPendingTool()
+		}
 		isErr := false
 		m.onEvent(events.Event{
 			Type:       events.EventToolExecutionEnd,
@@ -237,6 +280,10 @@ func (m *kiroEventMapper) mapToolCall(u sessionUpdate) {
 		})
 
 	case "error":
+		// Flush any pending start before emitting the end event.
+		if m.pendingTool != nil && m.pendingTool.toolCallID == tc.ToolCallID {
+			m.flushPendingTool()
+		}
 		isErr := true
 		m.onEvent(events.Event{
 			Type:       events.EventToolExecutionEnd,
@@ -247,19 +294,81 @@ func (m *kiroEventMapper) mapToolCall(u sessionUpdate) {
 		})
 
 	default:
-		// Intermediate update — kiro sends a follow-up tool_call without
-		// a status field that carries the actual rawInput and an updated
-		// title (e.g. "Running: git status"). Forward as a tool execution
-		// update so the TUI can display the real arguments.
-		if tc.RawInput != nil {
-			m.onEvent(events.Event{
-				Type:       events.EventToolExecutionUpdate,
-				ToolCallID: tc.ToolCallID,
-				ToolName:   tc.Title,
-				Args:       tc.RawInput,
-			})
+		// Intermediate update — kiro's follow-up message carrying the actual
+		// rawInput (e.g. title "Running: git status"). If we have a matching
+		// pending tool, merge args and emit a single complete start event.
+		if tc.RawInput == nil {
+			return
+		}
+		if m.pendingTool != nil && m.pendingTool.toolCallID == tc.ToolCallID {
+			m.pendingTool.rawInput = tc.RawInput
+			m.pendingTool.displayTitle = tc.Title // e.g. "Running: git status"
+			m.flushPendingTool()
 		}
 	}
+}
+
+// canonicalToolName resolves the best tool name from a kind + title pair.
+// The kind field (e.g. "execute") is a more reliable signal than the title,
+// which may be a user-facing string like "Running: git status".
+func canonicalToolName(kind, title string) string {
+	switch kind {
+	case "execute":
+		return "bash"
+	default:
+		if kind != "" {
+			return kind
+		}
+		return title
+	}
+}
+
+// kiroDisplayArgs converts a kiro phase-2 title into a compact, human-friendly
+// display string for the TUI tool box. Recognized prefix patterns are stripped
+// and replaced with a more conventional notation:
+//
+//   - "Running: git status"   → "$ git status"
+//   - "Reading kiro.go:1"     → "kiro.go:1"
+//   - "Listing ."             → "."
+//   - "Writing file.go"       → "file.go"
+//   - anything else           → title unchanged
+func kiroDisplayArgs(title string) string {
+	if after, ok := strings.CutPrefix(title, "Running: "); ok {
+		return "$ " + after
+	}
+	if after, ok := strings.CutPrefix(title, "Reading "); ok {
+		return after
+	}
+	if after, ok := strings.CutPrefix(title, "Listing "); ok {
+		return after
+	}
+	if after, ok := strings.CutPrefix(title, "Writing "); ok {
+		return after
+	}
+	return title
+}
+
+// flushPendingTool emits the buffered EventToolExecutionStart and clears
+// the pending state. The canonical tool name is derived from the kind field
+// so the TUI can render it correctly regardless of the title string.
+// When a phase-2 display title is available, ToolDisplayArgs is populated so
+// that the TUI can skip its own content-based detection.
+func (m *kiroEventMapper) flushPendingTool() {
+	p := m.pendingTool
+	m.pendingTool = nil
+
+	displayArgs := ""
+	if p.displayTitle != "" {
+		displayArgs = kiroDisplayArgs(p.displayTitle)
+	}
+
+	m.onEvent(events.Event{
+		Type:            events.EventToolExecutionStart,
+		ToolCallID:      p.toolCallID,
+		ToolName:        canonicalToolName(p.kind, p.title),
+		Args:            p.rawInput,
+		ToolDisplayArgs: displayArgs,
+	})
 }
 
 // mapToolCallUpdate translates intermediate tool call progress into

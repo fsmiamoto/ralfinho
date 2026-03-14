@@ -273,12 +273,16 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			ThinkingLen: len(de.Detail),
 		})
 	case DisplayToolStart:
+		toolArgs := de.ToolDisplayArgs
+		if toolArgs == "" {
+			toolArgs = formatToolArgs(de.ToolName, de.RawArgs)
+		}
 		m.blocks = append(m.blocks, MainBlock{
 			Kind:       BlockToolCall,
 			Iteration:  de.Iteration,
 			ToolName:   de.ToolName,
 			ToolCallID: de.ToolCallID,
-			ToolArgs:   formatToolArgs(de.ToolName, de.RawArgs),
+			ToolArgs:   toolArgs,
 		})
 		m.activeToolIdx = len(m.blocks) - 1
 	case DisplayToolUpdate:
@@ -286,7 +290,11 @@ func (m *Model) buildBlock(de DisplayEvent) {
 		// Find the matching tool block and update its args.
 		for i := len(m.blocks) - 1; i >= 0; i-- {
 			if m.blocks[i].Kind == BlockToolCall && m.blocks[i].ToolCallID == de.ToolCallID {
-				m.blocks[i].ToolArgs = formatToolArgs(de.ToolName, de.RawArgs)
+				updatedArgs := de.ToolDisplayArgs
+				if updatedArgs == "" {
+					updatedArgs = formatToolArgs(de.ToolName, de.RawArgs)
+				}
+				m.blocks[i].ToolArgs = updatedArgs
 				break
 			}
 		}

@@ -218,22 +218,38 @@ func TestKiroMapper_ToolCall_ClosesMessageBlock(t *testing.T) {
 		Raw:  json.RawMessage(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"thinking..."}}`),
 	})
 
-	// Tool call should close the message block first.
+	// Tool call without rawInput — message block is closed immediately, but
+	// ToolExecutionStart is buffered until args arrive.
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindToolCall,
 		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"bash","toolCallId":"tc-4","status":"in_progress"}`),
 	})
 
 	evts := get()
-	// Expected: MessageStart, MessageUpdate, MessageEnd, ToolExecutionStart
-	if len(evts) != 4 {
-		t.Fatalf("expected 4 events, got %d", len(evts))
+	// Expected: MessageStart, MessageUpdate, MessageEnd (tool start is buffered).
+	if len(evts) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(evts))
 	}
 	if evts[2].Type != events.EventMessageEnd {
 		t.Errorf("event 2: expected %s, got %s", events.EventMessageEnd, evts[2].Type)
 	}
+
+	// Flush the buffered tool by sending completed.
+	m.handleUpdate(sessionUpdate{
+		Kind: updateKindToolCall,
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"bash","toolCallId":"tc-4","rawOutput":"done","status":"completed"}`),
+	})
+
+	evts = get()
+	// Expected: MessageStart, MessageUpdate, MessageEnd, ToolExecutionStart, ToolExecutionEnd
+	if len(evts) != 5 {
+		t.Fatalf("expected 5 events after completed, got %d", len(evts))
+	}
 	if evts[3].Type != events.EventToolExecutionStart {
 		t.Errorf("event 3: expected %s, got %s", events.EventToolExecutionStart, evts[3].Type)
+	}
+	if evts[4].Type != events.EventToolExecutionEnd {
+		t.Errorf("event 4: expected %s, got %s", events.EventToolExecutionEnd, evts[4].Type)
 	}
 }
 
@@ -270,49 +286,86 @@ func TestKiroMapper_ToolCall_IntermediateUpdateForwardsArgs(t *testing.T) {
 	onEvent, get := collectEvents()
 	m := newKiroEventMapper(onEvent)
 
-	// First: in_progress with no rawInput (kiro's initial signal).
+	// Phase 1: in_progress with no rawInput — buffered, no event emitted yet.
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindToolCall,
 		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"shell","toolCallId":"tc-6","kind":"execute","status":"in_progress"}`),
 	})
 
-	// Second: follow-up without status carrying the actual rawInput.
+	// Phase 2: follow-up without status carrying the actual rawInput — merges
+	// with buffered data and emits a single complete ToolExecutionStart.
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindToolCall,
 		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"Running: git status","toolCallId":"tc-6","kind":"execute","rawInput":{"command":"git status"}}`),
 	})
 
 	evts := get()
-	if len(evts) != 2 {
-		t.Fatalf("expected 2 events (ToolExecutionStart + ToolExecutionUpdate), got %d", len(evts))
+	if len(evts) != 1 {
+		t.Fatalf("expected 1 event (single ToolExecutionStart), got %d", len(evts))
 	}
 
-	// First event: ToolExecutionStart with minimal info.
+	// Single event: ToolExecutionStart with the canonical tool name and args.
 	if evts[0].Type != events.EventToolExecutionStart {
 		t.Errorf("event 0: expected %s, got %s", events.EventToolExecutionStart, evts[0].Type)
 	}
-	if evts[0].ToolName != "shell" {
-		t.Errorf("event 0: expected toolName=shell, got %q", evts[0].ToolName)
+	// kind="execute" → canonical name "bash"
+	if evts[0].ToolName != "bash" {
+		t.Errorf("event 0: expected toolName=bash (from kind=execute), got %q", evts[0].ToolName)
 	}
-
-	// Second event: ToolExecutionUpdate with the actual args.
-	if evts[1].Type != events.EventToolExecutionUpdate {
-		t.Errorf("event 1: expected %s, got %s", events.EventToolExecutionUpdate, evts[1].Type)
+	if evts[0].ToolCallID != "tc-6" {
+		t.Errorf("event 0: expected toolCallId=tc-6, got %q", evts[0].ToolCallID)
 	}
-	if evts[1].ToolCallID != "tc-6" {
-		t.Errorf("event 1: expected toolCallId=tc-6, got %q", evts[1].ToolCallID)
-	}
-	if evts[1].Args == nil {
-		t.Fatal("event 1: expected non-nil Args")
+	if evts[0].Args == nil {
+		t.Fatal("event 0: expected non-nil Args")
 	}
 	var args struct {
 		Command string `json:"command"`
 	}
-	if err := json.Unmarshal(evts[1].Args, &args); err != nil {
+	if err := json.Unmarshal(evts[0].Args, &args); err != nil {
 		t.Fatalf("unmarshal args: %v", err)
 	}
 	if args.Command != "git status" {
 		t.Errorf("expected command=%q, got %q", "git status", args.Command)
+	}
+
+	// Phase 2 title "Running: git status" → ToolDisplayArgs "$ git status".
+	if evts[0].ToolDisplayArgs != "$ git status" {
+		t.Errorf("expected ToolDisplayArgs=%q, got %q", "$ git status", evts[0].ToolDisplayArgs)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// kiroDisplayArgs — prefix stripping
+// ---------------------------------------------------------------------------
+
+func TestKiroDisplayArgs(t *testing.T) {
+	tests := []struct {
+		title string
+		want  string
+	}{
+		// "Running: <cmd>" → "$ <cmd>"
+		{"Running: git status", "$ git status"},
+		{"Running: git log --oneline -10", "$ git log --oneline -10"},
+		// "Reading <files>" → "<files>"
+		{"Reading kiro.go:1", "kiro.go:1"},
+		{"Reading kiro.go:1, plan-claude-agent.md:1", "kiro.go:1, plan-claude-agent.md:1"},
+		// "Listing <dir>" → "<dir>"
+		{"Listing .", "."},
+		{"Listing ralfinho", "ralfinho"},
+		// "Writing <file>" → "<file>"
+		{"Writing file.go", "file.go"},
+		// Unrecognized prefix — pass through unchanged.
+		{"Generating codebase overview", "Generating codebase overview"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.title, func(t *testing.T) {
+			got := kiroDisplayArgs(tt.title)
+			if got != tt.want {
+				t.Errorf("kiroDisplayArgs(%q) = %q, want %q", tt.title, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -320,24 +373,113 @@ func TestKiroMapper_ToolCall_IntermediateUpdateNoArgsIgnored(t *testing.T) {
 	onEvent, get := collectEvents()
 	m := newKiroEventMapper(onEvent)
 
-	// in_progress first.
+	// Phase 1: in_progress without rawInput — tool is buffered, no event yet.
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindToolCall,
 		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"shell","toolCallId":"tc-7","status":"in_progress"}`),
 	})
 
-	// Follow-up without status AND without rawInput — should be ignored.
+	// Follow-up without status AND without rawInput — should be ignored;
+	// the pending tool remains buffered.
 	m.handleUpdate(sessionUpdate{
 		Kind: updateKindToolCall,
 		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"shell","toolCallId":"tc-7"}`),
 	})
 
+	// No events emitted yet — tool is still pending.
+	if evts := get(); len(evts) != 0 {
+		t.Fatalf("expected 0 events (tool still buffered), got %d", len(evts))
+	}
+
+	// Finalize flushes the pending tool, then emits TurnEnd.
+	m.finalize()
 	evts := get()
-	if len(evts) != 1 {
-		t.Fatalf("expected 1 event (only ToolExecutionStart), got %d", len(evts))
+	if len(evts) != 2 {
+		t.Fatalf("expected 2 events after finalize (ToolExecutionStart + TurnEnd), got %d", len(evts))
 	}
 	if evts[0].Type != events.EventToolExecutionStart {
-		t.Errorf("expected %s, got %s", events.EventToolExecutionStart, evts[0].Type)
+		t.Errorf("event 0: expected %s, got %s", events.EventToolExecutionStart, evts[0].Type)
+	}
+	if evts[1].Type != events.EventTurnEnd {
+		t.Errorf("event 1: expected %s, got %s", events.EventTurnEnd, evts[1].Type)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Buffered tool call: flush on completed / finalize
+// ---------------------------------------------------------------------------
+
+func TestKiroMapper_ToolCall_BufferedFlushOnCompleted(t *testing.T) {
+	onEvent, get := collectEvents()
+	m := newKiroEventMapper(onEvent)
+
+	// Phase 1: in_progress without rawInput — buffered.
+	m.handleUpdate(sessionUpdate{
+		Kind: updateKindToolCall,
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"shell","toolCallId":"tc-8","kind":"execute","status":"in_progress"}`),
+	})
+
+	// No events yet.
+	if evts := get(); len(evts) != 0 {
+		t.Fatalf("expected 0 events after in_progress, got %d", len(evts))
+	}
+
+	// completed arrives before the follow-up — pending start is flushed first,
+	// then the end event is emitted.
+	m.handleUpdate(sessionUpdate{
+		Kind: updateKindToolCall,
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"shell","toolCallId":"tc-8","rawOutput":"ok","status":"completed"}`),
+	})
+
+	evts := get()
+	if len(evts) != 2 {
+		t.Fatalf("expected 2 events (ToolExecutionStart + ToolExecutionEnd), got %d", len(evts))
+	}
+	if evts[0].Type != events.EventToolExecutionStart {
+		t.Errorf("event 0: expected %s, got %s", events.EventToolExecutionStart, evts[0].Type)
+	}
+	// kind="execute" → canonical name "bash"
+	if evts[0].ToolName != "bash" {
+		t.Errorf("event 0: expected toolName=bash, got %q", evts[0].ToolName)
+	}
+	if evts[1].Type != events.EventToolExecutionEnd {
+		t.Errorf("event 1: expected %s, got %s", events.EventToolExecutionEnd, evts[1].Type)
+	}
+	if evts[1].IsError == nil || *evts[1].IsError {
+		t.Error("event 1: expected isError=false")
+	}
+}
+
+func TestKiroMapper_ToolCall_BufferedFlushOnFinalize(t *testing.T) {
+	onEvent, get := collectEvents()
+	m := newKiroEventMapper(onEvent)
+
+	// Phase 1: in_progress without rawInput — buffered.
+	m.handleUpdate(sessionUpdate{
+		Kind: updateKindToolCall,
+		Raw:  json.RawMessage(`{"sessionUpdate":"tool_call","title":"shell","toolCallId":"tc-9","kind":"execute","status":"in_progress"}`),
+	})
+
+	// No events yet.
+	if evts := get(); len(evts) != 0 {
+		t.Fatalf("expected 0 events after in_progress, got %d", len(evts))
+	}
+
+	// finalize flushes the pending tool, then emits TurnEnd.
+	m.finalize()
+
+	evts := get()
+	if len(evts) != 2 {
+		t.Fatalf("expected 2 events (ToolExecutionStart + TurnEnd), got %d", len(evts))
+	}
+	if evts[0].Type != events.EventToolExecutionStart {
+		t.Errorf("event 0: expected %s, got %s", events.EventToolExecutionStart, evts[0].Type)
+	}
+	if evts[0].ToolName != "bash" {
+		t.Errorf("event 0: expected toolName=bash, got %q", evts[0].ToolName)
+	}
+	if evts[1].Type != events.EventTurnEnd {
+		t.Errorf("event 1: expected %s, got %s", events.EventTurnEnd, evts[1].Type)
 	}
 }
 

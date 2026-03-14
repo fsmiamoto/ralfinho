@@ -8,16 +8,17 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 // normalizeToolName maps tool name variants from different agent backends
-// to a canonical lowercase form.
+// to a canonical lowercase form. Comparison is case-insensitive so that
+// "Bash", "bash", "BASH" all normalize to "bash".
 func normalizeToolName(name string) string {
-	switch name {
-	case "bash", "Bash", "shell":
+	switch strings.ToLower(name) {
+	case "bash", "shell", "execute":
 		return "bash"
-	case "read", "Read":
+	case "read":
 		return "read"
-	case "edit", "Edit":
+	case "edit":
 		return "edit"
-	case "write", "Write":
+	case "write":
 		return "write"
 	default:
 		return name
@@ -163,6 +164,11 @@ func (b *MainBlock) renderInfo() string {
 }
 
 // formatToolArgs extracts a human-friendly summary from tool arguments.
+//
+// Detection proceeds in three stages:
+//  1. Name-based: use the normalized tool name to pick the right field.
+//  2. Content-based: inspect the JSON keys as a fallback for unrecognized names.
+//  3. Raw JSON: truncate to 80 characters as a last resort.
 func formatToolArgs(toolName string, rawArgs json.RawMessage) string {
 	if rawArgs == nil {
 		return ""
@@ -176,30 +182,45 @@ func formatToolArgs(toolName string, rawArgs json.RawMessage) string {
 		if json.Unmarshal(rawArgs, &args) == nil && args.Command != "" {
 			return "$ " + args.Command
 		}
-	case "read":
+	case "read", "edit", "write":
 		var args struct {
-			Path string `json:"path"`
+			Path     string `json:"path"`
+			FilePath string `json:"file_path"`
 		}
-		if json.Unmarshal(rawArgs, &args) == nil && args.Path != "" {
-			return args.Path
-		}
-	case "edit":
-		var args struct {
-			Path string `json:"path"`
-		}
-		if json.Unmarshal(rawArgs, &args) == nil && args.Path != "" {
-			return args.Path
-		}
-	case "write":
-		var args struct {
-			Path string `json:"path"`
-		}
-		if json.Unmarshal(rawArgs, &args) == nil && args.Path != "" {
-			return args.Path
+		if json.Unmarshal(rawArgs, &args) == nil {
+			if args.Path != "" {
+				return args.Path
+			}
+			if args.FilePath != "" {
+				return args.FilePath
+			}
 		}
 	}
 
-	// Fallback: first 80 chars of raw JSON.
+	// Content-based fallback: detect tool type from JSON structure without
+	// relying on the tool name. This handles cases where the tool name is an
+	// unrecognized variant (e.g. a kiro-specific label).
+	var generic map[string]json.RawMessage
+	if json.Unmarshal(rawArgs, &generic) == nil {
+		// A "command" key strongly suggests a shell/exec tool.
+		if raw, ok := generic["command"]; ok {
+			var cmd string
+			if json.Unmarshal(raw, &cmd) == nil && cmd != "" {
+				return "$ " + cmd
+			}
+		}
+		// A "path" or "file_path" key suggests a file operation.
+		for _, key := range []string{"path", "file_path"} {
+			if raw, ok := generic[key]; ok {
+				var p string
+				if json.Unmarshal(raw, &p) == nil && p != "" {
+					return p
+				}
+			}
+		}
+	}
+
+	// Last resort: first 80 chars of raw JSON.
 	s := string(rawArgs)
 	s = strings.ReplaceAll(s, "\n", " ")
 	if len(s) > 80 {

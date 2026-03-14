@@ -44,12 +44,13 @@ type Event struct {
 	AssistantMessageEvent json.RawMessage `json:"assistantMessageEvent,omitempty"`
 
 	// tool_execution_*
-	ToolCallID    string          `json:"toolCallId,omitempty"`
-	ToolName      string          `json:"toolName,omitempty"`
-	Args          json.RawMessage `json:"args,omitempty"`
-	PartialResult json.RawMessage `json:"partialResult,omitempty"`
-	Result        json.RawMessage `json:"result,omitempty"`
-	IsError       *bool           `json:"isError,omitempty"`
+	ToolCallID      string          `json:"toolCallId,omitempty"`
+	ToolName        string          `json:"toolName,omitempty"`
+	Args            json.RawMessage `json:"args,omitempty"`
+	ToolDisplayArgs string          `json:"tool_display_args,omitempty"`
+	PartialResult   json.RawMessage `json:"partialResult,omitempty"`
+	Result          json.RawMessage `json:"result,omitempty"`
+	IsError         *bool           `json:"isError,omitempty"`
 
 	// agent_end
 	Messages json.RawMessage `json:"messages,omitempty"`
