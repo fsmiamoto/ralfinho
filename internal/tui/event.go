@@ -60,11 +60,6 @@ func NewEventConverter() *EventConverter {
 	return &EventConverter{}
 }
 
-// SetIteration sets the current iteration number.
-func (c *EventConverter) SetIteration(n int) {
-	c.iteration = n
-}
-
 // Convert transforms a runner.Event into zero or more DisplayEvents.
 // It may return nil if the event is accumulated (e.g. text_delta).
 func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
