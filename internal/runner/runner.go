@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -365,11 +366,11 @@ func (r *Runner) logf(format string, args ...any) {
 // writeEffectivePrompt creates the run directory and writes the prompt text
 // to <runs-dir>/<run-id>/effective-prompt.md for auditability.
 func (r *Runner) writeEffectivePrompt() error {
-	dir := fmt.Sprintf("%s/%s", r.cfg.RunsDir, r.runID)
+	dir := filepath.Join(r.cfg.RunsDir, r.runID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("creating run dir: %w", err)
 	}
-	path := fmt.Sprintf("%s/effective-prompt.md", dir)
+	path := filepath.Join(dir, "effective-prompt.md")
 	if err := os.WriteFile(path, []byte(r.cfg.Prompt), 0644); err != nil {
 		return fmt.Errorf("writing effective prompt: %w", err)
 	}
@@ -379,24 +380,24 @@ func (r *Runner) writeEffectivePrompt() error {
 
 // openRunFiles opens the persistence files for the run.
 func (r *Runner) openRunFiles() {
-	dir := fmt.Sprintf("%s/%s", r.cfg.RunsDir, r.runID)
+	dir := filepath.Join(r.cfg.RunsDir, r.runID)
 	// Directory should already exist from writeEffectivePrompt.
 
 	var err error
 
-	r.eventsFile, err = os.Create(dir + "/events.jsonl")
+	r.eventsFile, err = os.Create(filepath.Join(dir, "events.jsonl"))
 	if err != nil {
 		r.logf("warning: could not create events.jsonl: %v\n", err)
 		r.eventsFile = nil
 	}
 
-	r.rawFile, err = os.Create(dir + "/raw-output.log")
+	r.rawFile, err = os.Create(filepath.Join(dir, "raw-output.log"))
 	if err != nil {
 		r.logf("warning: could not create raw-output.log: %v\n", err)
 		r.rawFile = nil
 	}
 
-	r.sessionFile, err = os.Create(dir + "/session.log")
+	r.sessionFile, err = os.Create(filepath.Join(dir, "session.log"))
 	if err != nil {
 		r.logf("warning: could not create session.log: %v\n", err)
 		r.sessionFile = nil
@@ -436,7 +437,7 @@ func (r *Runner) timestamp() string {
 
 // writeMeta writes meta.json to the run directory.
 func (r *Runner) writeMeta(result RunResult) {
-	dir := fmt.Sprintf("%s/%s", r.cfg.RunsDir, r.runID)
+	dir := filepath.Join(r.cfg.RunsDir, r.runID)
 	meta := RunMeta{
 		RunID:               r.runID,
 		StartedAt:           r.startedAt.Format(time.RFC3339),
@@ -449,7 +450,7 @@ func (r *Runner) writeMeta(result RunResult) {
 		MaxIterations:       r.cfg.MaxIterations,
 		IterationsCompleted: result.Iterations,
 	}
-	if err := writeMetaJSON(dir+"/meta.json", meta); err != nil {
+	if err := writeMetaJSON(filepath.Join(dir, "meta.json"), meta); err != nil {
 		r.logf("warning: could not write meta.json: %v\n", err)
 	}
 }

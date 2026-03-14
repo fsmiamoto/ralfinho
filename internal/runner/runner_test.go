@@ -91,7 +91,7 @@ func newTestRunner(t *testing.T) (*Runner, string) {
 		stderr: io.Discard,
 	}
 	// Create run dir and open files.
-	runDir := fmt.Sprintf("%s/%s", tmpDir, r.runID)
+	runDir := filepath.Join(tmpDir, r.runID)
 	if err := os.MkdirAll(runDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +512,7 @@ func TestRunner_WriteEffectivePrompt(t *testing.T) {
 		t.Fatalf("writeEffectivePrompt: %v", err)
 	}
 
-	data, err := os.ReadFile(fmt.Sprintf("%s/%s/effective-prompt.md", tmpDir, r.runID))
+	data, err := os.ReadFile(filepath.Join(tmpDir, r.runID, "effective-prompt.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,7 +536,7 @@ func TestRunner_OpenCloseRunFiles(t *testing.T) {
 	}
 
 	// Create the run directory (normally done by writeEffectivePrompt).
-	runDir := fmt.Sprintf("%s/%s", tmpDir, r.runID)
+	runDir := filepath.Join(tmpDir, r.runID)
 	if err := os.MkdirAll(runDir, 0755); err != nil {
 		t.Fatal(err)
 	}
