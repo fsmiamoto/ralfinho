@@ -310,28 +310,12 @@ func (r *Runner) handleEvent(ev *Event) {
 	case EventToolExecutionStart:
 		r.logf("  > tool: %s (id=%s)\n", ev.ToolName, truncate(ev.ToolCallID, 12))
 		r.sessionLogf("[%s] > tool start: %s (id=%s)\n", r.timestamp(), ev.ToolName, truncate(ev.ToolCallID, 12))
-		if ev.Args != nil {
-			var args ToolArgs
-			if err := json.Unmarshal(ev.Args, &args); err == nil && args.Command != "" {
-				r.logf("    cmd: %s\n", truncate(args.Command, 120))
-				r.sessionLogf("    cmd: %s\n", truncate(args.Command, 120))
-			} else {
-				r.sessionLogf("    args: %s\n", truncate(string(ev.Args), 200))
-			}
-		}
+		r.logToolArgs(ev.Args)
 
 	case EventToolExecutionUpdate:
 		// Log tool args that arrive after tool_start (common with Claude backend
 		// where args are streamed incrementally and only emitted in the update).
-		if ev.Args != nil {
-			var args ToolArgs
-			if err := json.Unmarshal(ev.Args, &args); err == nil && args.Command != "" {
-				r.logf("    cmd: %s\n", truncate(args.Command, 120))
-				r.sessionLogf("    cmd: %s\n", truncate(args.Command, 120))
-			} else {
-				r.sessionLogf("    args: %s\n", truncate(string(ev.Args), 200))
-			}
-		}
+		r.logToolArgs(ev.Args)
 
 	case EventToolExecutionEnd:
 		errStr := ""
@@ -380,6 +364,22 @@ func (r *Runner) flushSessionText() {
 		r.sessionLogf("    %s\n", line)
 	}
 	r.sessionText.Reset()
+}
+
+// logToolArgs logs tool arguments to stderr and session.log. If the args
+// contain a "command" field, it is logged as a cmd line; otherwise the raw
+// JSON is logged. Called from both tool_start and tool_update handlers.
+func (r *Runner) logToolArgs(args json.RawMessage) {
+	if args == nil {
+		return
+	}
+	var ta ToolArgs
+	if err := json.Unmarshal(args, &ta); err == nil && ta.Command != "" {
+		r.logf("    cmd: %s\n", truncate(ta.Command, 120))
+		r.sessionLogf("    cmd: %s\n", truncate(ta.Command, 120))
+	} else {
+		r.sessionLogf("    args: %s\n", truncate(string(args), 200))
+	}
 }
 
 func (r *Runner) logf(format string, args ...any) {
