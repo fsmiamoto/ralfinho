@@ -333,8 +333,8 @@ func TestEventConverter_ToolEnd_Success(t *testing.T) {
 	if !strings.Contains(de.Summary, "done") {
 		t.Errorf("summary = %q, want 'done'", de.Summary)
 	}
-	if de.ToolResultText != `"output text"` {
-		t.Errorf("ToolResultText = %q, want raw result", de.ToolResultText)
+	if de.ToolResultText != "output text" {
+		t.Errorf("ToolResultText = %q, want unquoted result", de.ToolResultText)
 	}
 }
 
@@ -496,6 +496,77 @@ func TestTruncateStr(t *testing.T) {
 			got := truncateStr(tt.s, tt.n)
 			if got != tt.want {
 				t.Errorf("truncateStr(%q, %d) = %q, want %q", tt.s, tt.n, got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// jsonToText
+// ---------------------------------------------------------------------------
+
+func TestJsonToText(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+		want string
+	}{
+		{
+			name: "json string is unquoted",
+			raw:  json.RawMessage(`"hello world"`),
+			want: "hello world",
+		},
+		{
+			name: "json string with escaped newlines",
+			raw:  json.RawMessage(`"line1\nline2\nline3"`),
+			want: "line1\nline2\nline3",
+		},
+		{
+			name: "json string with escaped quotes",
+			raw:  json.RawMessage(`"he said \"hi\""`),
+			want: `he said "hi"`,
+		},
+		{
+			name: "json string with unicode escapes",
+			raw:  json.RawMessage(`"caf\u00e9"`),
+			want: "café",
+		},
+		{
+			name: "json object returned as-is",
+			raw:  json.RawMessage(`{"key":"value"}`),
+			want: `{"key":"value"}`,
+		},
+		{
+			name: "json array returned as-is",
+			raw:  json.RawMessage(`[1,2,3]`),
+			want: `[1,2,3]`,
+		},
+		{
+			name: "json number returned as-is",
+			raw:  json.RawMessage(`42`),
+			want: `42`,
+		},
+		{
+			name: "json null unmarshals to empty string",
+			raw:  json.RawMessage(`null`),
+			want: "",
+		},
+		{
+			name: "json boolean returned as-is",
+			raw:  json.RawMessage(`true`),
+			want: `true`,
+		},
+		{
+			name: "empty string is unquoted",
+			raw:  json.RawMessage(`""`),
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := jsonToText(tt.raw)
+			if got != tt.want {
+				t.Errorf("jsonToText(%s) = %q, want %q", string(tt.raw), got, tt.want)
 			}
 		})
 	}
