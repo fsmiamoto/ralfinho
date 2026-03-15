@@ -242,3 +242,97 @@ func TestRenderStatusAdjustsHintsForWidthAndConfirmationMode(t *testing.T) {
 		}
 	})
 }
+
+func TestRenderHeaderShowsElapsedTimeForRunningModel(t *testing.T) {
+	m := NewModel(nil)
+	m.width = 80
+	m.iteration = 3
+	m.modelName = "claude-opus-4-1"
+	m.startTime = time.Now().Add(-(2*time.Minute + 5*time.Second + 200*time.Millisecond))
+
+	header := stripANSI(m.renderHeader())
+	for _, want := range []string{"ralfinho", "Iteration #3", "claude-opus-4-1", "2m 5s"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("renderHeader() = %q, want substring %q", header, want)
+		}
+	}
+}
+
+func TestRenderHeaderHandlesVeryNarrowWidths(t *testing.T) {
+	m := Model{width: 8, iteration: 9, modelName: "claude-4"}
+	header := stripANSI(m.renderHeader())
+	if got := strings.Join(strings.Fields(header), ""); !strings.Contains(got, "ralfinho") {
+		t.Fatalf("renderHeader() compacted = %q, want base title even on narrow widths", got)
+	}
+	for _, unwanted := range []string{"Iteration #9", "claude-4"} {
+		if strings.Contains(header, unwanted) {
+			t.Fatalf("renderHeader() = %q, should omit %q when space is too tight", header, unwanted)
+		}
+	}
+}
+
+func TestRenderStatusCoversRunningRawAndTruncationBranches(t *testing.T) {
+	t.Run("running raw mode", func(t *testing.T) {
+		m := Model{width: 80, status: "Iteration #4", running: true, rawMode: true}
+		status := stripANSI(m.renderStatus())
+		for _, want := range []string{"Running │ Iteration #4", "r:raw", "q:quit"} {
+			if !strings.Contains(status, want) {
+				t.Fatalf("renderStatus() = %q, want substring %q", status, want)
+			}
+		}
+	})
+
+	t.Run("very narrow width drops hints entirely", func(t *testing.T) {
+		m := Model{width: 10, status: "super long status line"}
+		status := stripANSI(m.renderStatus())
+		if strings.Contains(status, "q:quit") {
+			t.Fatalf("renderStatus() = %q, should drop right-side hints when nothing fits", status)
+		}
+		if !strings.Contains(status, "...") {
+			t.Fatalf("renderStatus() = %q, want truncated left status after dropping hints", status)
+		}
+	})
+}
+
+func TestRenderErrorOverlayTruncatesTallMessages(t *testing.T) {
+	m := Model{
+		width:  40,
+		height: 10,
+		errorOverlay: strings.Join([]string{
+			"line 1",
+			"line 2",
+			"line 3",
+			"line 4",
+			"line 5",
+		}, "\n"),
+	}
+
+	overlay := stripANSI(m.renderErrorOverlay())
+	for _, want := range []string{"Error", "line 1", "line 2", "line 3", "...", "Press any key to dismiss"} {
+		if !strings.Contains(overlay, want) {
+			t.Fatalf("renderErrorOverlay() = %q, want substring %q", overlay, want)
+		}
+	}
+	for _, unwanted := range []string{"line 4", "line 5"} {
+		if strings.Contains(overlay, unwanted) {
+			t.Fatalf("renderErrorOverlay() = %q, should omit truncated line %q", overlay, unwanted)
+		}
+	}
+}
+
+func TestRenderErrorOverlayUsesMinimumInnerWidthOnTinyTerminals(t *testing.T) {
+	m := Model{width: 34, height: 12, errorOverlay: strings.Repeat("x", 25)}
+	overlay := stripANSI(m.renderErrorOverlay())
+	for _, want := range []string{"Error", "xxxxxxxxxxxxxxxxxxxx", "xxxxx", "Press any key to", "dismiss"} {
+		if !strings.Contains(overlay, want) {
+			t.Fatalf("renderErrorOverlay() = %q, want substring %q", overlay, want)
+		}
+	}
+}
+
+func TestPaneHeightUsesComputedBottomPaneHeightWhenRoomy(t *testing.T) {
+	m := Model{height: 20}
+	if got := m.paneHeight(); got != 5 {
+		t.Fatalf("paneHeight() = %d, want computed height 5", got)
+	}
+}
