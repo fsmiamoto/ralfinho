@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -22,6 +23,12 @@ type scriptedTeaProgram struct {
 	run  func() (tea.Model, error)
 	send func(tea.Msg)
 }
+
+type noopTeaModel struct{}
+
+func (noopTeaModel) Init() tea.Cmd                       { return nil }
+func (noopTeaModel) Update(tea.Msg) (tea.Model, tea.Cmd) { return noopTeaModel{}, nil }
+func (noopTeaModel) View() string                        { return "" }
 
 func (p *scriptedTeaProgram) Run() (tea.Model, error) {
 	if p.run == nil {
@@ -734,6 +741,110 @@ JSONL
 
 		if _, err := os.Stat(filepath.Join(runsDir, "delete-run")); !os.IsNotExist(err) {
 			t.Fatalf("deleted run dir still exists, stat err = %v", err)
+		}
+		if callCount != 2 {
+			t.Fatalf("browser program calls = %d, want 2", callCount)
+		}
+	})
+}
+
+func TestRunBrowserEdgeBranches(t *testing.T) {
+	t.Run("non-browser final model returns without reopening", func(t *testing.T) {
+		runsDir := t.TempDir()
+		writeMetaOnlyRun(t, runsDir, "saved-run", runner.RunMeta{
+			RunID:               "saved-run",
+			StartedAt:           "2026-03-08T10:00:00Z",
+			Status:              string(runner.StatusCompleted),
+			Agent:               "pi",
+			PromptSource:        "default",
+			IterationsCompleted: 1,
+		})
+		writeRunEventsArtifact(t, runsDir, "saved-run", `{"type":"turn_end"}`)
+
+		callCount := 0
+		useTeaProgramFactory(t, func(model tea.Model, _ ...tea.ProgramOption) teaProgram {
+			callCount++
+			if _, ok := model.(tui.BrowserModel); !ok {
+				t.Fatalf("model = %T, want tui.BrowserModel", model)
+			}
+			return &scriptedTeaProgram{run: func() (tea.Model, error) {
+				return noopTeaModel{}, nil
+			}}
+		})
+
+		stdout, stderr := captureCommandOutput(t, func() {
+			runBrowser(&cli.Config{RunsDir: runsDir})
+		})
+
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty", stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("stderr = %q, want empty", stderr)
+		}
+		if callCount != 1 {
+			t.Fatalf("browser program calls = %d, want 1", callCount)
+		}
+	})
+
+	t.Run("delete failures are logged and browser reopens", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("delete warning path relies on unix directory permissions")
+		}
+		runsDir := t.TempDir()
+		writeMetaOnlyRun(t, runsDir, "delete-run", runner.RunMeta{
+			RunID:               "delete-run",
+			StartedAt:           "2026-03-08T10:00:00Z",
+			Status:              string(runner.StatusCompleted),
+			Agent:               "pi",
+			PromptSource:        "default",
+			IterationsCompleted: 1,
+		})
+		writeRunEventsArtifact(t, runsDir, "delete-run", `{"type":"turn_end"}`)
+
+		if err := os.Chmod(runsDir, 0500); err != nil {
+			t.Fatalf("Chmod(%q, 0500): %v", runsDir, err)
+		}
+		t.Cleanup(func() {
+			if err := os.Chmod(runsDir, 0700); err != nil {
+				t.Fatalf("restoring permissions on %q: %v", runsDir, err)
+			}
+		})
+
+		callCount := 0
+		useTeaProgramFactory(t, func(model tea.Model, _ ...tea.ProgramOption) teaProgram {
+			callCount++
+			if _, ok := model.(tui.BrowserModel); !ok {
+				t.Fatalf("model = %T, want tui.BrowserModel", model)
+			}
+
+			switch callCount {
+			case 1:
+				return &scriptedTeaProgram{run: func() (tea.Model, error) {
+					return applyKeySequence(model, keyRune('x'), keyRune('y')), nil
+				}}
+			case 2:
+				return &scriptedTeaProgram{run: func() (tea.Model, error) {
+					return applyKeySequence(model, keyRune('q')), nil
+				}}
+			default:
+				t.Fatalf("unexpected browser program call %d", callCount)
+				return nil
+			}
+		})
+
+		stdout, stderr := captureCommandOutput(t, func() {
+			runBrowser(&cli.Config{RunsDir: runsDir})
+		})
+
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty", stdout)
+		}
+		if !strings.Contains(stderr, "ralfinho view: delete:") {
+			t.Fatalf("stderr = %q, want logged delete warning", stderr)
+		}
+		if _, err := os.Stat(filepath.Join(runsDir, "delete-run")); err != nil {
+			t.Fatalf("deleted run dir missing after warning, stat err = %v", err)
 		}
 		if callCount != 2 {
 			t.Fatalf("browser program calls = %d, want 2", callCount)

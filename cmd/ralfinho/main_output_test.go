@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/fsmiamoto/ralfinho/internal/cli"
 	"github.com/fsmiamoto/ralfinho/internal/runner"
 )
@@ -217,6 +219,31 @@ func TestRunBrowserExitsWithReadableError(t *testing.T) {
 	}
 }
 
+func TestRunBrowserExitsWhenBrowserProgramFails(t *testing.T) {
+	runsDir := t.TempDir()
+	writeMetaOnlyRun(t, runsDir, "saved-run", runner.RunMeta{
+		RunID:               "saved-run",
+		StartedAt:           "2026-03-08T10:00:00Z",
+		Status:              string(runner.StatusCompleted),
+		Agent:               "pi",
+		PromptSource:        "default",
+		IterationsCompleted: 1,
+	})
+	writeRunEventsArtifact(t, runsDir, "saved-run", `{"type":"turn_end"}`)
+
+	_, stderr, exitCode := runHelperProcess(t, map[string]string{
+		"HELPER_ACTION":    "run-browser-tui-error",
+		"HELPER_RUNS_DIR":  runsDir,
+		"HELPER_TUI_ERROR": "browser boom",
+	})
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr, "ralfinho: TUI error: browser boom") {
+		t.Fatalf("stderr = %q, want readable browser-program error", stderr)
+	}
+}
+
 func TestCommandHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
@@ -233,6 +260,13 @@ func TestCommandHelperProcess(t *testing.T) {
 			ViewRunID: os.Getenv("HELPER_RUN_ID"),
 		})
 	case "run-browser":
+		runBrowser(&cli.Config{RunsDir: os.Getenv("HELPER_RUNS_DIR")})
+	case "run-browser-tui-error":
+		newTeaProgram = func(model tea.Model, _ ...tea.ProgramOption) teaProgram {
+			return &scriptedTeaProgram{run: func() (tea.Model, error) {
+				return nil, errors.New(os.Getenv("HELPER_TUI_ERROR"))
+			}}
+		}
 		runBrowser(&cli.Config{RunsDir: os.Getenv("HELPER_RUNS_DIR")})
 	default:
 		t.Fatalf("unknown HELPER_ACTION %q", os.Getenv("HELPER_ACTION"))
