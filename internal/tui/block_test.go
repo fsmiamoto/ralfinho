@@ -730,3 +730,112 @@ func TestBuildBlock_ToolUpdate_ToolDisplayArgs_UsedDirectly(t *testing.T) {
 		t.Errorf("expected ToolArgs=%q (from ToolDisplayArgs in update), got %q", "$ make build", m.blocks[0].ToolArgs)
 	}
 }
+
+func TestMainBlockRender_IterationUsesMinimumRuleLength(t *testing.T) {
+	got := stripANSI((&MainBlock{Kind: BlockIteration, Iteration: 4}).Render(5, ""))
+	want := "── iteration 4 ───"
+	if got != want {
+		t.Fatalf("Render() = %q, want %q", got, want)
+	}
+}
+
+func TestMainBlockRender_AssistantTextHandlesEmptyAndNonEmptyText(t *testing.T) {
+	if got := (&MainBlock{Kind: BlockAssistantText}).Render(40, ""); got != "" {
+		t.Fatalf("Render() with empty assistant text = %q, want empty string", got)
+	}
+
+	renderer = nil
+	rendererWidth = 0
+
+	got := stripANSI((&MainBlock{Kind: BlockAssistantText, Text: "assistant paragraph"}).Render(40, ""))
+	if !strings.Contains(got, "assistant paragraph") {
+		t.Fatalf("Render() = %q, want assistant text content", got)
+	}
+}
+
+func TestMainBlockRender_Thinking(t *testing.T) {
+	got := stripANSI((&MainBlock{Kind: BlockThinking, ThinkingLen: 42}).Render(40, ""))
+	want := "  thinking (42 chars)"
+	if got != want {
+		t.Fatalf("Render() = %q, want %q", got, want)
+	}
+}
+
+func TestMainBlockRender_ToolCallRunningUsesSpinnerAndFallbackDots(t *testing.T) {
+	running := stripANSI((&MainBlock{
+		Kind:     BlockToolCall,
+		ToolName: "bash",
+		ToolArgs: "$ make test",
+	}).Render(30, "⠋"))
+
+	for _, want := range []string{"bash ⠋", "$ make test"} {
+		if !strings.Contains(running, want) {
+			t.Fatalf("running Render() = %q, want substring %q", running, want)
+		}
+	}
+
+	fallback := stripANSI((&MainBlock{Kind: BlockToolCall, ToolName: "bash"}).Render(30, ""))
+	if !strings.Contains(fallback, "bash ...") {
+		t.Fatalf("fallback Render() = %q, want default running status", fallback)
+	}
+}
+
+func TestMainBlockRender_ToolCallDoneReadSummarizesFileOutput(t *testing.T) {
+	got := stripANSI((&MainBlock{
+		Kind:       BlockToolCall,
+		ToolName:   "Read",
+		ToolArgs:   "/tmp/output.txt",
+		ToolDone:   true,
+		ToolResult: "alpha\nbeta\ngamma",
+	}).Render(30, ""))
+
+	for _, want := range []string{"Read ok", "/tmp/output.txt", "(3 lines)"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Render() = %q, want substring %q", got, want)
+		}
+	}
+	for _, unwanted := range []string{"alpha", "beta", "gamma"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("Render() = %q, should summarize file output instead of showing %q", got, unwanted)
+		}
+	}
+}
+
+func TestMainBlockRender_ToolCallDoneBashTruncatesResultAndClampsWidths(t *testing.T) {
+	got := stripANSI((&MainBlock{
+		Kind:       BlockToolCall,
+		ToolName:   "bash",
+		ToolDone:   true,
+		ToolResult: strings.Join([]string{"l1", "l2", "l3", "l4", "l5", "l6", "l7"}, "\n"),
+	}).Render(8, ""))
+
+	for _, want := range []string{"bash ok", "l1", "l6", "… (1", "more", "lines)"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Render() = %q, want substring %q", got, want)
+		}
+	}
+	if strings.Contains(got, "l7") {
+		t.Fatalf("Render() = %q, should omit truncated lines", got)
+	}
+}
+
+func TestMainBlockRender_ToolCallErrorShowsErrorHeader(t *testing.T) {
+	got := stripANSI((&MainBlock{Kind: BlockToolCall, ToolName: "write", ToolError: true}).Render(24, ""))
+	if !strings.Contains(got, "write !") {
+		t.Fatalf("Render() = %q, want error header", got)
+	}
+	if strings.Contains(got, "write ok") {
+		t.Fatalf("Render() = %q, should not look successful", got)
+	}
+}
+
+func TestMainBlockRender_InfoAndUnknownKinds(t *testing.T) {
+	info := stripANSI((&MainBlock{Kind: BlockInfo, InfoText: "some info"}).Render(20, ""))
+	if !strings.Contains(info, "some info") {
+		t.Fatalf("Render() = %q, want info text", info)
+	}
+
+	if got := (&MainBlock{Kind: BlockKind(99)}).Render(20, ""); got != "" {
+		t.Fatalf("Render() with unknown kind = %q, want empty string", got)
+	}
+}
