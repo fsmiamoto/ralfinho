@@ -159,6 +159,24 @@ func TestListRunsMissingRunsDirReturnsNilNil(t *testing.T) {
 	}
 }
 
+func TestListRunsNonDirectoryRunsDirReturnsReadableError(t *testing.T) {
+	runsDir := filepath.Join(t.TempDir(), "runs-file")
+	if err := os.WriteFile(runsDir, []byte("not a directory"), 0644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runsDir, err)
+	}
+
+	runs, err := ListRuns(runsDir)
+	if err == nil {
+		t.Fatal("ListRuns() expected error for non-directory runsDir, got nil")
+	}
+	if runs != nil {
+		t.Fatalf("ListRuns() = %v, want nil on error", runs)
+	}
+	if !strings.Contains(err.Error(), "reading runs directory") {
+		t.Fatalf("error = %q, want to mention %q", err.Error(), "reading runs directory")
+	}
+}
+
 func TestListRunsSkipsDirectoriesWithoutMetaJSON(t *testing.T) {
 	runsDir := t.TempDir()
 
@@ -296,6 +314,25 @@ func TestLoadRunMissingEffectivePromptSucceeds(t *testing.T) {
 	}
 }
 
+func TestLoadRunIgnoresUnreadableEffectivePromptDirectory(t *testing.T) {
+	runsDir := t.TempDir()
+	writeRunMeta(t, runsDir, "dir-prompt-run", runner.RunMeta{RunID: "dir-prompt-run"})
+	writeRunEvents(t, runsDir, "dir-prompt-run")
+
+	promptDir := filepath.Join(runsDir, "dir-prompt-run", "effective-prompt.md")
+	if err := os.MkdirAll(promptDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", promptDir, err)
+	}
+
+	run, err := LoadRun(runsDir, "dir-prompt-run")
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v, want nil when effective-prompt.md cannot be read", err)
+	}
+	if run.Prompt != "" {
+		t.Fatalf("Prompt = %q, want empty string when effective-prompt.md is unreadable", run.Prompt)
+	}
+}
+
 func TestLoadRunMissingMetaJSONErrors(t *testing.T) {
 	runsDir := t.TempDir()
 
@@ -362,6 +399,20 @@ func TestLoadRunDelegatesResolutionToResolveRunID(t *testing.T) {
 	}
 	if run.Meta.RunID != "prefix-abc123" {
 		t.Fatalf("Meta.RunID = %q, want %q", run.Meta.RunID, "prefix-abc123")
+	}
+}
+
+func TestLoadRunPropagatesResolveRunIDErrors(t *testing.T) {
+	runsDir := t.TempDir()
+	writeRunMeta(t, runsDir, "other-run", runner.RunMeta{RunID: "other-run"})
+	writeRunEvents(t, runsDir, "other-run")
+
+	_, err := LoadRun(runsDir, "missing")
+	if err == nil {
+		t.Fatal("LoadRun() expected ResolveRunID error for unknown prefix, got nil")
+	}
+	if !strings.Contains(err.Error(), "no run found") {
+		t.Fatalf("error = %q, want to contain %q", err.Error(), "no run found")
 	}
 }
 
