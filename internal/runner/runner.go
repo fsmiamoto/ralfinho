@@ -99,6 +99,9 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 	// Open persistence files.
 	r.openRunFiles()
 
+	// Write initial meta.json so external tools can see the run immediately.
+	r.writeMeta(StatusRunning, 0)
+
 	// Construct the agent for this run (unless pre-set, e.g. in tests).
 	if r.iterAgent == nil {
 		var agentOpts []agent.Option
@@ -110,7 +113,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 		if err != nil {
 			r.logf("error: %v\n", err)
 			result.Status = StatusFailed
-			r.writeMeta(result)
+			r.writeMeta(result.Status, result.Iterations)
 			r.closeRunFiles()
 			return result
 		}
@@ -120,6 +123,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 	done := false
 	for !done {
 		result.Iterations++
+		r.writeMeta(StatusRunning, result.Iterations)
 		if r.cfg.MaxIterations > 0 && result.Iterations > r.cfg.MaxIterations {
 			result.Iterations--
 			result.Status = StatusMaxIterationsReached
@@ -159,8 +163,8 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 		}
 	}
 
-	// Write meta.json and close persistence files.
-	r.writeMeta(result)
+	// Write final meta.json and close persistence files.
+	r.writeMeta(result.Status, result.Iterations)
 	r.closeRunFiles()
 
 	return result
@@ -462,20 +466,27 @@ func (r *Runner) timestamp() string {
 	return time.Now().Format(time.RFC3339)
 }
 
-// writeMeta writes meta.json to the run directory.
-func (r *Runner) writeMeta(result RunResult) {
+// writeMeta writes meta.json to the run directory. For terminal statuses
+// (anything other than StatusRunning), EndedAt is populated with the current
+// time. For StatusRunning, EndedAt is left empty to signal the run is still
+// in progress.
+func (r *Runner) writeMeta(status Status, iterations int) {
 	dir := filepath.Join(r.cfg.RunsDir, r.runID)
+	var endedAt string
+	if status != StatusRunning {
+		endedAt = time.Now().Format(time.RFC3339)
+	}
 	meta := RunMeta{
 		RunID:               r.runID,
 		StartedAt:           r.startedAt.Format(time.RFC3339),
-		EndedAt:             time.Now().Format(time.RFC3339),
-		Status:              string(result.Status),
+		EndedAt:             endedAt,
+		Status:              string(status),
 		Agent:               r.cfg.Agent,
 		PromptSource:        r.cfg.PromptSource,
 		PromptFile:          r.cfg.PromptFile,
 		PlanFile:            r.cfg.PlanFile,
 		MaxIterations:       r.cfg.MaxIterations,
-		IterationsCompleted: result.Iterations,
+		IterationsCompleted: iterations,
 	}
 	if err := writeMetaJSON(filepath.Join(dir, "meta.json"), meta); err != nil {
 		r.logf("warning: could not write meta.json: %v\n", err)

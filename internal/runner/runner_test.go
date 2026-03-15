@@ -597,13 +597,7 @@ func TestRunner_WriteMeta(t *testing.T) {
 	r, runDir := newTestRunner(t)
 	r.startedAt = time.Now()
 
-	result := RunResult{
-		RunID:      r.runID,
-		Iterations: 3,
-		Status:     StatusCompleted,
-		Agent:      "test",
-	}
-	r.writeMeta(result)
+	r.writeMeta(StatusCompleted, 3)
 
 	data, err := os.ReadFile(runDir + "/meta.json")
 	if err != nil {
@@ -626,6 +620,59 @@ func TestRunner_WriteMeta(t *testing.T) {
 	}
 	if meta.Agent != "test" {
 		t.Errorf("expected agent=test, got %q", meta.Agent)
+	}
+	if meta.EndedAt == "" {
+		t.Error("expected ended_at to be set for completed status")
+	}
+}
+
+func TestRunner_WriteMeta_Running_EmptyEndedAt(t *testing.T) {
+	r, runDir := newTestRunner(t)
+	r.startedAt = time.Now()
+
+	r.writeMeta(StatusRunning, 2)
+
+	data, err := os.ReadFile(runDir + "/meta.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var meta RunMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatalf("meta.json is not valid JSON: %v", err)
+	}
+
+	if meta.Status != "running" {
+		t.Errorf("expected status=running, got %q", meta.Status)
+	}
+	if meta.EndedAt != "" {
+		t.Errorf("expected ended_at to be empty for running status, got %q", meta.EndedAt)
+	}
+	if meta.IterationsCompleted != 2 {
+		t.Errorf("expected iterations_completed=2, got %d", meta.IterationsCompleted)
+	}
+}
+
+func TestRunner_WriteMeta_Terminal_HasEndedAt(t *testing.T) {
+	r, runDir := newTestRunner(t)
+	r.startedAt = time.Now()
+
+	for _, status := range []Status{StatusCompleted, StatusFailed, StatusInterrupted, StatusMaxIterationsReached} {
+		r.writeMeta(status, 5)
+
+		data, err := os.ReadFile(runDir + "/meta.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var meta RunMeta
+		if err := json.Unmarshal(data, &meta); err != nil {
+			t.Fatalf("meta.json is not valid JSON: %v", err)
+		}
+
+		if meta.EndedAt == "" {
+			t.Errorf("expected ended_at to be set for %s status", status)
+		}
 	}
 }
 
@@ -1017,6 +1064,126 @@ func TestRun_ContextCancellation(t *testing.T) {
 	// interruption (e.g. user quit the TUI) rather than a failure.
 	if result.Status != StatusInterrupted {
 		t.Errorf("status = %s, want %s", result.Status, StatusInterrupted)
+	}
+}
+
+// metaSnapshotAgent wraps an agent.Agent and reads meta.json before each
+// iteration, capturing snapshots of the on-disk metadata while the run
+// is still in progress.
+type metaSnapshotAgent struct {
+	inner     *fakeAgent
+	runner    *Runner
+	snapshots *[]RunMeta
+}
+
+func (m *metaSnapshotAgent) RunIteration(ctx context.Context, prompt string, onEvent func(events.Event)) (string, error) {
+	metaPath := filepath.Join(m.runner.cfg.RunsDir, m.runner.runID, "meta.json")
+	if data, err := os.ReadFile(metaPath); err == nil {
+		var meta RunMeta
+		if err := json.Unmarshal(data, &meta); err == nil {
+			*m.snapshots = append(*m.snapshots, meta)
+		}
+	}
+	return m.inner.RunIteration(ctx, prompt, onEvent)
+}
+
+func TestRun_WritesRunningMetaDuringLoop(t *testing.T) {
+	var metaSnapshots []RunMeta
+
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{text: "working..."},
+			{text: "still going..."},
+			{text: completionMarker},
+		},
+	}
+
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:  "test",
+		Prompt: "check running meta",
+	})
+
+	// Replace the fake agent with a snapshot wrapper.
+	r.iterAgent = &metaSnapshotAgent{
+		inner:     fa,
+		runner:    r,
+		snapshots: &metaSnapshots,
+	}
+
+	result := r.Run(context.Background())
+
+	// Should have captured meta during each of the 3 iterations.
+	if len(metaSnapshots) != 3 {
+		t.Fatalf("expected 3 meta snapshots, got %d", len(metaSnapshots))
+	}
+
+	// All mid-run snapshots should be "running" with empty ended_at.
+	for i, snap := range metaSnapshots {
+		if snap.Status != "running" {
+			t.Errorf("snapshot %d: status = %q, want %q", i, snap.Status, "running")
+		}
+		if snap.EndedAt != "" {
+			t.Errorf("snapshot %d: ended_at = %q, want empty", i, snap.EndedAt)
+		}
+		if snap.IterationsCompleted != i+1 {
+			t.Errorf("snapshot %d: iterations_completed = %d, want %d", i, snap.IterationsCompleted, i+1)
+		}
+	}
+
+	// Final meta on disk should be terminal.
+	metaPath := filepath.Join(r.cfg.RunsDir, r.runID, "meta.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var finalMeta RunMeta
+	if err := json.Unmarshal(data, &finalMeta); err != nil {
+		t.Fatal(err)
+	}
+	if finalMeta.Status != string(result.Status) {
+		t.Errorf("final status = %q, want %q", finalMeta.Status, result.Status)
+	}
+	if finalMeta.EndedAt == "" {
+		t.Error("final ended_at should be populated")
+	}
+	if finalMeta.IterationsCompleted != 3 {
+		t.Errorf("final iterations = %d, want 3", finalMeta.IterationsCompleted)
+	}
+}
+
+func TestRun_InitialMetaBeforeAgentStarts(t *testing.T) {
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{text: completionMarker},
+		},
+	}
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:  "test",
+		Prompt: "check initial meta",
+	})
+
+	// Wrap to capture meta at iteration 1 — the initial write (iterations=0)
+	// should already be on disk before this, so we check that the snapshot
+	// at iteration 1 shows iterations_completed=1 (overwritten by the
+	// per-iteration write).
+	var snapshots []RunMeta
+	r.iterAgent = &metaSnapshotAgent{
+		inner:     fa,
+		runner:    r,
+		snapshots: &snapshots,
+	}
+
+	r.Run(context.Background())
+
+	if len(snapshots) != 1 {
+		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
+	}
+	// By the time the agent runs, the per-iteration write has set iterations=1.
+	if snapshots[0].IterationsCompleted != 1 {
+		t.Errorf("snapshot iterations_completed = %d, want 1", snapshots[0].IterationsCompleted)
+	}
+	if snapshots[0].Agent != "test" {
+		t.Errorf("snapshot agent = %q, want %q", snapshots[0].Agent, "test")
 	}
 }
 
