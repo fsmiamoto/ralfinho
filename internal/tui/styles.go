@@ -169,4 +169,6 @@ var (
 	browserCardTitleWarning = lipgloss.NewStyle().
 				Foreground(colorTool).
 				Bold(true)
+
+	dismissHintStyle = lipgloss.NewStyle().Faint(true)
 )

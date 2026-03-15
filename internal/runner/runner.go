@@ -53,6 +53,7 @@ type RunResult struct {
 	Iterations int
 	Status     Status
 	Agent      string
+	Error      string // non-empty when Status == StatusFailed
 }
 
 // Runner drives the agent iteration loop.
@@ -120,6 +121,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 		if err != nil {
 			r.logf("error: %v\n", err)
 			result.Status = StatusFailed
+			result.Error = err.Error()
 			r.writeMeta(result.Status, result.Iterations)
 			r.closeRunFiles()
 			return result
@@ -154,6 +156,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 			r.logf("error: %v\n", err)
 			r.sessionLogf("[%s] error: %v\n", r.timestamp(), err)
 			result.Status = StatusFailed
+			result.Error = err.Error()
 			break
 		}
 

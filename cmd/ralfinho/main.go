@@ -191,6 +191,9 @@ func printRunSummary(label string, result runner.RunResult) {
 	fmt.Fprintf(os.Stderr, "agent:      %s\n", result.Agent)
 	fmt.Fprintf(os.Stderr, "iterations: %d\n", result.Iterations)
 	fmt.Fprintf(os.Stderr, "status:     %s\n", result.Status)
+	if result.Error != "" {
+		fmt.Fprintf(os.Stderr, "error:      %s\n", result.Error)
+	}
 }
 
 func exitForStatus(status runner.Status) {

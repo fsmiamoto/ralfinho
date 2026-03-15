@@ -47,6 +47,8 @@ type Model struct {
 	modelName    string
 	iteration    int // current iteration count for header display
 
+	errorOverlay string // non-empty = show error modal overlay
+
 	// Main view (top pane) state.
 	blocks         []MainBlock // ordered content blocks for the main view
 	mainScroll     int         // scroll offset in main view (line-based)
@@ -169,6 +171,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case DoneMsg:
 		m.running = false
 		m.status = fmt.Sprintf("Done — %s | %s (%d iterations)", msg.Result.Agent, msg.Result.Status, msg.Result.Iterations)
+		if msg.Result.Error != "" {
+			m.errorOverlay = msg.Result.Error
+		}
 		m.result = &msg.Result
 		return m, nil
 
@@ -341,6 +346,12 @@ func (m *Model) autoScrollMain() {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Dismiss error overlay on any keypress.
+	if m.errorOverlay != "" {
+		m.errorOverlay = ""
+		return m, nil
+	}
+
 	// Handle quit confirmation state.
 	if m.confirmQuit {
 		if m.confirmCtrlC && msg.String() == "ctrl+c" {
@@ -534,6 +545,10 @@ func (m Model) paneHeight() int {
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
 		return "Initializing..."
+	}
+
+	if m.errorOverlay != "" {
+		return m.renderErrorOverlay()
 	}
 
 	headerBar := m.renderHeader()
@@ -886,4 +901,40 @@ func truncateToWidth(s string, maxW int) string {
 		return s
 	}
 	return clipToWidth(s, maxW-3) + "..."
+}
+
+// renderErrorOverlay renders the error text as a centered modal card.
+// The overlay is dismissed by any keypress.
+func (m Model) renderErrorOverlay() string {
+	maxWidth := min(m.width*7/10, 80)
+	maxHeight := m.height * 6 / 10
+
+	title := browserCardTitleWarning.Render("Error")
+
+	// Word-wrap the error text to fit inside the card (accounting for border+padding).
+	innerWidth := maxWidth - 4 // 2 border + 2 padding
+	if innerWidth < 20 {
+		innerWidth = 20
+	}
+	body := WrapText(m.errorOverlay, innerWidth)
+
+	// Truncate body lines if they exceed max height (leave room for title + blank + hint).
+	lines := strings.Split(body, "\n")
+	maxBodyLines := maxHeight - 6 // title + blank + hint + borders
+	if maxBodyLines < 3 {
+		maxBodyLines = 3
+	}
+	if len(lines) > maxBodyLines {
+		lines = append(lines[:maxBodyLines], "...")
+	}
+	body = strings.Join(lines, "\n")
+
+	hint := dismissHintStyle.Render("Press any key to dismiss")
+
+	content := title + "\n\n" + body + "\n\n" + hint
+	card := browserCardBorderWarning.Width(maxWidth).Render(content)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, card,
+		lipgloss.WithWhitespaceChars(" "),
+	)
 }
