@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -867,4 +868,149 @@ func TestListRunSummariesEmptyRunsDir(t *testing.T) {
 	if len(summaries) != 0 {
 		t.Fatalf("len(summaries) = %d, want 0", len(summaries))
 	}
+}
+
+func TestListRunSummariesRunsDirReadError(t *testing.T) {
+	runsPath := filepath.Join(t.TempDir(), "runs-file")
+	if err := os.WriteFile(runsPath, []byte("not a directory"), 0644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runsPath, err)
+	}
+
+	summaries, err := ListRunSummaries(runsPath)
+	if err == nil {
+		t.Fatal("ListRunSummaries() expected error for file runsDir, got nil")
+	}
+	if summaries != nil {
+		t.Fatalf("summaries = %#v, want nil on read error", summaries)
+	}
+	if !strings.Contains(err.Error(), "reading runs directory") {
+		t.Fatalf("error = %q, want to contain %q", err.Error(), "reading runs directory")
+	}
+}
+
+func TestListRunSummariesKeepsMetaReadErrorsOnSummary(t *testing.T) {
+	runsDir := t.TempDir()
+	writeRunEvents(t, runsDir, "meta-dir")
+	writeEffectivePrompt(t, runsDir, "meta-dir", "recover from saved prompt")
+
+	metaDir := filepath.Join(runsDir, "meta-dir", "meta.json")
+	if err := os.MkdirAll(metaDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", metaDir, err)
+	}
+
+	summaries, err := ListRunSummaries(runsDir)
+	if err != nil {
+		t.Fatalf("ListRunSummaries() error = %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("len(summaries) = %d, want 1", len(summaries))
+	}
+
+	summary := summaries[0]
+	if summary.HasMeta {
+		t.Fatal("summary should not mark a directory meta.json as parsed meta")
+	}
+	if !strings.Contains(summary.ArtifactError, "reading meta.json") {
+		t.Fatalf("ArtifactError = %q, want reading meta.json error", summary.ArtifactError)
+	}
+	if summary.Actions.Open.Available {
+		t.Fatalf("Open action = %#v, want unavailable when meta.json is unreadable", summary.Actions.Open)
+	}
+	if summary.Actions.Open.DisabledReason != summary.ArtifactError {
+		t.Fatalf("Open disabled reason = %q, want ArtifactError %q", summary.Actions.Open.DisabledReason, summary.ArtifactError)
+	}
+	if !summary.Actions.Resume.Available || summary.Actions.Resume.Source != ResumeSourceEffectivePrompt {
+		t.Fatalf("Resume action = %#v, want effective-prompt fallback", summary.Actions.Resume)
+	}
+	if !summary.Matches("reading meta.json") {
+		t.Fatalf("SearchText = %q, expected reading error to be searchable", summary.SearchText)
+	}
+}
+
+func TestBuildRunActionsUsesGenericFallbackReasonsForSparseSummaries(t *testing.T) {
+	t.Run("missing meta and dir", func(t *testing.T) {
+		actions := buildRunActions(RunSummary{})
+		if actions.Open.Available {
+			t.Fatalf("Open action = %#v, want unavailable", actions.Open)
+		}
+		if actions.Open.DisabledReason != "meta.json unavailable" {
+			t.Fatalf("Open disabled reason = %q, want %q", actions.Open.DisabledReason, "meta.json unavailable")
+		}
+		if actions.Delete.Available {
+			t.Fatalf("Delete action = %#v, want unavailable", actions.Delete)
+		}
+		if actions.Delete.DisabledReason != "run directory unavailable" {
+			t.Fatalf("Delete disabled reason = %q, want %q", actions.Delete.DisabledReason, "run directory unavailable")
+		}
+		if actions.Resume.Available {
+			t.Fatalf("Resume action = %#v, want unavailable", actions.Resume)
+		}
+		if actions.Resume.DisabledReason != "meta.json unavailable" {
+			t.Fatalf("Resume disabled reason = %q, want %q", actions.Resume.DisabledReason, "meta.json unavailable")
+		}
+	})
+
+	t.Run("missing events without artifact error", func(t *testing.T) {
+		actions := buildRunActions(RunSummary{HasMeta: true, Dir: t.TempDir()})
+		if actions.Open.Available {
+			t.Fatalf("Open action = %#v, want unavailable", actions.Open)
+		}
+		if actions.Open.DisabledReason != "events.jsonl unavailable" {
+			t.Fatalf("Open disabled reason = %q, want %q", actions.Open.DisabledReason, "events.jsonl unavailable")
+		}
+		if !actions.Delete.Available {
+			t.Fatalf("Delete action = %#v, want available", actions.Delete)
+		}
+		if actions.Resume.Available {
+			t.Fatalf("Resume action = %#v, want unavailable without prompt metadata", actions.Resume)
+		}
+		if actions.Resume.DisabledReason != "meta.json does not describe a reusable prompt source" {
+			t.Fatalf("Resume disabled reason = %q, want reusable prompt source explanation", actions.Resume.DisabledReason)
+		}
+	})
+}
+
+func TestInspectRunArtifactReadErrors(t *testing.T) {
+	t.Run("stat error through non-directory parent", func(t *testing.T) {
+		parentFile := filepath.Join(t.TempDir(), "parent-file")
+		if err := os.WriteFile(parentFile, []byte("not a directory"), 0644); err != nil {
+			t.Fatalf("WriteFile(%q): %v", parentFile, err)
+		}
+
+		ok, msg := inspectRunArtifact(filepath.Join(parentFile, "events.jsonl"))
+		if ok {
+			t.Fatal("inspectRunArtifact() = ok for path inside regular file parent, want false")
+		}
+		if !strings.Contains(msg, "reading events.jsonl:") {
+			t.Fatalf("inspectRunArtifact() message = %q, want reading error", msg)
+		}
+	})
+
+	t.Run("open error on unreadable file", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("chmod-based permission checks are not reliable on Windows")
+		}
+
+		path := filepath.Join(t.TempDir(), "events.jsonl")
+		if err := os.WriteFile(path, []byte("{}\n"), 0644); err != nil {
+			t.Fatalf("WriteFile(%q): %v", path, err)
+		}
+		if err := os.Chmod(path, 0); err != nil {
+			t.Fatalf("Chmod(%q, 0): %v", path, err)
+		}
+		defer os.Chmod(path, 0600)
+
+		if f, err := os.Open(path); err == nil {
+			f.Close()
+			t.Skip("current user can still open chmod 000 files; skipping open-error path")
+		}
+
+		ok, msg := inspectRunArtifact(path)
+		if ok {
+			t.Fatal("inspectRunArtifact() = ok for unreadable file, want false")
+		}
+		if !strings.Contains(msg, "reading events.jsonl:") {
+			t.Fatalf("inspectRunArtifact() message = %q, want reading error", msg)
+		}
+	})
 }
