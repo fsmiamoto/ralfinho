@@ -977,6 +977,45 @@ func TestClaudeAgent_RunIteration_EmptyOutput(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Integration test: non-zero exit returns error
+// ---------------------------------------------------------------------------
+
+func TestClaudeAgent_RunIteration_NonZeroExit(t *testing.T) {
+	script := makeScript(t, "exit 1\n")
+	a := NewClaudeAgent()
+	a.binary = script
+
+	onEvent, _ := collectEvents()
+
+	_, err := a.RunIteration(context.Background(), "test", onEvent)
+	if err == nil {
+		t.Fatal("expected error for non-zero exit")
+	}
+	if !strings.Contains(err.Error(), "exit status 1") {
+		t.Errorf("error should contain exit status, got: %v", err)
+	}
+}
+
+func TestClaudeAgent_RunIteration_NonZeroExitWithStderr(t *testing.T) {
+	script := makeScript(t, "echo 'missing API key' >&2; exit 1\n")
+	a := NewClaudeAgent()
+	a.binary = script
+
+	onEvent, _ := collectEvents()
+
+	_, err := a.RunIteration(context.Background(), "test", onEvent)
+	if err == nil {
+		t.Fatal("expected error for non-zero exit")
+	}
+	if !strings.Contains(err.Error(), "missing API key") {
+		t.Errorf("error should contain stderr message, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "exit status 1") {
+		t.Errorf("error should contain exit status, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Integration test: invalid JSON lines are skipped gracefully
 // ---------------------------------------------------------------------------
 

@@ -152,9 +152,11 @@ func (c *acpClient) getReadErr() error {
 // and returns a ready-to-use client. The caller must call Close() when done.
 //
 // If rawWriter is non-nil, raw JSON-RPC messages from stdout are tee'd to it
-// for debugging (raw-output.log).
-func newACPClient(ctx context.Context, rawWriter io.Writer, logWriter io.Writer) (*acpClient, error) {
-	cmd := exec.CommandContext(ctx, "kiro-cli", "acp", "--trust-all-tools")
+// for debugging (raw-output.log). extraArgs, if non-empty, are appended to
+// the kiro-cli command line after the built-in flags.
+func newACPClient(ctx context.Context, rawWriter io.Writer, logWriter io.Writer, extraArgs []string) (*acpClient, error) {
+	args := append([]string{"acp", "--trust-all-tools"}, extraArgs...)
+	cmd := exec.CommandContext(ctx, "kiro-cli", args...)
 	stderrBuf := newLimitedBuffer(4096)
 	cmd.Stderr = stderrBuf // capture last 4KB of kiro-cli stderr for diagnostics
 	// Use a process group so we can kill kiro-cli and all its children.

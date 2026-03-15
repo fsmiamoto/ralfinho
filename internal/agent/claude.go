@@ -67,9 +67,11 @@ func (a *ClaudeAgent) RunIteration(ctx context.Context, prompt string, onEvent f
 		"--dangerously-skip-permissions",
 		"--no-session-persistence",
 	}
+	cmdArgs = append(cmdArgs, a.opts.ExtraArgs...)
 
 	cmd := exec.CommandContext(ctx, a.binary, cmdArgs...)
-	cmd.Stderr = nil // suppress agent stderr
+	stderrBuf := newLimitedBuffer(4096)
+	cmd.Stderr = stderrBuf
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -80,7 +82,6 @@ func (a *ClaudeAgent) RunIteration(ctx context.Context, prompt string, onEvent f
 		stdout.Close()
 		return "", fmt.Errorf("claude: starting agent: %w", err)
 	}
-	defer cmd.Wait() // always reap the subprocess to prevent zombies
 
 	// Optionally tee raw stdout to RawWriter.
 	var stdoutReader io.Reader = stdout
@@ -109,6 +110,8 @@ func (a *ClaudeAgent) RunIteration(ctx context.Context, prompt string, onEvent f
 		mapper.handleLine(cl.Type, []byte(line))
 	}
 
+	waitErr := cmd.Wait()
+
 	if err := scanner.Err(); err != nil {
 		mapper.finalize()
 		return mapper.assistantText(), fmt.Errorf("claude: reading agent output: %w", err)
@@ -117,9 +120,19 @@ func (a *ClaudeAgent) RunIteration(ctx context.Context, prompt string, onEvent f
 	// Ensure proper lifecycle closure after scan loop.
 	mapper.finalize()
 
-	// Surface context cancellation.
+	// Surface context cancellation. Check before waitErr because
+	// CommandContext SIGKILLs the process, making cmd.Wait() return
+	// "signal: killed" — that's expected, not an agent error.
 	if ctx.Err() != nil {
 		return mapper.assistantText(), ctx.Err()
+	}
+
+	if waitErr != nil {
+		stderr := strings.TrimSpace(stderrBuf.String())
+		if stderr != "" {
+			return mapper.assistantText(), fmt.Errorf("claude: agent exited with error: %w\nstderr: %s", waitErr, stderr)
+		}
+		return mapper.assistantText(), fmt.Errorf("claude: agent exited with error: %w", waitErr)
 	}
 
 	return mapper.assistantText(), nil

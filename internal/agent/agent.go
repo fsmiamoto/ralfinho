@@ -56,6 +56,10 @@ type Options struct {
 	// LogWriter receives diagnostic/warning messages from the agent backend.
 	// Defaults to os.Stderr if not set.
 	LogWriter io.Writer
+
+	// ExtraArgs is appended verbatim to the agent subprocess command line
+	// after all built-in flags. Sourced from per-agent config file settings.
+	ExtraArgs []string
 }
 
 // WithRawWriter returns an Option that sets the raw output writer.
@@ -69,6 +73,15 @@ func WithRawWriter(w io.Writer) Option {
 func WithLogWriter(w io.Writer) Option {
 	return func(o *Options) {
 		o.LogWriter = w
+	}
+}
+
+// WithExtraArgs returns an Option that appends extra arguments to the agent
+// subprocess command line. Multiple calls accumulate (args are appended in
+// the order the options are applied).
+func WithExtraArgs(args []string) Option {
+	return func(o *Options) {
+		o.ExtraArgs = append(o.ExtraArgs, args...)
 	}
 }
 

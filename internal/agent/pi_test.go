@@ -314,6 +314,55 @@ func TestPiAgent_RunIteration_NonTextDeltaIgnored(t *testing.T) {
 	}
 }
 
+func TestPiAgent_RunIteration_NonZeroExit(t *testing.T) {
+	script := makeScript(t, "exit 1\n")
+	a := NewPiAgent(script)
+	onEvent, _ := collectEvents()
+
+	_, err := a.RunIteration(context.Background(), "test", onEvent)
+	if err == nil {
+		t.Fatal("expected error for non-zero exit")
+	}
+	if !strings.Contains(err.Error(), "exit status 1") {
+		t.Errorf("error should contain exit status, got: %v", err)
+	}
+}
+
+func TestPiAgent_RunIteration_NonZeroExitWithStderr(t *testing.T) {
+	script := makeScript(t, "echo 'missing API key' >&2; exit 1\n")
+	a := NewPiAgent(script)
+	onEvent, _ := collectEvents()
+
+	_, err := a.RunIteration(context.Background(), "test", onEvent)
+	if err == nil {
+		t.Fatal("expected error for non-zero exit")
+	}
+	if !strings.Contains(err.Error(), "missing API key") {
+		t.Errorf("error should contain stderr message, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "exit status 1") {
+		t.Errorf("error should contain exit status, got: %v", err)
+	}
+}
+
+func TestPiAgent_RunIteration_NonZeroExitWithOutput(t *testing.T) {
+	jsonlLines := []string{
+		`{"type":"message_start","message":{"role":"assistant","model":"test"}}`,
+		`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"partial"}}`,
+	}
+	script := makeScript(t, "cat <<'JSONL'\n"+strings.Join(jsonlLines, "\n")+"\nJSONL\nexit 1\n")
+	a := NewPiAgent(script)
+	onEvent, _ := collectEvents()
+
+	text, err := a.RunIteration(context.Background(), "test", onEvent)
+	if err == nil {
+		t.Fatal("expected error for non-zero exit")
+	}
+	if text != "partial" {
+		t.Errorf("expected partial assistant text %q, got %q", "partial", text)
+	}
+}
+
 func TestPiAgent_RunIteration_LargeOutput(t *testing.T) {
 	// Verify the scanner handles large lines (up to the configured buffer).
 	largeDelta := strings.Repeat("x", 100_000)

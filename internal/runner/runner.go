@@ -41,6 +41,10 @@ type RunConfig struct {
 	PromptFile    string       // path when PromptSource is "prompt"
 	PlanFile      string       // path when PromptSource is "plan"
 	EventChan     chan<- Event // optional: send events to TUI
+
+	// AgentExtraArgs holds extra arguments to append to the agent subprocess
+	// command line. Sourced from per-agent config file settings.
+	AgentExtraArgs []string
 }
 
 // RunResult is the summary returned after the loop finishes.
@@ -109,6 +113,9 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 			agentOpts = append(agentOpts, agent.WithRawWriter(r.rawFile))
 		}
 		agentOpts = append(agentOpts, agent.WithLogWriter(r.stderr))
+		if len(r.cfg.AgentExtraArgs) > 0 {
+			agentOpts = append(agentOpts, agent.WithExtraArgs(r.cfg.AgentExtraArgs))
+		}
 		resolved, err := agent.Resolve(r.cfg.Agent, agentOpts...)
 		if err != nil {
 			r.logf("error: %v\n", err)

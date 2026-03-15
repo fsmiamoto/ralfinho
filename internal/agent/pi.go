@@ -55,10 +55,12 @@ func (a *PiAgent) RunIteration(ctx context.Context, prompt string, onEvent func(
 	}
 	tmpFile.Close()
 
-	// Build command: <binary> --mode json -p --no-session @<tempfile>
+	// Build command: <binary> --mode json -p --no-session @<tempfile> [extra-args...]
 	cmdArgs := []string{"--mode", "json", "-p", "--no-session", "@" + tmpPath}
+	cmdArgs = append(cmdArgs, a.opts.ExtraArgs...)
 	cmd := exec.CommandContext(ctx, a.binary, cmdArgs...)
-	cmd.Stderr = nil // suppress agent stderr
+	stderrBuf := newLimitedBuffer(4096)
+	cmd.Stderr = stderrBuf
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -69,7 +71,6 @@ func (a *PiAgent) RunIteration(ctx context.Context, prompt string, onEvent func(
 		stdout.Close()
 		return "", fmt.Errorf("starting agent: %w", err)
 	}
-	defer cmd.Wait() // always reap the subprocess to prevent zombies
 
 	// Process JSONL output. Optionally tee raw stdout to RawWriter.
 	var stdoutReader io.Reader = stdout
@@ -110,14 +111,26 @@ func (a *PiAgent) RunIteration(ctx context.Context, prompt string, onEvent func(
 		onEvent(ev)
 	}
 
+	waitErr := cmd.Wait()
+
 	if err := scanner.Err(); err != nil {
 		return assistantText.String(), fmt.Errorf("reading agent output: %w", err)
 	}
 
 	// Surface context cancellation so the runner knows the iteration was
-	// interrupted rather than completed normally.
+	// interrupted rather than completed normally. Check before waitErr
+	// because CommandContext SIGKILLs the process, making cmd.Wait()
+	// return "signal: killed" — that's expected, not an agent error.
 	if ctx.Err() != nil {
 		return assistantText.String(), ctx.Err()
+	}
+
+	if waitErr != nil {
+		stderr := strings.TrimSpace(stderrBuf.String())
+		if stderr != "" {
+			return assistantText.String(), fmt.Errorf("agent exited with error: %w\nstderr: %s", waitErr, stderr)
+		}
+		return assistantText.String(), fmt.Errorf("agent exited with error: %w", waitErr)
 	}
 
 	return assistantText.String(), nil

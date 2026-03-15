@@ -1034,7 +1034,7 @@ func TestNewACPClient_KiroNotFound(t *testing.T) {
 	// even if it happens to be installed on the test machine.
 	t.Setenv("PATH", "/nonexistent-dir-for-test")
 
-	_, err := newACPClient(ctx, nil, io.Discard)
+	_, err := newACPClient(ctx, nil, io.Discard, nil)
 	if err == nil {
 		t.Fatal("expected error when kiro-cli is not in PATH, got nil")
 	}

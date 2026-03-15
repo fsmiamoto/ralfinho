@@ -45,7 +45,7 @@ func NewKiroAgent(options ...Option) *KiroAgent {
 // text.
 func (a *KiroAgent) RunIteration(ctx context.Context, prompt string, onEvent func(events.Event)) (string, error) {
 	// Spawn ACP client (includes initialize handshake).
-	client, err := newACPClient(ctx, a.opts.RawWriter, a.opts.LogWriter)
+	client, err := newACPClient(ctx, a.opts.RawWriter, a.opts.LogWriter, a.opts.ExtraArgs)
 	if err != nil {
 		return "", fmt.Errorf("kiro: %w", err)
 	}

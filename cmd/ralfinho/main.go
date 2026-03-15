@@ -15,11 +15,17 @@ import (
 
 	"github.com/fsmiamoto/ralfinho/internal/agent"
 	"github.com/fsmiamoto/ralfinho/internal/cli"
+	"github.com/fsmiamoto/ralfinho/internal/config"
 	"github.com/fsmiamoto/ralfinho/internal/prompt"
 	"github.com/fsmiamoto/ralfinho/internal/runner"
 	"github.com/fsmiamoto/ralfinho/internal/tui"
 	"github.com/fsmiamoto/ralfinho/internal/viewer"
 )
+
+// fileCfg holds the merged TOML config loaded once at startup. It is a
+// package-level variable so that helpers like extraArgsForAgent can access
+// it without threading the value through every call site.
+var fileCfg *config.FileConfig
 
 func main() {
 	cfg, err := cli.Parse(os.Args[1:])
@@ -31,6 +37,17 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ralfinho: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Load config file defaults (global + local, merged). Missing files are
+	// silently skipped; a parse error is fatal.
+	fileCfg, err = config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ralfinho: config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Apply file-based defaults for fields not explicitly set via CLI flags.
+	applyFileConfig(cfg, fileCfg, os.Args[1:])
 
 	// Handle --version flag.
 	if cfg.ShowVersion {
@@ -79,13 +96,14 @@ func main() {
 // runPlain runs the agent with plain stderr output (original behavior).
 func runPlain(cfg *cli.Config, promptText string) {
 	r := runner.New(runner.RunConfig{
-		Agent:         cfg.Agent,
-		Prompt:        promptText,
-		MaxIterations: cfg.MaxIterations,
-		RunsDir:       cfg.RunsDir,
-		PromptSource:  cfg.InputMode,
-		PromptFile:    cfg.PromptFile,
-		PlanFile:      cfg.PlanFile,
+		Agent:          cfg.Agent,
+		Prompt:         promptText,
+		MaxIterations:  cfg.MaxIterations,
+		RunsDir:        cfg.RunsDir,
+		PromptSource:   cfg.InputMode,
+		PromptFile:     cfg.PromptFile,
+		PlanFile:       cfg.PlanFile,
+		AgentExtraArgs: extraArgsForAgent(cfg.Agent),
 	})
 
 	result := r.Run(context.Background())
@@ -97,13 +115,14 @@ func runPlain(cfg *cli.Config, promptText string) {
 // runTUI runs the agent with the Bubble Tea TUI.
 func runTUI(cfg *cli.Config, promptText string) {
 	result, err := runAgentWithTUI(runner.RunConfig{
-		Agent:         cfg.Agent,
-		Prompt:        promptText,
-		MaxIterations: cfg.MaxIterations,
-		RunsDir:       cfg.RunsDir,
-		PromptSource:  cfg.InputMode,
-		PromptFile:    cfg.PromptFile,
-		PlanFile:      cfg.PlanFile,
+		Agent:          cfg.Agent,
+		Prompt:         promptText,
+		MaxIterations:  cfg.MaxIterations,
+		RunsDir:        cfg.RunsDir,
+		PromptSource:   cfg.InputMode,
+		PromptFile:     cfg.PromptFile,
+		PlanFile:       cfg.PlanFile,
+		AgentExtraArgs: extraArgsForAgent(cfg.Agent),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ralfinho: %v\n", err)
@@ -365,13 +384,14 @@ func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
 	inputMode, promptFile, planFile := resumePromptMeta(result.ResumeSource, result.ResumePath)
 
 	runResult, err := runAgentWithTUI(runner.RunConfig{
-		Agent:         agentName,
-		Prompt:        promptText,
-		MaxIterations: cfg.MaxIterations,
-		RunsDir:       cfg.RunsDir,
-		PromptSource:  inputMode,
-		PromptFile:    promptFile,
-		PlanFile:      planFile,
+		Agent:          agentName,
+		Prompt:         promptText,
+		MaxIterations:  cfg.MaxIterations,
+		RunsDir:        cfg.RunsDir,
+		PromptSource:   inputMode,
+		PromptFile:     promptFile,
+		PlanFile:       planFile,
+		AgentExtraArgs: extraArgsForAgent(agentName),
 	})
 	if err != nil {
 		return err
@@ -418,6 +438,69 @@ func resumePromptMeta(source viewer.ResumeSource, path string) (inputMode, promp
 	default:
 		return "prompt", "", ""
 	}
+}
+
+// applyFileConfig applies file-based config defaults to cfg for fields not
+// explicitly set via CLI flags. The args slice is the original os.Args[1:]
+// used to detect which flags were explicitly provided by the user.
+//
+// CLI flags always win over config file values. The config file only fills in
+// values that the user did not supply on the command line.
+func applyFileConfig(cfg *cli.Config, fileCfg *config.FileConfig, args []string) {
+	if fileCfg == nil {
+		return
+	}
+
+	// Determine which flag names were explicitly present in the command line.
+	explicit := parseFlagSet(args)
+
+	if fileCfg.Agent != "" && !explicit["agent"] && !explicit["a"] {
+		cfg.Agent = fileCfg.Agent
+	}
+	if fileCfg.MaxIterations != nil && !explicit["max-iterations"] && !explicit["m"] {
+		cfg.MaxIterations = *fileCfg.MaxIterations
+	}
+	if fileCfg.RunsDir != "" && !explicit["runs-dir"] {
+		cfg.RunsDir = fileCfg.RunsDir
+	}
+	if fileCfg.NoTUI != nil && !explicit["no-tui"] {
+		cfg.NoTUI = *fileCfg.NoTUI
+	}
+}
+
+// parseFlagSet returns the set of flag names that were explicitly present in
+// the given CLI argument slice. It recognises --flag, -flag, --flag=value,
+// and -flag=value patterns, but does not attempt full flag parsing — it is
+// only used to determine presence, not values.
+func parseFlagSet(args []string) map[string]bool {
+	set := make(map[string]bool)
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		name := strings.TrimLeft(arg, "-")
+		// Strip any =value suffix.
+		if idx := strings.IndexByte(name, '='); idx >= 0 {
+			name = name[:idx]
+		}
+		if name != "" {
+			set[name] = true
+		}
+	}
+	return set
+}
+
+// extraArgsForAgent returns the extra command-line arguments configured for
+// agentName in the loaded TOML config file. Returns nil if no config was
+// loaded or no entry exists for the agent.
+func extraArgsForAgent(agentName string) []string {
+	if fileCfg == nil {
+		return nil
+	}
+	if ac, ok := fileCfg.Agents[agentName]; ok {
+		return ac.ExtraArgs
+	}
+	return nil
 }
 
 // resolvePrompt reads the prompt content based on the CLI config.
