@@ -332,6 +332,15 @@ func TestOpenRunViewerWrapsTUIErrors(t *testing.T) {
 }
 
 func TestRunBrowserInteractiveFlows(t *testing.T) {
+	const completePI = `#!/bin/sh
+cat <<'JSONL'
+{"type":"message_start","message":{"role":"assistant","model":"fake-pi"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"<promise>COMPLETE</promise>"}}
+{"type":"message_end"}
+{"type":"turn_end"}
+JSONL
+`
+
 	t.Run("open action launches viewer and reopens browser", func(t *testing.T) {
 		runsDir := t.TempDir()
 		writeMetaOnlyRun(t, runsDir, "open-run", runner.RunMeta{
@@ -378,6 +387,310 @@ func TestRunBrowserInteractiveFlows(t *testing.T) {
 		runBrowser(&cli.Config{RunsDir: runsDir})
 
 		want := []string{"browser-open", "viewer", "browser-quit"}
+		if strings.Join(calls, ",") != strings.Join(want, ",") {
+			t.Fatalf("program call sequence = %#v, want %#v", calls, want)
+		}
+	})
+
+	t.Run("viewer errors are logged and browser stays open", func(t *testing.T) {
+		runsDir := t.TempDir()
+		writeMetaOnlyRun(t, runsDir, "open-run", runner.RunMeta{
+			RunID:               "open-run",
+			StartedAt:           "2026-03-08T10:00:00Z",
+			Status:              string(runner.StatusCompleted),
+			Agent:               "pi",
+			PromptSource:        "default",
+			IterationsCompleted: 1,
+		})
+		writeRunEventsArtifact(t, runsDir, "open-run", `{"type":"turn_end"}`)
+
+		var calls []string
+		useTeaProgramFactory(t, func(model tea.Model, _ ...tea.ProgramOption) teaProgram {
+			switch len(calls) {
+			case 0:
+				calls = append(calls, "browser-open")
+				if _, ok := model.(tui.BrowserModel); !ok {
+					t.Fatalf("model = %T, want tui.BrowserModel", model)
+				}
+				return &scriptedTeaProgram{run: func() (tea.Model, error) {
+					return applyKeySequence(model, tea.KeyMsg{Type: tea.KeyEnter}), nil
+				}}
+			case 1:
+				calls = append(calls, "viewer-fail")
+				if _, ok := model.(tui.Model); !ok {
+					t.Fatalf("model = %T, want tui.Model", model)
+				}
+				return &scriptedTeaProgram{run: func() (tea.Model, error) {
+					return model, errors.New("viewer boom")
+				}}
+			case 2:
+				calls = append(calls, "browser-quit")
+				if _, ok := model.(tui.BrowserModel); !ok {
+					t.Fatalf("model = %T, want tui.BrowserModel", model)
+				}
+				return &scriptedTeaProgram{run: func() (tea.Model, error) {
+					return applyKeySequence(model, keyRune('q')), nil
+				}}
+			default:
+				t.Fatalf("unexpected program call %d for model %T", len(calls)+1, model)
+				return nil
+			}
+		})
+
+		stdout, stderr := captureCommandOutput(t, func() {
+			runBrowser(&cli.Config{RunsDir: runsDir})
+		})
+
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty", stdout)
+		}
+		if !strings.Contains(stderr, "ralfinho view: TUI error: viewer boom") {
+			t.Fatalf("stderr = %q, want logged viewer error", stderr)
+		}
+
+		want := []string{"browser-open", "viewer-fail", "browser-quit"}
+		if strings.Join(calls, ",") != strings.Join(want, ",") {
+			t.Fatalf("program call sequence = %#v, want %#v", calls, want)
+		}
+	})
+
+	t.Run("resume action launches a fresh run and reopens browser", func(t *testing.T) {
+		clearFileConfig(t)
+		installFakePIBinary(t, completePI)
+
+		runsDir := t.TempDir()
+		writeMetaOnlyRun(t, runsDir, "source-run", runner.RunMeta{
+			RunID:               "source-run",
+			StartedAt:           "2026-03-08T10:00:00Z",
+			Status:              string(runner.StatusCompleted),
+			Agent:               "pi",
+			PromptSource:        "default",
+			IterationsCompleted: 1,
+		})
+		writeEffectivePromptArtifact(t, runsDir, "source-run", "resumed prompt text")
+
+		before := listRunDirs(t, runsDir)
+		var calls []string
+		useTeaProgramFactory(t, func(model tea.Model, _ ...tea.ProgramOption) teaProgram {
+			switch len(calls) {
+			case 0:
+				calls = append(calls, "browser-resume")
+				if _, ok := model.(tui.BrowserModel); !ok {
+					t.Fatalf("model = %T, want tui.BrowserModel", model)
+				}
+				return &scriptedTeaProgram{run: func() (tea.Model, error) {
+					return applyKeySequence(model, keyRune('r')), nil
+				}}
+			case 1:
+				calls = append(calls, "resume-tui")
+				if _, ok := model.(tui.Model); !ok {
+					t.Fatalf("model = %T, want tui.Model", model)
+				}
+				return newDoneAwareTeaProgram(model)
+			case 2:
+				calls = append(calls, "browser-quit")
+				if _, ok := model.(tui.BrowserModel); !ok {
+					t.Fatalf("model = %T, want tui.BrowserModel", model)
+				}
+				return &scriptedTeaProgram{run: func() (tea.Model, error) {
+					return applyKeySequence(model, keyRune('q')), nil
+				}}
+			default:
+				t.Fatalf("unexpected program call %d for model %T", len(calls)+1, model)
+				return nil
+			}
+		})
+
+		stdout, stderr := captureCommandOutput(t, func() {
+			runBrowser(&cli.Config{Agent: "pi", RunsDir: runsDir})
+		})
+
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty", stdout)
+		}
+		for _, want := range []string{"=== resumed run summary ===", "agent:      pi", "status:     completed", "iterations: 1"} {
+			if !strings.Contains(stderr, want) {
+				t.Fatalf("stderr = %q, missing %q", stderr, want)
+			}
+		}
+
+		after := listRunDirs(t, runsDir)
+		if len(after) != len(before)+1 {
+			t.Fatalf("run dir count = %d, want %d (before=%#v after=%#v)", len(after), len(before)+1, before, after)
+		}
+
+		want := []string{"browser-resume", "resume-tui", "browser-quit"}
+		if strings.Join(calls, ",") != strings.Join(want, ",") {
+			t.Fatalf("program call sequence = %#v, want %#v", calls, want)
+		}
+	})
+
+	t.Run("resume prompt resolution failures are logged and browser reopens", func(t *testing.T) {
+		runsDir := t.TempDir()
+		missingPrompt := filepath.Join(runsDir, "missing-prompt.md")
+		writeMetaOnlyRun(t, runsDir, "source-run", runner.RunMeta{
+			RunID:               "source-run",
+			StartedAt:           "2026-03-08T10:00:00Z",
+			Status:              string(runner.StatusCompleted),
+			Agent:               "pi",
+			PromptSource:        "prompt",
+			PromptFile:          missingPrompt,
+			IterationsCompleted: 1,
+		})
+
+		var calls []string
+		useTeaProgramFactory(t, func(model tea.Model, _ ...tea.ProgramOption) teaProgram {
+			switch len(calls) {
+			case 0:
+				calls = append(calls, "browser-resume")
+				if _, ok := model.(tui.BrowserModel); !ok {
+					t.Fatalf("model = %T, want tui.BrowserModel", model)
+				}
+				return &scriptedTeaProgram{run: func() (tea.Model, error) {
+					return applyKeySequence(model, keyRune('r')), nil
+				}}
+			case 1:
+				calls = append(calls, "browser-quit")
+				if _, ok := model.(tui.BrowserModel); !ok {
+					t.Fatalf("model = %T, want tui.BrowserModel", model)
+				}
+				return &scriptedTeaProgram{run: func() (tea.Model, error) {
+					return applyKeySequence(model, keyRune('q')), nil
+				}}
+			default:
+				t.Fatalf("unexpected program call %d for model %T", len(calls)+1, model)
+				return nil
+			}
+		})
+
+		stdout, stderr := captureCommandOutput(t, func() {
+			runBrowser(&cli.Config{Agent: "pi", RunsDir: runsDir})
+		})
+
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty", stdout)
+		}
+		if !strings.Contains(stderr, "ralfinho view: resume: resolving prompt:") {
+			t.Fatalf("stderr = %q, want logged resume prompt error", stderr)
+		}
+
+		want := []string{"browser-resume", "browser-quit"}
+		if strings.Join(calls, ",") != strings.Join(want, ",") {
+			t.Fatalf("program call sequence = %#v, want %#v", calls, want)
+		}
+	})
+
+	t.Run("resume invalid agent errors are logged and browser reopens", func(t *testing.T) {
+		runsDir := t.TempDir()
+		writeMetaOnlyRun(t, runsDir, "source-run", runner.RunMeta{
+			RunID:               "source-run",
+			StartedAt:           "2026-03-08T10:00:00Z",
+			Status:              string(runner.StatusCompleted),
+			Agent:               "mystery-agent",
+			PromptSource:        "default",
+			IterationsCompleted: 1,
+		})
+
+		var calls []string
+		useTeaProgramFactory(t, func(model tea.Model, _ ...tea.ProgramOption) teaProgram {
+			switch len(calls) {
+			case 0:
+				calls = append(calls, "browser-resume")
+				if _, ok := model.(tui.BrowserModel); !ok {
+					t.Fatalf("model = %T, want tui.BrowserModel", model)
+				}
+				return &scriptedTeaProgram{run: func() (tea.Model, error) {
+					return applyKeySequence(model, keyRune('r')), nil
+				}}
+			case 1:
+				calls = append(calls, "browser-quit")
+				if _, ok := model.(tui.BrowserModel); !ok {
+					t.Fatalf("model = %T, want tui.BrowserModel", model)
+				}
+				return &scriptedTeaProgram{run: func() (tea.Model, error) {
+					return applyKeySequence(model, keyRune('q')), nil
+				}}
+			default:
+				t.Fatalf("unexpected program call %d for model %T", len(calls)+1, model)
+				return nil
+			}
+		})
+
+		stdout, stderr := captureCommandOutput(t, func() {
+			runBrowser(&cli.Config{Agent: "pi", RunsDir: runsDir})
+		})
+
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty", stdout)
+		}
+		if !strings.Contains(stderr, `ralfinho view: resume: unknown agent "mystery-agent" from saved run`) {
+			t.Fatalf("stderr = %q, want logged invalid-agent error", stderr)
+		}
+
+		want := []string{"browser-resume", "browser-quit"}
+		if strings.Join(calls, ",") != strings.Join(want, ",") {
+			t.Fatalf("program call sequence = %#v, want %#v", calls, want)
+		}
+	})
+
+	t.Run("resume TUI failures are logged and browser reopens", func(t *testing.T) {
+		clearFileConfig(t)
+		installFakePIBinary(t, completePI)
+
+		runsDir := t.TempDir()
+		writeMetaOnlyRun(t, runsDir, "source-run", runner.RunMeta{
+			RunID:               "source-run",
+			StartedAt:           "2026-03-08T10:00:00Z",
+			Status:              string(runner.StatusCompleted),
+			Agent:               "pi",
+			PromptSource:        "default",
+			IterationsCompleted: 1,
+		})
+		writeEffectivePromptArtifact(t, runsDir, "source-run", "resumed prompt text")
+
+		var calls []string
+		useTeaProgramFactory(t, func(model tea.Model, _ ...tea.ProgramOption) teaProgram {
+			switch len(calls) {
+			case 0:
+				calls = append(calls, "browser-resume")
+				if _, ok := model.(tui.BrowserModel); !ok {
+					t.Fatalf("model = %T, want tui.BrowserModel", model)
+				}
+				return &scriptedTeaProgram{run: func() (tea.Model, error) {
+					return applyKeySequence(model, keyRune('r')), nil
+				}}
+			case 1:
+				calls = append(calls, "resume-tui-fail")
+				if _, ok := model.(tui.Model); !ok {
+					t.Fatalf("model = %T, want tui.Model", model)
+				}
+				return newDoneAwareTeaProgramWithError(model, errors.New("resume boom"))
+			case 2:
+				calls = append(calls, "browser-quit")
+				if _, ok := model.(tui.BrowserModel); !ok {
+					t.Fatalf("model = %T, want tui.BrowserModel", model)
+				}
+				return &scriptedTeaProgram{run: func() (tea.Model, error) {
+					return applyKeySequence(model, keyRune('q')), nil
+				}}
+			default:
+				t.Fatalf("unexpected program call %d for model %T", len(calls)+1, model)
+				return nil
+			}
+		})
+
+		stdout, stderr := captureCommandOutput(t, func() {
+			runBrowser(&cli.Config{Agent: "pi", RunsDir: runsDir})
+		})
+
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty", stdout)
+		}
+		if !strings.Contains(stderr, "ralfinho view: resume: TUI error: resume boom") {
+			t.Fatalf("stderr = %q, want logged resume TUI error", stderr)
+		}
+
+		want := []string{"browser-resume", "resume-tui-fail", "browser-quit"}
 		if strings.Join(calls, ",") != strings.Join(want, ",") {
 			t.Fatalf("program call sequence = %#v, want %#v", calls, want)
 		}
