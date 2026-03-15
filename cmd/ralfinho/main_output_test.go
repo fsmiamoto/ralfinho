@@ -244,6 +244,60 @@ func TestRunBrowserExitsWhenBrowserProgramFails(t *testing.T) {
 	}
 }
 
+func TestRunTUIExitsWithReadableTUIError(t *testing.T) {
+	clearFileConfig(t)
+	installFakePIBinary(t, `#!/bin/sh
+cat <<'JSONL'
+{"type":"message_start","message":{"role":"assistant","model":"fake-pi"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"<promise>COMPLETE</promise>"}}
+{"type":"message_end"}
+{"type":"turn_end"}
+JSONL
+`)
+
+	stdout, stderr, exitCode := runHelperProcess(t, map[string]string{
+		"HELPER_ACTION":    "run-tui-error",
+		"HELPER_RUNS_DIR":  t.TempDir(),
+		"HELPER_TUI_ERROR": "run boom",
+	})
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", exitCode)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "ralfinho: TUI error: run boom") {
+		t.Fatalf("stderr = %q, want readable runTUI error", stderr)
+	}
+}
+
+func TestRunTUIInterruptedRunPrintsSummaryAndExitsTwo(t *testing.T) {
+	clearFileConfig(t)
+	installFakePIBinary(t, `#!/bin/sh
+cat <<'JSONL'
+{"type":"message_start","message":{"role":"assistant","model":"fake-pi"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"still working"}}
+JSONL
+sleep 60
+`)
+
+	stdout, stderr, exitCode := runHelperProcess(t, map[string]string{
+		"HELPER_ACTION":   "run-tui-interrupted",
+		"HELPER_RUNS_DIR": t.TempDir(),
+	})
+	if exitCode != 2 {
+		t.Fatalf("exit code = %d, want 2", exitCode)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	for _, want := range []string{"=== run summary ===", "agent:      pi", "status:     interrupted"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr = %q, missing %q", stderr, want)
+		}
+	}
+}
+
 func TestCommandHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
@@ -268,6 +322,16 @@ func TestCommandHelperProcess(t *testing.T) {
 			}}
 		}
 		runBrowser(&cli.Config{RunsDir: os.Getenv("HELPER_RUNS_DIR")})
+	case "run-tui-error":
+		newTeaProgram = func(model tea.Model, _ ...tea.ProgramOption) teaProgram {
+			return newDoneAwareTeaProgramWithError(model, errors.New(os.Getenv("HELPER_TUI_ERROR")))
+		}
+		runTUI(&cli.Config{Agent: "pi", RunsDir: os.Getenv("HELPER_RUNS_DIR")}, "finish immediately")
+	case "run-tui-interrupted":
+		newTeaProgram = func(model tea.Model, _ ...tea.ProgramOption) teaProgram {
+			return &scriptedTeaProgram{run: func() (tea.Model, error) { return model, nil }}
+		}
+		runTUI(&cli.Config{Agent: "pi", RunsDir: os.Getenv("HELPER_RUNS_DIR")}, "keep working")
 	default:
 		t.Fatalf("unknown HELPER_ACTION %q", os.Getenv("HELPER_ACTION"))
 	}

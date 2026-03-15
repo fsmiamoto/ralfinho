@@ -10,7 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/fsmiamoto/ralfinho/internal/cli"
+	"github.com/fsmiamoto/ralfinho/internal/runner"
 )
 
 func TestMainHelpShowsUsageAndExitsZero(t *testing.T) {
@@ -70,6 +73,77 @@ func TestMainViewNoTUIDispatchesToListMode(t *testing.T) {
 	}
 	if stdout != "No runs found.\n" {
 		t.Fatalf("stdout = %q, want %q", stdout, "No runs found.\\n")
+	}
+}
+
+func TestMainViewReplayDispatchesToViewer(t *testing.T) {
+	dir := t.TempDir()
+	runsDir := filepath.Join(dir, "runs")
+	writeMetaOnlyRun(t, runsDir, "saved-run", runner.RunMeta{
+		RunID:               "saved-run",
+		StartedAt:           "2026-03-08T10:00:00Z",
+		Status:              string(runner.StatusCompleted),
+		Agent:               "pi",
+		PromptSource:        "default",
+		IterationsCompleted: 1,
+	})
+	writeRunEventsArtifact(t, runsDir, "saved-run", `{"type":"turn_end"}`)
+
+	stdout, stderr, exitCode := runMainHelperProcess(t, dir, []string{"view", "--runs-dir", runsDir, "saved-run"}, map[string]string{
+		"XDG_CONFIG_HOME":      filepath.Join(dir, "xdg"),
+		"HELPER_MAIN_TUI_MODE": "return-model",
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout=%q\nstderr=%q", exitCode, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestMainConfigLoadErrorIsReadable(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, ".ralfinho")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", configDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("agent = [\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(config.toml): %v", err)
+	}
+
+	stdout, stderr, exitCode := runMainHelperProcess(t, dir, nil, map[string]string{
+		"XDG_CONFIG_HOME": filepath.Join(dir, "xdg"),
+	})
+
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", exitCode)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "ralfinho: config: parsing .ralfinho/config.toml:") {
+		t.Fatalf("stderr = %q, want readable config parse error", stderr)
+	}
+}
+
+func TestMainMissingPromptFileErrorIsReadable(t *testing.T) {
+	dir := t.TempDir()
+	stdout, stderr, exitCode := runMainHelperProcess(t, dir, []string{"--prompt", "missing-prompt.md"}, map[string]string{
+		"XDG_CONFIG_HOME": filepath.Join(dir, "xdg"),
+	})
+
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", exitCode)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, `ralfinho: reading prompt file "missing-prompt.md":`) {
+		t.Fatalf("stderr = %q, want readable prompt error", stderr)
 	}
 }
 
@@ -154,6 +228,17 @@ extra-args = ["--test-flag", "from-config"]
 func TestMainHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_MAIN_HELPER_PROCESS") != "1" {
 		return
+	}
+
+	if mode := os.Getenv("HELPER_MAIN_TUI_MODE"); mode != "" {
+		switch mode {
+		case "return-model":
+			newTeaProgram = func(model tea.Model, _ ...tea.ProgramOption) teaProgram {
+				return &scriptedTeaProgram{run: func() (tea.Model, error) { return model, nil }}
+			}
+		default:
+			t.Fatalf("unknown HELPER_MAIN_TUI_MODE %q", mode)
+		}
 	}
 
 	var args []string
