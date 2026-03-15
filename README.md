@@ -42,7 +42,10 @@ ralfinho --plan PLAN.md
 ### Default behavior
 
 If no prompt or plan is given, ralfinho looks for `./PLAN.md`. If found, it uses
-that as the plan. Otherwise it runs with a minimal default prompt.
+that as the plan. Otherwise it runs with a built-in self-improvement prompt.
+
+The built-in prompt tells the agent to inspect the current project and keep looping
+on useful improvements, a nice way to try out ralfinho for the first time.
 
 ### Options
 

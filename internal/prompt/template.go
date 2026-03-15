@@ -39,11 +39,12 @@ const defaultPrompt = `You are running inside a task loop. Each iteration starts
    - Adding a good linter and fixing some recommendations
    - Rewriting a piece of the code hard to understand.
    - Refactor the code design to follow architecture best practices
+   - Documenting how something works or fixing outdated documentation
 3. After you pick a task, ONLY do that one task — no scope creep.
 4. Test your work the best you can.
   - Unit tests are important, but we should actually try running the code and seeing the results like an engineer would at each step.
 5. Update PROGRESS.md (record what you did, list what remains) and NOTES.md (log decisions, discoveries, and context the next iteration will need). Do this BEFORE finishing.
-  - If you think there's something important to be done but you didn't do, include it in the NOTES.
+  - If you think there's something important to be done but you didn't do, include it in the NOTES.md.
 6. Git commit ONLY the files related to the task you completed with a clear, descriptive commit message. Do NOT include PROGRESS.md or NOTES.md in this commit — those are loop-internal memory files, not project artifacts. Also don't include any Co-Authored by
-7. If there is nothing left to do, output exactly: <promise>COMPLETE</promise>
+7. If you really think that there's nothing too useful to do, output exactly: <promise>COMPLETE</promise>
 8. Otherwise just finish normally — the loop will start a new iteration.`
