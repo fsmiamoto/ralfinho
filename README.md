@@ -55,6 +55,10 @@ that as the plan. Otherwise it runs with a minimal default prompt.
 --runs-dir <path>         Runs directory (default: .ralfinho/runs)
 ```
 
+### Config file
+
+See [docs/configuration.md](docs/configuration.md) for an example `config.toml` and further details.
+
 ### Browse and manage past runs
 
 ```bash
