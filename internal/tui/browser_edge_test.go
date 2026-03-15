@@ -330,3 +330,184 @@ func TestRenderBrowserStateCardAndStatusNarrowFallbacks(t *testing.T) {
 		}
 	})
 }
+
+func TestBrowserSearchKeyCtrlCAndUnhandledKey(t *testing.T) {
+	t.Run("ctrl+c quits while searching", func(t *testing.T) {
+		m := initBrowserModel(makeSummaries(1), 100, 30)
+		m.searching = true
+
+		next, cmd := updateBrowserModelWithCmd(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlC}))
+		if !isQuitCmd(cmd) {
+			t.Fatal("Ctrl+C in search mode did not emit tea.Quit")
+		}
+		if !next.searching {
+			t.Fatal("searching = false after Ctrl+C, want model to stay in search mode until quit")
+		}
+	})
+
+	t.Run("unhandled keys are ignored while searching", func(t *testing.T) {
+		m := initBrowserModel(makeSummaries(1), 100, 30)
+		m.searching = true
+		m.searchQuery = "kiro"
+		before := m
+
+		next, cmd := updateBrowserModelWithCmd(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyLeft}))
+		if cmd != nil {
+			t.Fatalf("Update(left) cmd = %v, want nil", cmd)
+		}
+		if !reflect.DeepEqual(next, before) {
+			t.Fatalf("Update(left) changed search model:\n got: %#v\nwant: %#v", next, before)
+		}
+	})
+}
+
+func TestBrowserMoveCursorAndApplyBrowserViewEdgeCases(t *testing.T) {
+	t.Run("moveCursor ignores zero delta and empty lists", func(t *testing.T) {
+		m := initBrowserModel(makeSummaries(3), 100, 30)
+		before := m
+		m.moveCursor(0)
+		if !reflect.DeepEqual(m, before) {
+			t.Fatalf("moveCursor(0) changed model:\n got: %#v\nwant: %#v", m, before)
+		}
+
+		empty := NewBrowserModel(nil)
+		empty.cursor = 3
+		empty.scroll = 2
+		empty.previewScroll = 1
+		emptyBefore := empty
+		empty.moveCursor(1)
+		if !reflect.DeepEqual(empty, emptyBefore) {
+			t.Fatalf("moveCursor() on empty model changed state:\n got: %#v\nwant: %#v", empty, emptyBefore)
+		}
+	})
+
+	t.Run("applyBrowserView preserves the current row when selectedRunID is blank", func(t *testing.T) {
+		m := initBrowserModel(makeSummaries(3), 100, 30)
+		m.cursor = 1
+		m.selectedRunID = ""
+
+		m.applyBrowserView()
+
+		if m.cursor != 1 {
+			t.Fatalf("cursor after applyBrowserView() = %d, want 1", m.cursor)
+		}
+		if m.selectedRunID != "run-001" {
+			t.Fatalf("selectedRunID after applyBrowserView() = %q, want %q", m.selectedRunID, "run-001")
+		}
+	})
+
+	t.Run("applyBrowserView clamps missing selections back into range", func(t *testing.T) {
+		m := initBrowserModel(makeSummaries(3), 100, 30)
+		m.selectedRunID = "missing"
+		m.cursor = -4
+
+		m.applyBrowserView()
+		if m.cursor != 0 || m.selectedRunID != "run-000" {
+			t.Fatalf("negative cursor clamp = cursor:%d selected:%q, want 0/run-000", m.cursor, m.selectedRunID)
+		}
+
+		m = initBrowserModel(makeSummaries(3), 100, 30)
+		m.selectedRunID = "missing"
+		m.cursor = 99
+
+		m.applyBrowserView()
+		if m.cursor != 2 || m.selectedRunID != "run-002" {
+			t.Fatalf("high cursor clamp = cursor:%d selected:%q, want 2/run-002", m.cursor, m.selectedRunID)
+		}
+	})
+}
+
+func TestBrowserRenderHelpersCoverRemainingBrowserBranches(t *testing.T) {
+	t.Run("tiny headers still show the app name and drop extra state tokens", func(t *testing.T) {
+		m := initBrowserModel(makeSummaries(1), 9, 10)
+		m.searching = true
+		m.searchQuery = "long search"
+		m.agentFilter = "pi"
+
+		header := stripANSI(m.renderBrowserHeader())
+		compact := strings.Join(strings.Fields(header), "")
+		if !strings.HasPrefix(compact, "ralfinh") {
+			t.Fatalf("renderBrowserHeader() = %q, want compact output to keep the app-name prefix", header)
+		}
+		if strings.Contains(header, "sort:") || strings.Contains(header, "agent:") {
+			t.Fatalf("renderBrowserHeader() = %q, want extra state tokens dropped on tiny widths", header)
+		}
+	})
+
+	t.Run("sessions pane renders both selected and non-selected rows", func(t *testing.T) {
+		m := initBrowserModel(makeSummaries(3), 100, 12)
+		m.cursor = 1
+
+		pane := stripANSI(m.renderSessionsPane())
+		for _, want := range []string{"run-000", "run-001", "run-002"} {
+			if !strings.Contains(pane, want) {
+				t.Fatalf("renderSessionsPane() = %q, missing %q", pane, want)
+			}
+		}
+		if strings.Count(pane, "▌") != 1 {
+			t.Fatalf("renderSessionsPane() = %q, want exactly one selected-row indicator", pane)
+		}
+	})
+
+	t.Run("status includes artifact warnings and still renders on ultra-narrow widths", func(t *testing.T) {
+		summary := browserTestSummaryWithActions(
+			"artifact-run",
+			time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
+			"pi",
+			"completed",
+			"prompt",
+			true,
+		)
+		summary.ArtifactError = "meta.json missing"
+
+		m := initBrowserModel([]viewer.RunSummary{summary}, 9, 10)
+		if left := m.browserStatusLeft(); !strings.Contains(left, "artifact warnings") {
+			t.Fatalf("browserStatusLeft() = %q, want artifact warning marker", left)
+		}
+
+		status := stripANSI(m.renderBrowserStatus())
+		if !strings.Contains(status, "q:quit") {
+			t.Fatalf("renderBrowserStatus() = %q, want the narrow quit hint", status)
+		}
+	})
+}
+
+func TestBrowserRenderPreviewPaneClampsLocalScrollAndShowsWarningPaging(t *testing.T) {
+	summary := browserTestSummaryResumable(
+		"warn-run",
+		time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
+		"pi",
+		"completed",
+		"prompt",
+		viewer.ResumeSourceEffectivePrompt,
+		"/tmp/warn-run/effective-prompt.md",
+	)
+	summary.ArtifactError = "meta.json missing"
+	summary.EventsError = "events.jsonl missing"
+	summary.EffectivePromptError = "effective-prompt.md missing"
+
+	t.Run("large previewScroll values clamp to the last page", func(t *testing.T) {
+		m := initBrowserModel([]viewer.RunSummary{summary}, 90, 10)
+		m.focusedPane = 1
+		m.previewScroll = 1 << 20
+
+		preview := stripANSI(m.renderPreviewPane())
+		if !strings.Contains(preview, "PREVIEW ⚠ [") {
+			t.Fatalf("renderPreviewPane() = %q, want warning title with paging", preview)
+		}
+	})
+
+	t.Run("negative previewScroll values clamp back to the first page", func(t *testing.T) {
+		m := initBrowserModel([]viewer.RunSummary{summary}, 90, 10)
+		m.focusedPane = 1
+		m.previewScroll = -5
+
+		preview := stripANSI(m.renderPreviewPane())
+		if !strings.Contains(preview, "PREVIEW ⚠ [1/") {
+			t.Fatalf("renderPreviewPane() = %q, want warning title clamped to the first page", preview)
+		}
+		if !strings.Contains(preview, "Run: warn-run") {
+			t.Fatalf("renderPreviewPane() = %q, want the first preview page content", preview)
+		}
+	})
+}
