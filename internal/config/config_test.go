@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -95,6 +96,26 @@ func TestLoadFile_ParseError(t *testing.T) {
 	cfg, err := loadFile(path)
 	if err == nil {
 		t.Fatalf("expected a parse error, got nil; cfg=%+v", cfg)
+	}
+}
+
+func TestLoadFile_ReadError(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.MkdirAll(path, 0755); err != nil {
+		t.Fatalf("creating config dir %q: %v", path, err)
+	}
+
+	cfg, err := loadFile(path)
+	if err == nil {
+		t.Fatalf("expected a read error, got nil; cfg=%+v", cfg)
+	}
+	if cfg != nil {
+		t.Fatalf("expected nil config on read error, got %+v", cfg)
+	}
+	if !strings.Contains(err.Error(), "reading config") {
+		t.Fatalf("error should mention reading config, got: %v", err)
 	}
 }
 
@@ -295,6 +316,28 @@ func TestMerge_DoesNotMutateInputs(t *testing.T) {
 	}
 }
 
+func TestMerge_OverrideWithoutAgentsStillCopiesBaseMap(t *testing.T) {
+	t.Parallel()
+
+	base := &FileConfig{
+		Agent: "pi",
+		Agents: map[string]AgentConfig{
+			"pi": {ExtraArgs: []string{"--base"}},
+		},
+	}
+	override := &FileConfig{Agent: "claude"}
+
+	got := merge(base, override)
+	got.Agents["pi"] = AgentConfig{ExtraArgs: []string{"--mutated"}}
+
+	if got.Agent != "claude" {
+		t.Fatalf("Agent: got %q, want %q", got.Agent, "claude")
+	}
+	if base.Agents["pi"].ExtraArgs[0] != "--base" {
+		t.Fatalf("base.Agents mutated through merged config: got %v", base.Agents["pi"].ExtraArgs)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Load integration tests
 // ---------------------------------------------------------------------------
@@ -383,6 +426,120 @@ agent = "claude"
 	// RunsDir comes from global (not set locally).
 	if cfg.RunsDir != "/global/runs" {
 		t.Errorf("RunsDir: got %q, want %q", cfg.RunsDir, "/global/runs")
+	}
+}
+
+func TestLoad_SkipsGlobalWhenUserConfigDirIsUnavailable(t *testing.T) {
+	// Cannot use t.Parallel() alongside t.Setenv.
+
+	projectDir := t.TempDir()
+	localCfgDir := filepath.Join(projectDir, ".ralfinho")
+	if err := os.MkdirAll(localCfgDir, 0755); err != nil {
+		t.Fatalf("mkdir local config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localCfgDir, "config.toml"), []byte("agent = \"kiro\"\n"), 0600); err != nil {
+		t.Fatalf("writing local config: %v", err)
+	}
+
+	t.Setenv("XDG_CONFIG_HOME", "relative-config-home")
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Agent != "kiro" {
+		t.Fatalf("Agent: got %q, want %q", cfg.Agent, "kiro")
+	}
+}
+
+func TestLoad_ReturnsGlobalConfigParseError(t *testing.T) {
+	// Cannot use t.Parallel() alongside t.Setenv.
+
+	tmpDir := t.TempDir()
+	globalCfgDir := filepath.Join(tmpDir, "xdg")
+	globalCfgPath := filepath.Join(globalCfgDir, "ralfinho", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(globalCfgPath), 0755); err != nil {
+		t.Fatalf("mkdir global config dir: %v", err)
+	}
+	if err := os.WriteFile(globalCfgPath, []byte("agent = [\n"), 0600); err != nil {
+		t.Fatalf("writing bad global config: %v", err)
+	}
+	projectDir := filepath.Join(tmpDir, "project")
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatalf("mkdir project dir: %v", err)
+	}
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", globalCfgDir)
+
+	cfg, err := Load()
+	if err == nil {
+		t.Fatalf("expected global parse error, got nil; cfg=%+v", cfg)
+	}
+	if !strings.Contains(err.Error(), globalCfgPath) {
+		t.Fatalf("error should mention global config path %q, got: %v", globalCfgPath, err)
+	}
+	if !strings.Contains(err.Error(), "parsing") {
+		t.Fatalf("error should mention parsing, got: %v", err)
+	}
+}
+
+func TestLoad_ReturnsLocalConfigParseError(t *testing.T) {
+	// Cannot use t.Parallel() alongside t.Setenv.
+
+	tmpDir := t.TempDir()
+	globalCfgDir := filepath.Join(tmpDir, "xdg")
+	if err := os.MkdirAll(filepath.Join(globalCfgDir, "ralfinho"), 0755); err != nil {
+		t.Fatalf("mkdir global config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(globalCfgDir, "ralfinho", "config.toml"), []byte("agent = \"pi\"\n"), 0600); err != nil {
+		t.Fatalf("writing global config: %v", err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", globalCfgDir)
+
+	projectDir := filepath.Join(tmpDir, "project")
+	localCfgDir := filepath.Join(projectDir, ".ralfinho")
+	localCfgPath := filepath.Join(localCfgDir, "config.toml")
+	if err := os.MkdirAll(localCfgDir, 0755); err != nil {
+		t.Fatalf("mkdir local config dir: %v", err)
+	}
+	if err := os.WriteFile(localCfgPath, []byte("agent = {\n"), 0600); err != nil {
+		t.Fatalf("writing bad local config: %v", err)
+	}
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := Load()
+	if err == nil {
+		t.Fatalf("expected local parse error, got nil; cfg=%+v", cfg)
+	}
+	if !strings.Contains(err.Error(), filepath.Join(".ralfinho", "config.toml")) {
+		t.Fatalf("error should mention local config path %q, got: %v", filepath.Join(".ralfinho", "config.toml"), err)
+	}
+	if !strings.Contains(err.Error(), "parsing") {
+		t.Fatalf("error should mention parsing, got: %v", err)
 	}
 }
 
