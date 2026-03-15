@@ -27,6 +27,18 @@ import (
 // it without threading the value through every call site.
 var fileCfg *config.FileConfig
 
+// teaProgram captures the Bubble Tea methods command flows need. Keeping
+// program construction behind a tiny interface makes the interactive command
+// paths testable without requiring a real terminal.
+type teaProgram interface {
+	Run() (tea.Model, error)
+	Send(tea.Msg)
+}
+
+var newTeaProgram = func(model tea.Model, opts ...tea.ProgramOption) teaProgram {
+	return tea.NewProgram(model, opts...)
+}
+
 func main() {
 	cfg, err := cli.Parse(os.Args[1:])
 	if err != nil {
@@ -158,7 +170,7 @@ func runAgentWithTUI(runCfg runner.RunConfig) (runner.RunResult, error) {
 	}()
 
 	model := tui.NewModel(eventCh)
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := newTeaProgram(model, tea.WithAltScreen())
 
 	// Feed DoneMsg to the program when the runner finishes.
 	go func() {
@@ -229,7 +241,7 @@ func openRunViewer(runsDir, runID string) error {
 	}
 
 	model := tui.NewViewerModel(displayEvents, saved.Meta)
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := newTeaProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI error: %v", err)
@@ -255,7 +267,7 @@ func runBrowser(cfg *cli.Config) {
 			model = model.WithSelectedRunID(lastSelectedRunID)
 		}
 
-		p := tea.NewProgram(model, tea.WithAltScreen())
+		p := newTeaProgram(model, tea.WithAltScreen())
 
 		finalModel, err := p.Run()
 		if err != nil {
