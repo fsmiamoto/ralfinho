@@ -1,13 +1,15 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/fsmiamoto/ralfinho/internal/cli"
+	"github.com/fsmiamoto/ralfinho/internal/config"
 	"github.com/fsmiamoto/ralfinho/internal/viewer"
 )
 
@@ -175,8 +177,8 @@ func TestResolvePrompt(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		cfg := &cliConfig{InputMode: "prompt", PromptFile: path}
-		got, err := resolvePromptFromConfig(cfg)
+		cfg := &cli.Config{InputMode: "prompt", PromptFile: path}
+		got, err := resolvePrompt(cfg)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -192,8 +194,8 @@ func TestResolvePrompt(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		cfg := &cliConfig{InputMode: "plan", PlanFile: path}
-		got, err := resolvePromptFromConfig(cfg)
+		cfg := &cli.Config{InputMode: "plan", PlanFile: path}
+		got, err := resolvePrompt(cfg)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -206,8 +208,8 @@ func TestResolvePrompt(t *testing.T) {
 	})
 
 	t.Run("default mode returns built-in prompt", func(t *testing.T) {
-		cfg := &cliConfig{InputMode: "default"}
-		got, err := resolvePromptFromConfig(cfg)
+		cfg := &cli.Config{InputMode: "default"}
+		got, err := resolvePrompt(cfg)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -217,8 +219,8 @@ func TestResolvePrompt(t *testing.T) {
 	})
 
 	t.Run("unknown mode returns error", func(t *testing.T) {
-		cfg := &cliConfig{InputMode: "bogus"}
-		_, err := resolvePromptFromConfig(cfg)
+		cfg := &cli.Config{InputMode: "bogus"}
+		_, err := resolvePrompt(cfg)
 		if err == nil {
 			t.Fatal("expected error for unknown input mode")
 		}
@@ -228,8 +230,8 @@ func TestResolvePrompt(t *testing.T) {
 	})
 
 	t.Run("prompt mode with missing file returns error", func(t *testing.T) {
-		cfg := &cliConfig{InputMode: "prompt", PromptFile: "/nonexistent/file.md"}
-		_, err := resolvePromptFromConfig(cfg)
+		cfg := &cli.Config{InputMode: "prompt", PromptFile: "/nonexistent/file.md"}
+		_, err := resolvePrompt(cfg)
 		if err == nil {
 			t.Fatal("expected error for missing prompt file")
 		}
@@ -350,29 +352,179 @@ func TestResumePromptMeta(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// helpers — cliConfig is a lightweight struct that mirrors cli.Config fields
-// used by resolvePrompt, so we can test without importing the full cli package.
+// parseFlagSet
 // ---------------------------------------------------------------------------
 
-type cliConfig struct {
-	InputMode  string
-	PromptFile string
-	PlanFile   string
+func TestParseFlagSetRecognizesSupportedForms(t *testing.T) {
+	set := parseFlagSet([]string{
+		"--agent=claude",
+		"-a",
+		"kiro",
+		"--max-iterations",
+		"5",
+		"-m=7",
+		"--runs-dir",
+		"custom/runs",
+		"-runs-dir=alt/runs",
+		"--no-tui",
+		"prompt.md",
+		"-",
+		"--",
+	})
+
+	for _, name := range []string{"agent", "a", "max-iterations", "m", "runs-dir", "no-tui"} {
+		if !set[name] {
+			t.Fatalf("parseFlagSet() missing flag %q in %#v", name, set)
+		}
+	}
+	if set[""] {
+		t.Fatalf("parseFlagSet() should ignore empty flag names: %#v", set)
+	}
+	if set["prompt.md"] || set["custom/runs"] || set["5"] {
+		t.Fatalf("parseFlagSet() should ignore positional values: %#v", set)
+	}
 }
 
-// resolvePromptFromConfig mirrors resolvePrompt but accepts a test-local config.
-// This avoids depending on cli.Config while testing the same logic.
-func resolvePromptFromConfig(cfg *cliConfig) (string, error) {
-	// Use an adapter that calls the same underlying prompt package functions.
-	switch cfg.InputMode {
-	case "prompt":
-		return resolveResumePrompt(viewer.ResumeSourcePromptFile, cfg.PromptFile)
-	case "plan":
-		return resolveResumePrompt(viewer.ResumeSourcePlanFile, cfg.PlanFile)
-	case "default":
-		return resolveResumePrompt(viewer.ResumeSourceDefault, "")
-	default:
-		return "", fmt.Errorf("unknown input mode %q", cfg.InputMode)
+// ---------------------------------------------------------------------------
+// applyFileConfig
+// ---------------------------------------------------------------------------
+
+func TestApplyFileConfigOnlyFillsUnsetFlags(t *testing.T) {
+	maxIterations := 9
+	noTUI := true
+
+	cfg := &cli.Config{
+		Agent:         "kiro",
+		MaxIterations: 0,
+		NoTUI:         false,
+		RunsDir:       "cli/runs",
+	}
+
+	applyFileConfig(cfg, &config.FileConfig{
+		Agent:         "claude",
+		MaxIterations: &maxIterations,
+		RunsDir:       "file/runs",
+		NoTUI:         &noTUI,
+	}, []string{"-a", "kiro", "--runs-dir", "cli/runs", "prompt.md"})
+
+	if cfg.Agent != "kiro" {
+		t.Fatalf("Agent = %q, want CLI value %q", cfg.Agent, "kiro")
+	}
+	if cfg.RunsDir != "cli/runs" {
+		t.Fatalf("RunsDir = %q, want CLI value %q", cfg.RunsDir, "cli/runs")
+	}
+	if cfg.MaxIterations != 9 {
+		t.Fatalf("MaxIterations = %d, want file-config value %d", cfg.MaxIterations, 9)
+	}
+	if !cfg.NoTUI {
+		t.Fatal("NoTUI = false, want file-config default true")
+	}
+}
+
+func TestApplyFileConfigAppliesAllFileDefaultsWhenFlagsAreUnset(t *testing.T) {
+	maxIterations := 12
+	noTUI := true
+
+	cfg := &cli.Config{
+		Agent:         "pi",
+		MaxIterations: 0,
+		NoTUI:         false,
+		RunsDir:       ".ralfinho/runs",
+	}
+
+	applyFileConfig(cfg, &config.FileConfig{
+		Agent:         "claude",
+		MaxIterations: &maxIterations,
+		RunsDir:       "file/runs",
+		NoTUI:         &noTUI,
+	}, []string{"prompt.md"})
+
+	if cfg.Agent != "claude" {
+		t.Fatalf("Agent = %q, want file-config value %q", cfg.Agent, "claude")
+	}
+	if cfg.MaxIterations != 12 {
+		t.Fatalf("MaxIterations = %d, want file-config value %d", cfg.MaxIterations, 12)
+	}
+	if cfg.RunsDir != "file/runs" {
+		t.Fatalf("RunsDir = %q, want file-config value %q", cfg.RunsDir, "file/runs")
+	}
+	if !cfg.NoTUI {
+		t.Fatal("NoTUI = false, want file-config value true")
+	}
+}
+
+func TestApplyFileConfigPreservesExplicitCLIValues(t *testing.T) {
+	maxIterations := 9
+	noTUI := false
+
+	cfg := &cli.Config{
+		Agent:         "pi",
+		MaxIterations: 3,
+		NoTUI:         true,
+		RunsDir:       "cli/runs",
+	}
+
+	applyFileConfig(cfg, &config.FileConfig{
+		Agent:         "claude",
+		MaxIterations: &maxIterations,
+		RunsDir:       "file/runs",
+		NoTUI:         &noTUI,
+	}, []string{"--agent", "pi", "-m", "3", "--runs-dir", "cli/runs", "--no-tui"})
+
+	if cfg.Agent != "pi" {
+		t.Fatalf("Agent = %q, want explicit CLI value %q", cfg.Agent, "pi")
+	}
+	if cfg.MaxIterations != 3 {
+		t.Fatalf("MaxIterations = %d, want explicit CLI value %d", cfg.MaxIterations, 3)
+	}
+	if cfg.RunsDir != "cli/runs" {
+		t.Fatalf("RunsDir = %q, want explicit CLI value %q", cfg.RunsDir, "cli/runs")
+	}
+	if !cfg.NoTUI {
+		t.Fatal("NoTUI = false, want explicit CLI value true")
+	}
+}
+
+func TestApplyFileConfigNilFileConfigIsNoOp(t *testing.T) {
+	cfg := &cli.Config{
+		Agent:         "pi",
+		MaxIterations: 3,
+		NoTUI:         true,
+		RunsDir:       "cli/runs",
+	}
+
+	applyFileConfig(cfg, nil, []string{"--agent", "pi"})
+
+	if cfg.Agent != "pi" || cfg.MaxIterations != 3 || cfg.RunsDir != "cli/runs" || !cfg.NoTUI {
+		t.Fatalf("applyFileConfig(nil) changed config: %#v", cfg)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// extraArgsForAgent
+// ---------------------------------------------------------------------------
+
+func TestExtraArgsForAgentUsesLoadedFileConfig(t *testing.T) {
+	prev := fileCfg
+	t.Cleanup(func() { fileCfg = prev })
+
+	fileCfg = nil
+	if got := extraArgsForAgent("claude"); got != nil {
+		t.Fatalf("extraArgsForAgent() with nil fileCfg = %#v, want nil", got)
+	}
+
+	fileCfg = &config.FileConfig{
+		Agents: map[string]config.AgentConfig{
+			"claude": {ExtraArgs: []string{"--model", "claude-opus-4-5"}},
+			"pi":     {ExtraArgs: []string{"--timeout", "30"}},
+		},
+	}
+
+	if got := extraArgsForAgent("claude"); !reflect.DeepEqual(got, []string{"--model", "claude-opus-4-5"}) {
+		t.Fatalf("extraArgsForAgent(claude) = %#v, want %#v", got, []string{"--model", "claude-opus-4-5"})
+	}
+	if got := extraArgsForAgent("kiro"); got != nil {
+		t.Fatalf("extraArgsForAgent(kiro) = %#v, want nil", got)
 	}
 }
 
