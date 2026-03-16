@@ -649,3 +649,166 @@ func TestRenderMainViewport_MatchesBaselineCompletedSession(t *testing.T) {
 		t.Fatalf("viewport mismatch with baseline:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// --- Phase 6 QA tests ---
+
+// TestQA_WidthChangePreservesBaselineParity verifies that rendering at one width,
+// then changing to a different width, produces output matching the baseline at
+// the new width. Covers Scenario C from the QA plan.
+func TestQA_WidthChangePreservesBaselineParity(t *testing.T) {
+	m := Model{
+		width:  80,
+		height: 30,
+		blocks: []MainBlock{
+			{Kind: BlockIteration, Iteration: 1},
+			{Kind: BlockAssistantText, Text: "# Wide and Narrow\n\nThis text should reflow when width changes.", AssistantFinal: true},
+			{Kind: BlockToolCall, ToolName: "bash", ToolArgs: "$ echo hello", ToolDone: true, ToolResult: "hello"},
+			{Kind: BlockIteration, Iteration: 2},
+			{Kind: BlockAssistantText, Text: "More content that wraps differently at different widths.", AssistantFinal: true},
+		},
+	}
+
+	// Render at initial width to populate caches.
+	_ = m.renderMain()
+
+	// Change width and verify parity.
+	for _, newWidth := range []int{60, 120, 40, 200} {
+		m.width = newWidth
+		// Invalidate as WindowSizeMsg handler would.
+		m.invalidateAllMainLayouts()
+		// Reset index width so ensureMainLayout does a full rebuild.
+		m.mainLayoutWidth = 0
+
+		got := stripANSI(m.renderMain())
+		want := stripANSI(renderMainBaseline(m))
+		if got != want {
+			t.Fatalf("width %d: viewport mismatch with baseline:\ngot:\n%s\nwant:\n%s", newWidth, got, want)
+		}
+	}
+}
+
+// TestQA_ScrollPositionsMatchBaseline checks parity at multiple scroll positions
+// across a tall document. Covers scroll boundary testing from Scenario A.
+func TestQA_ScrollPositionsMatchBaseline(t *testing.T) {
+	// Build a model with enough content to scroll through.
+	var blocks []MainBlock
+	for i := 1; i <= 5; i++ {
+		blocks = append(blocks,
+			MainBlock{Kind: BlockIteration, Iteration: i},
+			MainBlock{Kind: BlockAssistantText, Text: fmt.Sprintf("## Iteration %d\n\nParagraph one.\n\nParagraph two with more text to create multiple lines when wrapped.", i), AssistantFinal: true},
+			MainBlock{Kind: BlockToolCall, ToolName: "bash", ToolArgs: fmt.Sprintf("$ cmd_%d", i), ToolDone: true, ToolResult: fmt.Sprintf("result line 1\nresult line 2\nresult line 3")},
+		)
+	}
+
+	m := Model{
+		width:  80,
+		height: 15, // short viewport to force scrolling
+		blocks: blocks,
+	}
+
+	// Test at scroll positions: start, middle, end, and beyond.
+	for _, scroll := range []int{0, 1, 5, 10, 20, 50, 999999} {
+		m.mainScroll = scroll
+		// Reset layout state so both paths start fresh.
+		m.mainLayoutWidth = 0
+		m.mainIndexDirtyFrom = 0
+		for i := range m.blocks {
+			m.blocks[i].InvalidateLayout()
+		}
+
+		got := stripANSI(m.renderMain())
+		want := stripANSI(renderMainBaseline(m))
+		if got != want {
+			t.Fatalf("scroll %d: viewport mismatch with baseline:\ngot:\n%s\nwant:\n%s", scroll, got, want)
+		}
+	}
+}
+
+// TestQA_LiveSessionIncrementalEventsMatchBaseline simulates a live session where
+// events arrive one at a time and verifies parity after each event. Covers
+// Scenario A (long live session) with incremental correctness.
+func TestQA_LiveSessionIncrementalEventsMatchBaseline(t *testing.T) {
+	m := Model{
+		width:          80,
+		height:         20,
+		running:        true,
+		paneRatio:      0.3,
+		mainAutoScroll: true,
+		activeToolIdx:  -1,
+	}
+	initRenderer(m.width - 4)
+
+	events := []DisplayEvent{
+		{Type: DisplayIteration, Iteration: 1, Summary: "iteration 1"},
+		{Type: DisplayAssistantText, Iteration: 1, Detail: "Starting analysis...", Summary: "< assistant"},
+		{Type: DisplayAssistantText, Iteration: 1, Detail: "Starting analysis of the codebase structure.", Summary: "< assistant", AssistantFinal: true},
+		{Type: DisplayToolStart, Iteration: 1, ToolCallID: "t1", ToolName: "bash", ToolDisplayArgs: "$ ls", Summary: "> bash"},
+		{Type: DisplayToolEnd, Iteration: 1, ToolCallID: "t1", ToolName: "bash", ToolResultText: "file1\nfile2\nfile3", Summary: "+ bash done"},
+		{Type: DisplayIteration, Iteration: 2, Summary: "iteration 2"},
+		{Type: DisplayAssistantText, Iteration: 2, Detail: "Found the files. Now editing.", Summary: "< assistant", AssistantFinal: true},
+		{Type: DisplayToolStart, Iteration: 2, ToolCallID: "t2", ToolName: "edit", ToolDisplayArgs: "/src/main.go", Summary: "> edit"},
+		{Type: DisplayToolEnd, Iteration: 2, ToolCallID: "t2", ToolName: "edit", ToolResultText: "edited", Summary: "+ edit done"},
+	}
+
+	for step, de := range events {
+		m.events = append(m.events, de)
+		m.buildBlock(de)
+		m.autoScrollMain()
+
+		// Reset caches for fair comparison.
+		baseline := m
+		baseline.mainLayoutWidth = 0
+		baseline.mainIndexDirtyFrom = 0
+		for i := range baseline.blocks {
+			baseline.blocks[i].InvalidateLayout()
+		}
+
+		got := stripANSI(m.renderMain())
+		want := stripANSI(renderMainBaseline(baseline))
+		if got != want {
+			t.Fatalf("step %d (%s): viewport mismatch with baseline:\ngot:\n%s\nwant:\n%s", step, de.Type, got, want)
+		}
+	}
+}
+
+// TestQA_LargeModelAllScrollPositionsMatchBaseline exercises the large benchmark
+// model at many scroll positions to verify no off-by-one or stale cache issues.
+func TestQA_LargeModelAllScrollPositionsMatchBaseline(t *testing.T) {
+	events := benchmarkLongSessionDisplayEvents()
+	initRenderer(120 - 4)
+
+	// Build a fresh model for each scroll position to avoid shared-slice issues
+	// between the viewport path and baseline path.
+	buildModel := func() Model {
+		m := Model{
+			width:          120,
+			height:         40,
+			paneRatio:      0.3,
+			mainAutoScroll: false,
+			activeToolIdx:  -1,
+		}
+		for _, de := range events {
+			m.events = append(m.events, de)
+			m.buildBlock(de)
+		}
+		return m
+	}
+
+	// Compute total lines.
+	probe := buildModel()
+	probe.ensureMainLayout(probe.width - 4)
+	total := probe.mainTotalLines
+
+	// Test at a sampling of scroll positions.
+	positions := []int{0, 1, total / 4, total / 2, total * 3 / 4, total - 1, total, total + 100}
+	for _, scroll := range positions {
+		m := buildModel()
+		m.mainScroll = scroll
+
+		got := stripANSI(m.renderMain())
+		want := stripANSI(renderMainBaseline(m))
+		if got != want {
+			t.Fatalf("scroll %d/%d: viewport mismatch with baseline (output too long to show)", scroll, total)
+		}
+	}
+}
