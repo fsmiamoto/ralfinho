@@ -52,6 +52,13 @@ type Model struct {
 	mainScroll     int         // scroll offset in main view (line-based)
 	mainAutoScroll bool        // auto-follow new content (default true)
 	activeToolIdx  int         // index of in-progress tool block in blocks (-1 = none)
+
+	// Main-pane line index (populated by ensureMainLayout).
+	mainIndexDirtyFrom  int   // earliest block needing reindexing
+	mainBlockStarts     []int // document line offset of each block
+	mainBlockLineCounts []int // number of screen lines each block contributes
+	mainTotalLines      int   // total lines in the virtual document
+	mainLayoutWidth     int   // width the index was last computed for
 }
 
 // NewModel creates a TUI model that reads runner events from ch.
