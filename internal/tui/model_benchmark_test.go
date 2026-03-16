@@ -200,11 +200,16 @@ func benchmarkLongSessionDisplayEvents() []DisplayEvent {
 					iter,
 					step,
 				)
+				// This benchmark simulates a completed saved session viewed via
+				// NewViewerModel, so assistant events must be marked final to
+				// measure the Markdown-rendered path rather than the cheaper
+				// live-streaming plain-text path.
 				events = append(events, DisplayEvent{
-					Type:      DisplayAssistantText,
-					Iteration: iter,
-					Summary:   fmt.Sprintf("< assistant (claude-opus-4-6) [%d chars]", len(text)),
-					Detail:    text,
+					Type:           DisplayAssistantText,
+					Iteration:      iter,
+					Summary:        fmt.Sprintf("< assistant (claude-opus-4-6) [%d chars]", len(text)),
+					Detail:         text,
+					AssistantFinal: true,
 				})
 			}
 
