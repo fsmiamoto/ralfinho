@@ -157,6 +157,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			mainContentWidth = 20
 		}
 		initRenderer(mainContentWidth)
+		m.invalidateAllMainLayouts()
 		return m, nil
 
 	case rawEventMsg:
@@ -254,6 +255,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			Kind:      BlockIteration,
 			Iteration: de.Iteration,
 		})
+		m.invalidateMainLayoutFrom(len(m.blocks) - 1)
 	case DisplayAssistantText:
 		// Merge with last BlockAssistantText for the same iteration.
 		if len(m.blocks) > 0 {
@@ -262,6 +264,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 				last.Text = de.Detail
 				last.AssistantFinal = de.AssistantFinal
 				last.InvalidateLayout()
+				m.invalidateMainLayoutFrom(len(m.blocks) - 1)
 				return
 			}
 		}
@@ -271,12 +274,14 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			Text:           de.Detail,
 			AssistantFinal: de.AssistantFinal,
 		})
+		m.invalidateMainLayoutFrom(len(m.blocks) - 1)
 	case DisplayThinking:
 		m.blocks = append(m.blocks, MainBlock{
 			Kind:        BlockThinking,
 			Iteration:   de.Iteration,
 			ThinkingLen: len(de.Detail),
 		})
+		m.invalidateMainLayoutFrom(len(m.blocks) - 1)
 	case DisplayToolStart:
 		toolArgs := de.ToolDisplayArgs
 		if toolArgs == "" {
@@ -290,6 +295,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			ToolArgs:   toolArgs,
 		})
 		m.activeToolIdx = len(m.blocks) - 1
+		m.invalidateMainLayoutFrom(len(m.blocks) - 1)
 	case DisplayToolUpdate:
 		// Intermediate update — kiro sends the actual args in a follow-up.
 		// Find the matching tool block and update its args.
@@ -301,6 +307,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 				}
 				m.blocks[i].ToolArgs = updatedArgs
 				m.blocks[i].InvalidateLayout()
+				m.invalidateMainLayoutFrom(i)
 				break
 			}
 		}
@@ -312,6 +319,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 				m.blocks[i].ToolResult = de.ToolResultText
 				m.blocks[i].ToolError = de.ToolIsError
 				m.blocks[i].InvalidateLayout()
+				m.invalidateMainLayoutFrom(i)
 				break
 			}
 		}
@@ -321,6 +329,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			Kind:     BlockInfo,
 			InfoText: de.Detail,
 		})
+		m.invalidateMainLayoutFrom(len(m.blocks) - 1)
 		// user_msg, turn_end, agent_end, session — skip (don't clutter main view)
 	}
 }
@@ -332,6 +341,7 @@ func (m *Model) updateAssistantBlock(de DisplayEvent) {
 			m.blocks[i].Text = de.Detail
 			m.blocks[i].AssistantFinal = de.AssistantFinal
 			m.blocks[i].InvalidateLayout()
+			m.invalidateMainLayoutFrom(i)
 			return
 		}
 	}

@@ -1,6 +1,10 @@
 package tui
 
-import "testing"
+import (
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 func TestMainIndex_ComputesStartsAndTotalLines(t *testing.T) {
 	m := &Model{activeToolIdx: -1}
@@ -116,5 +120,161 @@ func TestMainIndex_RebuildFromDirtyTail(t *testing.T) {
 	}
 	if m.mainTotalLines != 5 {
 		t.Errorf("totalLines=%d, want 5", m.mainTotalLines)
+	}
+}
+
+func TestModelInvalidateMainLayoutFromAssistantDelta(t *testing.T) {
+	m := NewModel(nil)
+	m.running = true
+	m.width = 80
+	m.height = 40
+
+	// Build some history: iteration + assistant + tool.
+	m.buildBlock(DisplayEvent{Type: DisplayIteration, Iteration: 1})
+	m.buildBlock(DisplayEvent{Type: DisplayAssistantText, Detail: "first answer", Iteration: 1, AssistantFinal: true})
+	m.buildBlock(DisplayEvent{Type: DisplayToolStart, Iteration: 1, ToolCallID: "t1", ToolName: "bash", ToolDisplayArgs: "$ ls"})
+	m.buildBlock(DisplayEvent{Type: DisplayToolEnd, Iteration: 1, ToolCallID: "t1", ToolResultText: "ok"})
+	m.buildBlock(DisplayEvent{Type: DisplayIteration, Iteration: 2})
+	m.buildBlock(DisplayEvent{Type: DisplayAssistantText, Detail: "streaming", Iteration: 2})
+
+	// Compute a clean layout.
+	m.ensureMainLayout(76)
+	if m.mainIndexDirtyFrom != len(m.blocks) {
+		t.Fatalf("after initial layout: dirtyFrom=%d, want %d (all clean)", m.mainIndexDirtyFrom, len(m.blocks))
+	}
+
+	// Save earlier block layout pointers to verify they are NOT invalidated.
+	block0Lines := m.blocks[0].layoutLines
+	block1Lines := m.blocks[1].layoutLines
+
+	// Simulate an assistant delta on the tail block.
+	tailIdx := len(m.blocks) - 1
+	m.blocks[tailIdx].Text = "streaming more text"
+	m.blocks[tailIdx].InvalidateLayout()
+	m.invalidateMainLayoutFrom(tailIdx)
+
+	// Only the tail block should be dirty.
+	if m.mainIndexDirtyFrom != tailIdx {
+		t.Fatalf("after delta: dirtyFrom=%d, want %d", m.mainIndexDirtyFrom, tailIdx)
+	}
+	// Earlier block caches must be untouched.
+	if m.blocks[0].layoutLines == nil || &m.blocks[0].layoutLines[0] != &block0Lines[0] {
+		t.Fatal("block 0 layout was invalidated, want preserved")
+	}
+	if m.blocks[1].layoutLines == nil || &m.blocks[1].layoutLines[0] != &block1Lines[0] {
+		t.Fatal("block 1 layout was invalidated, want preserved")
+	}
+
+	// Rebuild should only process from tailIdx onward.
+	m.ensureMainLayout(76)
+	if m.mainIndexDirtyFrom != len(m.blocks) {
+		t.Fatalf("after rebuild: dirtyFrom=%d, want %d", m.mainIndexDirtyFrom, len(m.blocks))
+	}
+}
+
+func TestModelInvalidateMainLayoutFromAssistantFinal(t *testing.T) {
+	m := NewModel(nil)
+	m.running = true
+
+	// Build history + streaming assistant.
+	m.buildBlock(DisplayEvent{Type: DisplayIteration, Iteration: 1})
+	m.buildBlock(DisplayEvent{Type: DisplayAssistantText, Detail: "streaming text", Iteration: 1})
+
+	// Compute clean layout.
+	m.ensureMainLayout(76)
+	assistantIdx := 1
+
+	// Simulate finalization: same block transitions to final.
+	m.blocks[assistantIdx].Text = "final text"
+	m.blocks[assistantIdx].AssistantFinal = true
+	m.blocks[assistantIdx].InvalidateLayout()
+	m.invalidateMainLayoutFrom(assistantIdx)
+
+	if m.mainIndexDirtyFrom != assistantIdx {
+		t.Fatalf("after finalization: dirtyFrom=%d, want %d", m.mainIndexDirtyFrom, assistantIdx)
+	}
+	if m.blocks[assistantIdx].layoutLines != nil {
+		t.Fatal("finalized block should have nil layoutLines (invalidated)")
+	}
+
+	// Rebuild should recompute the assistant block.
+	m.ensureMainLayout(76)
+	if m.blocks[assistantIdx].layoutLines == nil {
+		t.Fatal("after rebuild: assistant block layoutLines should be populated")
+	}
+	if m.mainIndexDirtyFrom != len(m.blocks) {
+		t.Fatalf("after rebuild: dirtyFrom=%d, want %d", m.mainIndexDirtyFrom, len(m.blocks))
+	}
+}
+
+func TestModelInvalidateAllMainLayoutsOnWidthChange(t *testing.T) {
+	m := NewModel(nil)
+	m.width = 80
+	m.height = 40
+
+	// Build blocks and compute layout.
+	m.buildBlock(DisplayEvent{Type: DisplayInfo, Detail: "info 1"})
+	m.buildBlock(DisplayEvent{Type: DisplayInfo, Detail: "info 2"})
+	m.ensureMainLayout(76)
+
+	// Verify all blocks have cached layouts.
+	for i := range m.blocks {
+		if m.blocks[i].layoutLines == nil {
+			t.Fatalf("block %d: layoutLines nil before width change", i)
+		}
+	}
+
+	// Simulate a WindowSizeMsg that changes width.
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m2 := updated.(Model)
+
+	// All block caches should be invalidated.
+	for i := range m2.blocks {
+		if m2.blocks[i].layoutLines != nil {
+			t.Fatalf("block %d: layoutLines should be nil after width change", i)
+		}
+	}
+	if m2.mainIndexDirtyFrom != 0 {
+		t.Fatalf("after width change: dirtyFrom=%d, want 0", m2.mainIndexDirtyFrom)
+	}
+}
+
+func TestModelAppendBlockKeepsEarlierLayoutsReusable(t *testing.T) {
+	m := NewModel(nil)
+	m.running = true
+
+	// Build initial blocks and compute layout.
+	m.buildBlock(DisplayEvent{Type: DisplayIteration, Iteration: 1})
+	m.buildBlock(DisplayEvent{Type: DisplayAssistantText, Detail: "answer", Iteration: 1, AssistantFinal: true})
+	m.ensureMainLayout(76)
+
+	// Save layout pointers for existing blocks.
+	block0Lines := m.blocks[0].layoutLines
+	block1Lines := m.blocks[1].layoutLines
+
+	// Append a new block.
+	m.buildBlock(DisplayEvent{Type: DisplayToolStart, Iteration: 1, ToolCallID: "t1", ToolName: "bash", ToolDisplayArgs: "$ echo hi"})
+
+	// dirtyFrom should point to the new block, not earlier.
+	newIdx := len(m.blocks) - 1
+	if m.mainIndexDirtyFrom != newIdx {
+		t.Fatalf("after append: dirtyFrom=%d, want %d", m.mainIndexDirtyFrom, newIdx)
+	}
+
+	// Earlier block layout caches must be untouched.
+	if m.blocks[0].layoutLines == nil || &m.blocks[0].layoutLines[0] != &block0Lines[0] {
+		t.Fatal("block 0 layout was invalidated after append, want preserved")
+	}
+	if m.blocks[1].layoutLines == nil || &m.blocks[1].layoutLines[0] != &block1Lines[0] {
+		t.Fatal("block 1 layout was invalidated after append, want preserved")
+	}
+
+	// Rebuild should incorporate the new block without re-laying-out earlier ones.
+	m.ensureMainLayout(76)
+	if m.mainTotalLines == 0 {
+		t.Fatal("after rebuild: totalLines=0, want non-zero")
+	}
+	if m.mainIndexDirtyFrom != len(m.blocks) {
+		t.Fatalf("after rebuild: dirtyFrom=%d, want %d", m.mainIndexDirtyFrom, len(m.blocks))
 	}
 }

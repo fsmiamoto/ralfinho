@@ -1,5 +1,23 @@
 package tui
 
+// invalidateMainLayoutFrom marks the main-pane line index as needing
+// rebuild from blockIdx onward. If the index is already dirty from an
+// earlier position, that earlier position is preserved.
+func (m *Model) invalidateMainLayoutFrom(blockIdx int) {
+	if blockIdx < m.mainIndexDirtyFrom {
+		m.mainIndexDirtyFrom = blockIdx
+	}
+}
+
+// invalidateAllMainLayouts invalidates all block layout caches and
+// marks the full main-pane line index for rebuild.
+func (m *Model) invalidateAllMainLayouts() {
+	for i := range m.blocks {
+		m.blocks[i].InvalidateLayout()
+	}
+	m.mainIndexDirtyFrom = 0
+}
+
 // ensureMainLayout ensures all block layouts are computed for the given width
 // and the main-pane line index is up to date.
 //
