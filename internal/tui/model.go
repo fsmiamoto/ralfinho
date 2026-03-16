@@ -8,8 +8,8 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	runewidth "github.com/mattn/go-runewidth"
 	"github.com/fsmiamoto/ralfinho/internal/runner"
+	runewidth "github.com/mattn/go-runewidth"
 )
 
 // Bubble Tea message types.
@@ -135,7 +135,12 @@ type rawEventMsg runner.Event
 
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.waitForEvent(), m.spinner.Tick)
+	var cmds []tea.Cmd
+	cmds = append(cmds, m.waitForEvent())
+	if m.running {
+		cmds = append(cmds, m.spinner.Tick)
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update implements tea.Model.
@@ -178,6 +183,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case spinner.TickMsg:
+		if !m.running {
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
@@ -226,6 +234,7 @@ func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
 			last.Summary = de.Summary
 			last.Detail = de.Detail
 			last.Timestamp = de.Timestamp
+			last.AssistantFinal = de.AssistantFinal
 			// Also update the corresponding block.
 			m.updateAssistantBlock(de)
 			m.autoScrollMain()
@@ -263,13 +272,15 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			last := &m.blocks[len(m.blocks)-1]
 			if last.Kind == BlockAssistantText && last.Iteration == de.Iteration {
 				last.Text = de.Detail
+				last.AssistantFinal = de.AssistantFinal
 				return
 			}
 		}
 		m.blocks = append(m.blocks, MainBlock{
-			Kind:      BlockAssistantText,
-			Iteration: de.Iteration,
-			Text:      de.Detail,
+			Kind:           BlockAssistantText,
+			Iteration:      de.Iteration,
+			Text:           de.Detail,
+			AssistantFinal: de.AssistantFinal,
 		})
 	case DisplayThinking:
 		m.blocks = append(m.blocks, MainBlock{
@@ -319,7 +330,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			Kind:     BlockInfo,
 			InfoText: de.Detail,
 		})
-	// user_msg, turn_end, agent_end, session — skip (don't clutter main view)
+		// user_msg, turn_end, agent_end, session — skip (don't clutter main view)
 	}
 }
 
@@ -328,6 +339,7 @@ func (m *Model) updateAssistantBlock(de DisplayEvent) {
 	for i := len(m.blocks) - 1; i >= 0; i-- {
 		if m.blocks[i].Kind == BlockAssistantText && m.blocks[i].Iteration == de.Iteration {
 			m.blocks[i].Text = de.Detail
+			m.blocks[i].AssistantFinal = de.AssistantFinal
 			return
 		}
 	}

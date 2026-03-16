@@ -93,6 +93,23 @@ func TestNewViewerModelBuildsBlocksAndDefaultsAgentName(t *testing.T) {
 	}
 }
 
+func TestNewViewerModelInitDoesNotScheduleSpinnerTicks(t *testing.T) {
+	m := NewViewerModel(nil, runner.RunMeta{})
+
+	if cmd := m.Init(); cmd != nil {
+		t.Fatalf("Init() = %v, want nil for a non-running viewer model", cmd)
+	}
+
+	updated, cmd := m.Update(m.spinner.Tick())
+	if cmd != nil {
+		t.Fatalf("Update(spinner.TickMsg) returned cmd %v, want nil when viewer is idle", cmd)
+	}
+	m = updated.(Model)
+	if m.running {
+		t.Fatal("viewer model became running after spinner tick, want false")
+	}
+}
+
 func TestWaitForEventHandlesNilBufferedAndClosedChannels(t *testing.T) {
 	t.Run("nil channel", func(t *testing.T) {
 		if cmd := (Model{}).waitForEvent(); cmd != nil {
@@ -187,6 +204,15 @@ func TestModelUpdateHandlesWindowSizeStatusEventDoneAndSpinner(t *testing.T) {
 	}
 	if !strings.Contains(m.status, "Done — pi | failed (4 iterations)") {
 		t.Fatalf("Update(DoneMsg) status = %q, want formatted completion status", m.status)
+	}
+
+	updated, cmd = m.Update(m.spinner.Tick())
+	if cmd != nil {
+		t.Fatalf("Update(spinner.TickMsg) after DoneMsg returned cmd %v, want nil", cmd)
+	}
+	m = updated.(Model)
+	if m.running {
+		t.Fatal("Update(spinner.TickMsg) after DoneMsg restarted the model, want false")
 	}
 }
 
@@ -353,6 +379,208 @@ func TestModelKeyHandlingNavigatesMainStreamAndDetailPanes(t *testing.T) {
 	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'k'}}))
 	if m.detailScroll != 0 {
 		t.Fatalf("after detail k: detailScroll=%d, want 0", m.detailScroll)
+	}
+}
+
+func TestModelAssistantBlockTransitionsToFinal(t *testing.T) {
+	m := NewModel(nil)
+	m.running = true
+
+	// Simulate: message_start → text_delta → text_delta → message_end
+	// via DisplayEvents, as the converter would produce them.
+
+	// 1. message_start (empty assistant text, not final)
+	start := DisplayEvent{
+		Type:      DisplayAssistantText,
+		Summary:   "< assistant (claude-4)",
+		Detail:    "",
+		Iteration: 1,
+	}
+	updated, _ := m.Update(EventMsg(start))
+	m = updated.(Model)
+
+	if len(m.blocks) != 1 {
+		t.Fatalf("after start: blocks = %d, want 1", len(m.blocks))
+	}
+	if m.blocks[0].AssistantFinal {
+		t.Fatal("after start: AssistantFinal = true, want false")
+	}
+
+	// 2. First text delta
+	delta1 := DisplayEvent{
+		Type:      DisplayAssistantText,
+		Summary:   "< assistant (claude-4) [6 chars]",
+		Detail:    "Hello ",
+		Iteration: 1,
+	}
+	updated, _ = m.Update(EventMsg(delta1))
+	m = updated.(Model)
+
+	if len(m.blocks) != 1 {
+		t.Fatalf("after delta1: blocks = %d, want 1", len(m.blocks))
+	}
+	if m.blocks[0].Text != "Hello " {
+		t.Fatalf("after delta1: Text = %q, want %q", m.blocks[0].Text, "Hello ")
+	}
+	if m.blocks[0].AssistantFinal {
+		t.Fatal("after delta1: AssistantFinal = true, want false")
+	}
+
+	// 3. Second text delta
+	delta2 := DisplayEvent{
+		Type:      DisplayAssistantText,
+		Summary:   "< assistant (claude-4) [12 chars]",
+		Detail:    "Hello world!",
+		Iteration: 1,
+	}
+	updated, _ = m.Update(EventMsg(delta2))
+	m = updated.(Model)
+
+	if len(m.blocks) != 1 {
+		t.Fatalf("after delta2: blocks = %d, want 1", len(m.blocks))
+	}
+	if m.blocks[0].AssistantFinal {
+		t.Fatal("after delta2: AssistantFinal = true, want false")
+	}
+
+	// 4. message_end (final)
+	end := DisplayEvent{
+		Type:           DisplayAssistantText,
+		Summary:        "+ assistant (12 chars)",
+		Detail:         "Hello world!",
+		Iteration:      1,
+		AssistantFinal: true,
+	}
+	updated, _ = m.Update(EventMsg(end))
+	m = updated.(Model)
+
+	if len(m.blocks) != 1 {
+		t.Fatalf("after end: blocks = %d, want 1 (should merge, not create new)", len(m.blocks))
+	}
+	if !m.blocks[0].AssistantFinal {
+		t.Fatal("after end: AssistantFinal = false, want true")
+	}
+	if m.blocks[0].Text != "Hello world!" {
+		t.Fatalf("after end: Text = %q, want %q", m.blocks[0].Text, "Hello world!")
+	}
+
+	// The merged event should also be final.
+	if len(m.events) != 1 {
+		t.Fatalf("after end: events = %d, want 1 (merged)", len(m.events))
+	}
+	if !m.events[0].AssistantFinal {
+		t.Fatal("after end: merged event AssistantFinal = false, want true")
+	}
+}
+
+func TestAddDisplayEvent_MergesAssistantFinalState(t *testing.T) {
+	// Test all three propagation paths:
+	// 1. addDisplayEvent merges AssistantFinal into the event list
+	// 2. buildBlock propagates AssistantFinal when creating/merging blocks
+	// 3. updateAssistantBlock propagates AssistantFinal during streaming
+
+	m := NewModel(nil)
+	m.running = true
+
+	// Path: buildBlock creates a new block with AssistantFinal=false
+	de1 := DisplayEvent{
+		Type:      DisplayAssistantText,
+		Detail:    "initial",
+		Iteration: 1,
+	}
+	updated, _ := m.addDisplayEvent(de1)
+	m = updated.(Model)
+
+	if m.blocks[0].AssistantFinal {
+		t.Fatal("new block: AssistantFinal = true, want false")
+	}
+
+	// Path: addDisplayEvent merges → updateAssistantBlock propagates
+	de2 := DisplayEvent{
+		Type:      DisplayAssistantText,
+		Detail:    "updated text",
+		Iteration: 1,
+	}
+	updated, _ = m.addDisplayEvent(de2)
+	m = updated.(Model)
+
+	if m.blocks[0].AssistantFinal {
+		t.Fatal("after streaming merge: AssistantFinal = true, want false")
+	}
+
+	// Path: addDisplayEvent merges → updateAssistantBlock sets final=true
+	de3 := DisplayEvent{
+		Type:           DisplayAssistantText,
+		Detail:         "final text",
+		Iteration:      1,
+		AssistantFinal: true,
+	}
+	updated, _ = m.addDisplayEvent(de3)
+	m = updated.(Model)
+
+	if !m.blocks[0].AssistantFinal {
+		t.Fatal("after final merge: AssistantFinal = false, want true")
+	}
+	if !m.events[0].AssistantFinal {
+		t.Fatal("after final merge: event AssistantFinal = false, want true")
+	}
+}
+
+func TestBuildBlock_PropagatesAssistantFinalOnNewBlock(t *testing.T) {
+	// buildBlock should set AssistantFinal when creating a brand new block
+	// (e.g. in the viewer path where events don't go through addDisplayEvent merge).
+	m := Model{activeToolIdx: -1}
+
+	// New block with AssistantFinal=true (as in saved-session viewer).
+	m.buildBlock(DisplayEvent{
+		Type:           DisplayAssistantText,
+		Detail:         "saved answer",
+		Iteration:      1,
+		AssistantFinal: true,
+	})
+
+	if len(m.blocks) != 1 {
+		t.Fatalf("blocks = %d, want 1", len(m.blocks))
+	}
+	if !m.blocks[0].AssistantFinal {
+		t.Fatal("new block from final event: AssistantFinal = false, want true")
+	}
+
+	// Merge into existing block preserves AssistantFinal from the new event.
+	m.buildBlock(DisplayEvent{
+		Type:           DisplayAssistantText,
+		Detail:         "updated answer",
+		Iteration:      1,
+		AssistantFinal: true,
+	})
+
+	if len(m.blocks) != 1 {
+		t.Fatalf("after merge: blocks = %d, want 1", len(m.blocks))
+	}
+	if !m.blocks[0].AssistantFinal {
+		t.Fatal("merged block: AssistantFinal = false, want true")
+	}
+}
+
+func TestNewViewerModel_BlocksAreAssistantFinal(t *testing.T) {
+	// Saved sessions should have AssistantFinal=true on their assistant blocks
+	// because all events in a completed run represent finished messages.
+	events := []DisplayEvent{
+		{Type: DisplayIteration, Iteration: 1},
+		{
+			Type:           DisplayAssistantText,
+			Detail:         "complete answer",
+			Iteration:      1,
+			AssistantFinal: true,
+		},
+	}
+	m := NewViewerModel(events, runner.RunMeta{})
+
+	if len(m.blocks) != 2 {
+		t.Fatalf("blocks = %d, want 2", len(m.blocks))
+	}
+	if !m.blocks[1].AssistantFinal {
+		t.Fatal("viewer assistant block: AssistantFinal = false, want true")
 	}
 }
 

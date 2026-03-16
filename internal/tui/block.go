@@ -39,17 +39,18 @@ const (
 
 // MainBlock represents a single rendered unit in the main (live) view.
 type MainBlock struct {
-	Kind        BlockKind
-	Iteration   int
-	Text        string          // accumulated markdown for BlockAssistantText
-	ToolName    string          // for BlockToolCall
-	ToolCallID  string          // to match tool_start with tool_end
-	ToolArgs    string          // formatted: "$ cmd" for bash, filepath for read/edit/write
-	ToolResult  string          // raw result text
-	ToolDone    bool
-	ToolError   bool
-	ThinkingLen int             // char count for thinking summary
-	InfoText    string          // for BlockInfo
+	Kind           BlockKind
+	Iteration      int
+	Text           string // accumulated markdown for BlockAssistantText
+	AssistantFinal bool   // true when the assistant message is complete
+	ToolName       string // for BlockToolCall
+	ToolCallID     string // to match tool_start with tool_end
+	ToolArgs       string // formatted: "$ cmd" for bash, filepath for read/edit/write
+	ToolResult     string // raw result text
+	ToolDone       bool
+	ToolError      bool
+	ThinkingLen    int    // char count for thinking summary
+	InfoText       string // for BlockInfo
 }
 
 // Render produces the styled string for this block at the given width.
