@@ -8,6 +8,132 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// Layout cache
+// ---------------------------------------------------------------------------
+
+func TestMainBlockLayoutCache_ReusesSameWidth(t *testing.T) {
+	b := &MainBlock{Kind: BlockInfo, InfoText: "hello"}
+
+	lines1 := b.Layout(40)
+	if lines1 == nil {
+		t.Fatal("expected non-nil lines from Layout")
+	}
+	if b.layoutWidth != 40 {
+		t.Errorf("expected layoutWidth=40, got %d", b.layoutWidth)
+	}
+
+	// Second call with same width should return the cached slice.
+	lines2 := b.Layout(40)
+	if &lines1[0] != &lines2[0] {
+		t.Error("expected Layout to reuse cached lines for same width")
+	}
+}
+
+func TestMainBlockLayoutCache_InvalidatesOnWidthChange(t *testing.T) {
+	b := &MainBlock{Kind: BlockInfo, InfoText: "hello"}
+
+	lines40 := b.Layout(40)
+	if lines40 == nil {
+		t.Fatal("expected non-nil lines")
+	}
+	cachedPtr := &lines40[0]
+
+	// Different width should recompute.
+	lines60 := b.Layout(60)
+	if lines60 == nil {
+		t.Fatal("expected non-nil lines at new width")
+	}
+	if b.layoutWidth != 60 {
+		t.Errorf("expected layoutWidth=60, got %d", b.layoutWidth)
+	}
+	if &lines60[0] == cachedPtr {
+		t.Error("expected Layout to recompute for different width")
+	}
+}
+
+func TestMainBlockLayoutCache_InvalidatesOnAssistantFinalTransition(t *testing.T) {
+	// Use markdown syntax so streaming (plain wrap) and final (markdown render)
+	// produce visibly different output.
+	b := &MainBlock{Kind: BlockAssistantText, Iteration: 1, Text: "**bold** text"}
+
+	streamingLines := b.Layout(40)
+	if streamingLines == nil {
+		t.Fatal("expected non-nil streaming lines")
+	}
+	streamingJoined := strings.Join(streamingLines, "\n")
+
+	// Transition to final and invalidate.
+	b.AssistantFinal = true
+	b.InvalidateLayout()
+
+	finalLines := b.Layout(40)
+	if finalLines == nil {
+		t.Fatal("expected non-nil final lines")
+	}
+	finalJoined := strings.Join(finalLines, "\n")
+
+	if streamingJoined == finalJoined {
+		t.Error("expected different layout after assistant final transition")
+	}
+}
+
+func TestMainBlockLayoutCache_InvalidatesOnToolStateChange(t *testing.T) {
+	b := &MainBlock{
+		Kind:     BlockToolCall,
+		ToolName: "bash",
+		ToolArgs: "$ echo hi",
+	}
+
+	runningLines := b.Layout(40)
+	if runningLines == nil {
+		t.Fatal("expected non-nil running lines")
+	}
+	runningJoined := strings.Join(runningLines, "\n")
+
+	// Complete the tool and invalidate.
+	b.ToolDone = true
+	b.ToolResult = "hi"
+	b.InvalidateLayout()
+
+	doneLines := b.Layout(40)
+	if doneLines == nil {
+		t.Fatal("expected non-nil done lines")
+	}
+	doneJoined := strings.Join(doneLines, "\n")
+
+	if runningJoined == doneJoined {
+		t.Error("expected different layout after tool state change")
+	}
+}
+
+func TestMainBlockLayoutCache_EmptyRenderReturnsNil(t *testing.T) {
+	// An empty assistant text block renders to "".
+	b := &MainBlock{Kind: BlockAssistantText, Text: ""}
+
+	lines := b.Layout(40)
+	if lines != nil {
+		t.Errorf("expected nil for empty render, got %v", lines)
+	}
+	if b.layoutWidth != 40 {
+		t.Errorf("expected layoutWidth=40 even for empty render, got %d", b.layoutWidth)
+	}
+}
+
+func TestMainBlockLayoutCache_InvalidateLayoutClearsCache(t *testing.T) {
+	b := &MainBlock{Kind: BlockInfo, InfoText: "test"}
+
+	_ = b.Layout(40)
+	if b.layoutLines == nil {
+		t.Fatal("expected cache to be populated")
+	}
+
+	b.InvalidateLayout()
+	if b.layoutLines != nil {
+		t.Error("expected layoutLines to be nil after InvalidateLayout")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // normalizeToolName
 // ---------------------------------------------------------------------------
 

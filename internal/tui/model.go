@@ -254,6 +254,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			if last.Kind == BlockAssistantText && last.Iteration == de.Iteration {
 				last.Text = de.Detail
 				last.AssistantFinal = de.AssistantFinal
+				last.InvalidateLayout()
 				return
 			}
 		}
@@ -292,6 +293,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 					updatedArgs = formatToolArgs(de.ToolName, de.RawArgs)
 				}
 				m.blocks[i].ToolArgs = updatedArgs
+				m.blocks[i].InvalidateLayout()
 				break
 			}
 		}
@@ -302,6 +304,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 				m.blocks[i].ToolDone = true
 				m.blocks[i].ToolResult = de.ToolResultText
 				m.blocks[i].ToolError = de.ToolIsError
+				m.blocks[i].InvalidateLayout()
 				break
 			}
 		}
@@ -321,6 +324,7 @@ func (m *Model) updateAssistantBlock(de DisplayEvent) {
 		if m.blocks[i].Kind == BlockAssistantText && m.blocks[i].Iteration == de.Iteration {
 			m.blocks[i].Text = de.Detail
 			m.blocks[i].AssistantFinal = de.AssistantFinal
+			m.blocks[i].InvalidateLayout()
 			return
 		}
 	}

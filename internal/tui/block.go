@@ -51,6 +51,11 @@ type MainBlock struct {
 	ToolError      bool
 	ThinkingLen    int    // char count for thinking summary
 	InfoText       string // for BlockInfo
+
+	// Layout cache: rendered screen lines for a given width.
+	// Nil layoutLines means the cache is stale and must be recomputed.
+	layoutWidth int      // width the layout was last computed for
+	layoutLines []string // cached rendered screen lines
 }
 
 // Render produces the styled string for this block at the given width.
@@ -69,6 +74,31 @@ func (b *MainBlock) Render(width int) string {
 	default:
 		return ""
 	}
+}
+
+// Layout returns the cached screen lines for this block at the given width.
+// If the cache is stale (different width or invalidated), the block is
+// re-rendered and the result cached. Returns nil for blocks that render to
+// an empty string. Callers must not modify the returned slice.
+func (b *MainBlock) Layout(width int) []string {
+	if b.layoutLines != nil && b.layoutWidth == width {
+		return b.layoutLines
+	}
+	rendered := b.Render(width)
+	if rendered == "" {
+		b.layoutLines = nil
+		b.layoutWidth = width
+		return nil
+	}
+	b.layoutLines = strings.Split(rendered, "\n")
+	b.layoutWidth = width
+	return b.layoutLines
+}
+
+// InvalidateLayout marks the block's cached layout as stale, forcing
+// re-rendering on the next Layout call.
+func (b *MainBlock) InvalidateLayout() {
+	b.layoutLines = nil
 }
 
 func (b *MainBlock) renderIteration(width int) string {
