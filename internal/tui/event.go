@@ -36,6 +36,11 @@ type DisplayEvent struct {
 	Timestamp time.Time
 	Iteration int
 
+	// AssistantFinal is true when this assistant text event represents
+	// the completed message (i.e. produced by EventMessageEnd), false
+	// while still streaming.
+	AssistantFinal bool
+
 	// Tool-specific fields for block rendering in the main view.
 	ToolCallID      string          // for matching tool_start with tool_end
 	ToolName        string          // tool name (e.g. "bash", "read")
@@ -187,11 +192,12 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			if text != "" {
 				charCount := len(text)
 				return []DisplayEvent{{
-					Type:      DisplayAssistantText,
-					Summary:   fmt.Sprintf("+ assistant (%d chars)", charCount),
-					Detail:    text,
-					Timestamp: now,
-					Iteration: c.iteration,
+					Type:           DisplayAssistantText,
+					Summary:        fmt.Sprintf("+ assistant (%d chars)", charCount),
+					Detail:         text,
+					Timestamp:      now,
+					Iteration:      c.iteration,
+					AssistantFinal: true,
 				}}
 			}
 		}

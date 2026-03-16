@@ -418,6 +418,62 @@ func TestEventConverter_Iteration_SetsConverterState(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// AssistantFinal state
+// ---------------------------------------------------------------------------
+
+func TestEventConverter_AssistantFinalState(t *testing.T) {
+	c := NewEventConverter()
+
+	// message_start for assistant -> AssistantFinal = false
+	des := c.Convert(&runner.Event{
+		Type:    runner.EventMessageStart,
+		Message: json.RawMessage(`{"role":"assistant","model":"claude-4"}`),
+	})
+	if len(des) != 1 {
+		t.Fatalf("message_start: expected 1 event, got %d", len(des))
+	}
+	if des[0].AssistantFinal {
+		t.Error("message_start: AssistantFinal should be false")
+	}
+
+	// text_delta -> AssistantFinal = false
+	des = c.Convert(&runner.Event{
+		Type:                  runner.EventMessageUpdate,
+		AssistantMessageEvent: json.RawMessage(`{"type":"text_delta","contentIndex":0,"delta":"Hello "}`),
+	})
+	if len(des) != 1 {
+		t.Fatalf("text_delta 1: expected 1 event, got %d", len(des))
+	}
+	if des[0].AssistantFinal {
+		t.Error("text_delta 1: AssistantFinal should be false")
+	}
+
+	// another text_delta -> AssistantFinal = false
+	des = c.Convert(&runner.Event{
+		Type:                  runner.EventMessageUpdate,
+		AssistantMessageEvent: json.RawMessage(`{"type":"text_delta","contentIndex":0,"delta":"world"}`),
+	})
+	if len(des) != 1 {
+		t.Fatalf("text_delta 2: expected 1 event, got %d", len(des))
+	}
+	if des[0].AssistantFinal {
+		t.Error("text_delta 2: AssistantFinal should be false")
+	}
+
+	// message_end -> AssistantFinal = true
+	des = c.Convert(&runner.Event{Type: runner.EventMessageEnd})
+	if len(des) != 1 {
+		t.Fatalf("message_end: expected 1 event, got %d", len(des))
+	}
+	if !des[0].AssistantFinal {
+		t.Error("message_end: AssistantFinal should be true")
+	}
+	if des[0].Detail != "Hello world" {
+		t.Errorf("message_end: Detail = %q, want %q", des[0].Detail, "Hello world")
+	}
+}
+
 func TestEventConverter_UnknownEventReturnsNil(t *testing.T) {
 	c := NewEventConverter()
 	des := c.Convert(&runner.Event{Type: "unknown_type"})
