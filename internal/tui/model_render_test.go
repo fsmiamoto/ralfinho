@@ -336,3 +336,114 @@ func TestPaneHeightUsesComputedBottomPaneHeightWhenRoomy(t *testing.T) {
 		t.Fatalf("paneHeight() = %d, want computed height 5", got)
 	}
 }
+
+// Markdown-like input used to distinguish plain text from rendered Markdown.
+const testAssistantMD = "# Heading\n\n- item one\n- item two\n\n```go\nfmt.Println(\"hi\")\n```"
+
+func TestRenderAssistantContent(t *testing.T) {
+	t.Run("empty text returns empty", func(t *testing.T) {
+		if got := renderAssistantContent("", 80, true); got != "" {
+			t.Fatalf("renderAssistantContent(\"\", 80, true) = %q, want empty", got)
+		}
+		if got := renderAssistantContent("", 80, false); got != "" {
+			t.Fatalf("renderAssistantContent(\"\", 80, false) = %q, want empty", got)
+		}
+	})
+
+	t.Run("streaming uses plain text", func(t *testing.T) {
+		got := stripANSI(renderAssistantContent(testAssistantMD, 80, false))
+		// Plain text preserves literal Markdown markers.
+		if !strings.Contains(got, "# Heading") {
+			t.Fatalf("streaming render = %q, want literal '# Heading'", got)
+		}
+	})
+
+	t.Run("final uses markdown", func(t *testing.T) {
+		got := stripANSI(renderAssistantContent(testAssistantMD, 80, true))
+		// Rendered Markdown strips the heading marker but keeps the text.
+		if !strings.Contains(got, "Heading") {
+			t.Fatalf("final render = %q, want 'Heading'", got)
+		}
+		if strings.Contains(got, "# Heading") {
+			t.Fatalf("final render = %q, should not contain literal '# Heading'", got)
+		}
+	})
+}
+
+func TestRenderMain_AssistantStreamingUsesPlainText(t *testing.T) {
+	m := Model{
+		width:  80,
+		height: 30,
+		blocks: []MainBlock{{
+			Kind:           BlockAssistantText,
+			Text:           testAssistantMD,
+			AssistantFinal: false,
+		}},
+	}
+
+	main := stripANSI(m.renderMain())
+	if !strings.Contains(main, "# Heading") {
+		t.Fatalf("renderMain() streaming = %q, want literal '# Heading'", main)
+	}
+}
+
+func TestRenderMain_AssistantFinalUsesMarkdown(t *testing.T) {
+	m := Model{
+		width:  80,
+		height: 30,
+		blocks: []MainBlock{{
+			Kind:           BlockAssistantText,
+			Text:           testAssistantMD,
+			AssistantFinal: true,
+		}},
+	}
+
+	main := stripANSI(m.renderMain())
+	if !strings.Contains(main, "Heading") {
+		t.Fatalf("renderMain() final = %q, want 'Heading'", main)
+	}
+	if strings.Contains(main, "# Heading") {
+		t.Fatalf("renderMain() final = %q, should not contain literal '# Heading'", main)
+	}
+}
+
+func TestRenderDetail_AssistantStreamingUsesPlainText(t *testing.T) {
+	m := Model{
+		width:     80,
+		height:    24,
+		paneRatio: 0.4,
+		cursor:    0,
+		events: []DisplayEvent{{
+			Type:           DisplayAssistantText,
+			Detail:         testAssistantMD,
+			AssistantFinal: false,
+		}},
+	}
+
+	detail := stripANSI(m.renderDetail())
+	if !strings.Contains(detail, "# Heading") {
+		t.Fatalf("renderDetail() streaming = %q, want literal '# Heading'", detail)
+	}
+}
+
+func TestRenderDetail_AssistantFinalUsesMarkdown(t *testing.T) {
+	m := Model{
+		width:     80,
+		height:    24,
+		paneRatio: 0.4,
+		cursor:    0,
+		events: []DisplayEvent{{
+			Type:           DisplayAssistantText,
+			Detail:         testAssistantMD,
+			AssistantFinal: true,
+		}},
+	}
+
+	detail := stripANSI(m.renderDetail())
+	if !strings.Contains(detail, "Heading") {
+		t.Fatalf("renderDetail() final = %q, want 'Heading'", detail)
+	}
+	if strings.Contains(detail, "# Heading") {
+		t.Fatalf("renderDetail() final = %q, should not contain literal '# Heading'", detail)
+	}
+}

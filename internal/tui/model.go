@@ -759,7 +759,7 @@ func (m Model) renderDetail() string {
 				ev.Type, ev.Timestamp.Format("15:04:05"), ev.Iteration, ev.Detail)
 			content = WrapText(content, contentWidth)
 		} else if ev.Type == DisplayAssistantText && ev.Detail != "" {
-			content = renderMarkdown(ev.Detail, contentWidth)
+			content = renderAssistantContent(ev.Detail, contentWidth, ev.AssistantFinal)
 		} else {
 			content = WrapText(ev.Detail, contentWidth)
 		}

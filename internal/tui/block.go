@@ -85,10 +85,21 @@ func (b *MainBlock) renderIteration(width int) string {
 }
 
 func (b *MainBlock) renderAssistantText(width int) string {
-	if b.Text == "" {
+	return renderAssistantContent(b.Text, width, b.AssistantFinal)
+}
+
+// renderAssistantContent is the shared helper for rendering assistant text in
+// both the main pane and the detail pane. While streaming (final=false), it
+// returns plain wrapped text to avoid expensive Markdown rendering. Once the
+// message is complete (final=true), it renders full Markdown.
+func renderAssistantContent(text string, width int, final bool) string {
+	if text == "" {
 		return ""
 	}
-	return renderMarkdown(b.Text, width)
+	if final {
+		return renderMarkdown(text, width)
+	}
+	return WrapText(text, width)
 }
 
 func (b *MainBlock) renderThinking() string {
