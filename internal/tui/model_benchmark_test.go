@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fsmiamoto/ralfinho/internal/runner"
 )
@@ -171,6 +172,108 @@ func BenchmarkRenderDetail_FinalAssistantMarkdown(b *testing.B) {
 		benchmarkViewerStringSink = m.renderDetail()
 	}
 }
+
+// ---------- live session benchmarks ----------
+
+// benchmarkLiveLongHistoryModel builds a live Model with long completed history
+// and one in-progress streaming assistant tail block, simulating a real live
+// session that has been running for many iterations.
+func benchmarkLiveLongHistoryModel() Model {
+	historyEvents := benchmarkLongSessionDisplayEvents()
+
+	m := Model{
+		width:          120,
+		height:         40,
+		running:        true,
+		paneRatio:      0.3,
+		mainAutoScroll: true,
+		autoScroll:     true,
+		activeToolIdx:  -1,
+		startTime:      time.Now(),
+	}
+	initRenderer(m.width - 4)
+
+	// Load completed history.
+	for _, de := range historyEvents {
+		m.events = append(m.events, de)
+		m.buildBlock(de)
+	}
+
+	// Add a streaming (non-final) assistant block for the current iteration.
+	streamDE := DisplayEvent{
+		Type:      DisplayAssistantText,
+		Iteration: 20,
+		Summary:   "< assistant (claude-opus-4-6) [100 chars]",
+		Detail:    "Starting to think about the next step...",
+	}
+	m.events = append(m.events, streamDE)
+	m.buildBlock(streamDE)
+	m.cursor = len(m.events) - 1
+
+	return m
+}
+
+func benchmarkAssistantDelta() DisplayEvent {
+	return DisplayEvent{
+		Type:      DisplayAssistantText,
+		Iteration: 20,
+		Summary:   "< assistant (claude-opus-4-6) [500 chars]",
+		Detail:    "Starting to think about the next step and analyzing the codebase structure to determine what changes are needed. Let me look at the relevant files and understand the architecture before proposing modifications.",
+	}
+}
+
+// BenchmarkLiveLongHistoryAssistantDeltaView is the primary benchmark for the
+// live viewport optimization. It measures the cost of processing one assistant
+// streaming delta and rendering the full View() on a model with long history.
+//
+// Baseline (before optimization): ~472 ms/op, ~172 MB/op, ~3.9M allocs/op
+func BenchmarkLiveLongHistoryAssistantDeltaView(b *testing.B) {
+	m := benchmarkLiveLongHistoryModel()
+	m.ensureMainLayout(m.width - 4) // warm up layout caches
+
+	delta := benchmarkAssistantDelta()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		updated, _ := m.addDisplayEvent(delta)
+		m = updated.(Model)
+		benchmarkViewerStringSink = m.View()
+	}
+}
+
+// BenchmarkLiveLongHistoryAssistantDeltaViewBaseline measures the same scenario
+// using the old render approach (re-render all blocks, flatten, slice viewport).
+// This provides a direct A/B comparison for the optimization.
+func BenchmarkLiveLongHistoryAssistantDeltaViewBaseline(b *testing.B) {
+	m := benchmarkLiveLongHistoryModel()
+
+	delta := benchmarkAssistantDelta()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		updated, _ := m.addDisplayEvent(delta)
+		m = updated.(Model)
+		benchmarkViewerStringSink = renderMainBaseline(m)
+	}
+}
+
+// BenchmarkLiveLongHistoryIdleView measures the cost of View() when nothing
+// has changed — all layout caches are warm and no blocks are dirty.
+func BenchmarkLiveLongHistoryIdleView(b *testing.B) {
+	m := benchmarkLiveLongHistoryModel()
+	m.ensureMainLayout(m.width - 4)
+	_ = m.View() // warm all render paths
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchmarkViewerStringSink = m.View()
+	}
+}
+
+// ---------- data generators ----------
 
 func benchmarkLongSessionDisplayEvents() []DisplayEvent {
 	const (
