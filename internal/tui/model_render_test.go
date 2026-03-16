@@ -447,3 +447,43 @@ func TestRenderDetail_AssistantFinalUsesMarkdown(t *testing.T) {
 		t.Fatalf("renderDetail() final = %q, should not contain literal '# Heading'", detail)
 	}
 }
+
+func TestRenderDetail_RawModeIgnoresAssistantFinal(t *testing.T) {
+	// Raw mode should always show metadata + plain text, regardless of AssistantFinal.
+	for _, final := range []bool{false, true} {
+		name := "streaming"
+		if final {
+			name = "final"
+		}
+		t.Run(name, func(t *testing.T) {
+			m := Model{
+				width:     80,
+				height:    24,
+				paneRatio: 0.4,
+				cursor:    0,
+				rawMode:   true,
+				events: []DisplayEvent{{
+					Type:           DisplayAssistantText,
+					Detail:         testAssistantMD,
+					AssistantFinal: final,
+					Timestamp:      time.Date(2026, 3, 16, 14, 30, 0, 0, time.UTC),
+					Iteration:      3,
+				}},
+			}
+
+			detail := stripANSI(m.renderDetail())
+
+			// Raw mode must show metadata header regardless of AssistantFinal.
+			for _, want := range []string{"Type: assistant_text", "Time: 14:30:00", "Iteration: 3"} {
+				if !strings.Contains(detail, want) {
+					t.Fatalf("renderDetail() raw (final=%v) = %q, want substring %q", final, detail, want)
+				}
+			}
+
+			// Raw mode must preserve literal Markdown markers (no rendering).
+			if !strings.Contains(detail, "# Heading") {
+				t.Fatalf("renderDetail() raw (final=%v) = %q, want literal '# Heading'", final, detail)
+			}
+		})
+	}
+}
