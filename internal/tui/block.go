@@ -54,8 +54,7 @@ type MainBlock struct {
 }
 
 // Render produces the styled string for this block at the given width.
-// spinnerView is the current spinner frame (only used for in-progress tool calls).
-func (b *MainBlock) Render(width int, spinnerView string) string {
+func (b *MainBlock) Render(width int) string {
 	switch b.Kind {
 	case BlockIteration:
 		return b.renderIteration(width)
@@ -64,7 +63,7 @@ func (b *MainBlock) Render(width int, spinnerView string) string {
 	case BlockThinking:
 		return b.renderThinking()
 	case BlockToolCall:
-		return b.renderToolCall(width, spinnerView)
+		return b.renderToolCall(width)
 	case BlockInfo:
 		return b.renderInfo()
 	default:
@@ -107,7 +106,7 @@ func (b *MainBlock) renderThinking() string {
 	return thinkingLineStyle.Render(line)
 }
 
-func (b *MainBlock) renderToolCall(width int, spinnerView string) string {
+func (b *MainBlock) renderToolCall(width int) string {
 	// Build the header: toolname [status]
 	var header string
 	if b.ToolError {
@@ -115,11 +114,7 @@ func (b *MainBlock) renderToolCall(width int, spinnerView string) string {
 	} else if b.ToolDone {
 		header = toolHeaderStyle.Render(fmt.Sprintf("%s ok", b.ToolName))
 	} else {
-		status := "..."
-		if spinnerView != "" {
-			status = spinnerView
-		}
-		header = toolHeaderStyle.Render(fmt.Sprintf("%s %s", b.ToolName, status))
+		header = toolHeaderStyle.Render(fmt.Sprintf("%s ...", b.ToolName))
 	}
 
 	// Build inner content.

@@ -40,14 +40,7 @@ func TestNewModelInitializesDefaultsAndInitBatch(t *testing.T) {
 
 	cmd := m.Init()
 	if cmd == nil {
-		t.Fatal("Init() returned nil, want batched wait/tick commands")
-	}
-	batch, ok := cmd().(tea.BatchMsg)
-	if !ok {
-		t.Fatalf("Init() message type = %T, want tea.BatchMsg", cmd())
-	}
-	if len(batch) != 2 {
-		t.Fatalf("Init() batch length = %d, want 2 commands", len(batch))
+		t.Fatal("Init() returned nil, want waitForEvent command")
 	}
 }
 
@@ -93,20 +86,11 @@ func TestNewViewerModelBuildsBlocksAndDefaultsAgentName(t *testing.T) {
 	}
 }
 
-func TestNewViewerModelInitDoesNotScheduleSpinnerTicks(t *testing.T) {
+func TestNewViewerModelInitReturnsNilCommand(t *testing.T) {
 	m := NewViewerModel(nil, runner.RunMeta{})
 
 	if cmd := m.Init(); cmd != nil {
 		t.Fatalf("Init() = %v, want nil for a non-running viewer model", cmd)
-	}
-
-	updated, cmd := m.Update(m.spinner.Tick())
-	if cmd != nil {
-		t.Fatalf("Update(spinner.TickMsg) returned cmd %v, want nil when viewer is idle", cmd)
-	}
-	m = updated.(Model)
-	if m.running {
-		t.Fatal("viewer model became running after spinner tick, want false")
 	}
 }
 
@@ -151,7 +135,7 @@ func TestWaitForEventHandlesNilBufferedAndClosedChannels(t *testing.T) {
 	})
 }
 
-func TestModelUpdateHandlesWindowSizeStatusEventDoneAndSpinner(t *testing.T) {
+func TestModelUpdateHandlesWindowSizeStatusEventAndDone(t *testing.T) {
 	m := NewModel(nil)
 
 	updated, cmd := m.Update(tea.WindowSizeMsg{Width: 72, Height: 24})
@@ -181,12 +165,6 @@ func TestModelUpdateHandlesWindowSizeStatusEventDoneAndSpinner(t *testing.T) {
 		t.Fatalf("Update(StatusMsg) status = %q, want %q", m.status, "Working")
 	}
 
-	updated, cmd = m.Update(m.spinner.Tick())
-	if cmd == nil {
-		t.Fatal("Update(spinner.TickMsg) returned nil cmd, want follow-up spinner tick")
-	}
-	m = updated.(Model)
-
 	result := runner.RunResult{Agent: "pi", Status: runner.StatusFailed, Iterations: 4, Error: "permission denied"}
 	updated, cmd = m.Update(DoneMsg{Result: result})
 	if cmd != nil {
@@ -204,15 +182,6 @@ func TestModelUpdateHandlesWindowSizeStatusEventDoneAndSpinner(t *testing.T) {
 	}
 	if !strings.Contains(m.status, "Done — pi | failed (4 iterations)") {
 		t.Fatalf("Update(DoneMsg) status = %q, want formatted completion status", m.status)
-	}
-
-	updated, cmd = m.Update(m.spinner.Tick())
-	if cmd != nil {
-		t.Fatalf("Update(spinner.TickMsg) after DoneMsg returned cmd %v, want nil", cmd)
-	}
-	m = updated.(Model)
-	if m.running {
-		t.Fatal("Update(spinner.TickMsg) after DoneMsg restarted the model, want false")
 	}
 }
 

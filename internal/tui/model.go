@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/fsmiamoto/ralfinho/internal/runner"
@@ -41,9 +40,8 @@ type Model struct {
 	autoScroll   bool // auto-scroll stream when new events arrive
 	confirmQuit  bool // waiting for quit confirmation
 	confirmCtrlC bool // true if ctrl+c triggered confirm, false if q
-	result       *runner.RunResult
-	spinner      spinner.Model
-	startTime    time.Time
+	result    *runner.RunResult
+	startTime time.Time
 	modelName    string
 	iteration    int // current iteration count for header display
 
@@ -58,9 +56,6 @@ type Model struct {
 
 // NewModel creates a TUI model that reads runner events from ch.
 func NewModel(ch <-chan runner.Event) Model {
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 	return Model{
 		paneRatio:      0.3,
 		running:        true,
@@ -70,7 +65,6 @@ func NewModel(ch <-chan runner.Event) Model {
 		autoScroll:     true,
 		mainAutoScroll: true,
 		activeToolIdx:  -1,
-		spinner:        s,
 		startTime:      time.Now(),
 	}
 }
@@ -135,12 +129,7 @@ type rawEventMsg runner.Event
 
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
-	var cmds []tea.Cmd
-	cmds = append(cmds, m.waitForEvent())
-	if m.running {
-		cmds = append(cmds, m.spinner.Tick)
-	}
-	return tea.Batch(cmds...)
+	return m.waitForEvent()
 }
 
 // Update implements tea.Model.
@@ -181,14 +170,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.result = &msg.Result
 		return m, nil
-
-	case spinner.TickMsg:
-		if !m.running {
-			return m, nil
-		}
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
 	}
 
 	return m, nil
@@ -581,11 +562,7 @@ func (m Model) renderMain() string {
 	// Build content from blocks.
 	var sections []string
 	for i := range m.blocks {
-		spinnerView := ""
-		if i == m.activeToolIdx {
-			spinnerView = m.spinner.View()
-		}
-		rendered := m.blocks[i].Render(contentWidth, spinnerView)
+		rendered := m.blocks[i].Render(contentWidth)
 		if rendered != "" {
 			sections = append(sections, rendered)
 		}
@@ -655,7 +632,7 @@ func (m Model) renderHeader() string {
 	var parts []string
 
 	if m.running {
-		parts = append(parts, m.spinner.View())
+		parts = append(parts, "●")
 	}
 	parts = append(parts, "ralfinho")
 
