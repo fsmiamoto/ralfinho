@@ -580,24 +580,13 @@ func (m Model) renderMain() string {
 	ph := m.mainHeight()
 	contentWidth := w - 4 // inside borders + padding
 
-	// Build content from blocks.
-	var sections []string
-	for i := range m.blocks {
-		rendered := m.blocks[i].Render(contentWidth)
-		if rendered != "" {
-			sections = append(sections, rendered)
-		}
-	}
-	content := strings.Join(sections, "\n\n")
+	// Ensure block layouts and line index are up to date.
+	m.ensureMainLayout(contentWidth)
 
-	// Split into lines and apply scroll.
-	var allLines []string
-	if content != "" {
-		allLines = strings.Split(content, "\n")
-	}
 	visibleLines := ph - 1 // minus title line
+	totalLines := m.mainTotalLines
 
-	maxScroll := len(allLines) - visibleLines
+	maxScroll := totalLines - visibleLines
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
@@ -610,16 +599,14 @@ func (m Model) renderMain() string {
 		scroll = 0
 	}
 
-	start := scroll
-	end := start + visibleLines
-	if end > len(allLines) {
-		end = len(allLines)
+	viewStart := scroll
+	viewEnd := viewStart + visibleLines
+	if viewEnd > totalLines {
+		viewEnd = totalLines
 	}
 
-	var lines []string
-	for i := start; i < end; i++ {
-		lines = append(lines, clipToWidth(allLines[i], contentWidth))
-	}
+	// Collect only the visible lines from cached block layouts.
+	lines := m.collectViewportLines(viewStart, viewEnd, contentWidth)
 
 	// Pad remaining.
 	for len(lines) < visibleLines {
@@ -629,8 +616,8 @@ func (m Model) renderMain() string {
 	displayContent := strings.Join(lines, "\n")
 
 	title := " LIVE "
-	if len(allLines) > visibleLines {
-		title = fmt.Sprintf(" LIVE [%d/%d] ", scroll+1, len(allLines))
+	if totalLines > visibleLines {
+		title = fmt.Sprintf(" LIVE [%d/%d] ", scroll+1, totalLines)
 	}
 
 	border := focusedBorder

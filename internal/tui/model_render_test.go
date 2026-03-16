@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -485,5 +486,166 @@ func TestRenderDetail_RawModeIgnoresAssistantFinal(t *testing.T) {
 				t.Fatalf("renderDetail() raw (final=%v) = %q, want literal '# Heading'", final, detail)
 			}
 		})
+	}
+}
+
+// renderMainBaseline is a test-only reference implementation that reproduces
+// the old renderMain logic: render all blocks, join with double newlines, split
+// into lines, and slice the viewport. Used for parity testing against the new
+// viewport-based renderMain.
+func renderMainBaseline(m Model) string {
+	w := m.width
+	ph := m.mainHeight()
+	contentWidth := w - 4
+
+	var sections []string
+	for i := range m.blocks {
+		rendered := m.blocks[i].Render(contentWidth)
+		if rendered != "" {
+			sections = append(sections, rendered)
+		}
+	}
+	content := strings.Join(sections, "\n\n")
+
+	var allLines []string
+	if content != "" {
+		allLines = strings.Split(content, "\n")
+	}
+	visibleLines := ph - 1
+
+	maxScroll := len(allLines) - visibleLines
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	scroll := m.mainScroll
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+
+	start := scroll
+	end := start + visibleLines
+	if end > len(allLines) {
+		end = len(allLines)
+	}
+
+	var lines []string
+	for i := start; i < end; i++ {
+		lines = append(lines, clipToWidth(allLines[i], contentWidth))
+	}
+	for len(lines) < visibleLines {
+		lines = append(lines, "")
+	}
+
+	displayContent := strings.Join(lines, "\n")
+
+	title := " LIVE "
+	if len(allLines) > visibleLines {
+		title = fmt.Sprintf(" LIVE [%d/%d] ", scroll+1, len(allLines))
+	}
+
+	border := focusedBorder
+	if m.focusedPane != 0 {
+		border = unfocusedBorder
+	}
+
+	return border.
+		Width(w - 2).
+		Height(ph).
+		Render(titleStyle.Render(title) + "\n" + displayContent)
+}
+
+func TestRenderMainViewport_MatchesBaselineShort(t *testing.T) {
+	m := Model{
+		width:  80,
+		height: 30,
+		blocks: []MainBlock{
+			{Kind: BlockIteration, Iteration: 1},
+			{Kind: BlockAssistantText, Text: "Hello world", AssistantFinal: true},
+			{Kind: BlockToolCall, ToolName: "bash", ToolArgs: "$ ls", ToolDone: true, ToolResult: "file1\nfile2"},
+		},
+	}
+	got := stripANSI(m.renderMain())
+	want := stripANSI(renderMainBaseline(m))
+	if got != want {
+		t.Fatalf("viewport mismatch with baseline:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRenderMainViewport_MatchesBaselineScrolled(t *testing.T) {
+	m := Model{
+		width:      80,
+		height:     12,
+		mainScroll: 3,
+		blocks: []MainBlock{
+			{Kind: BlockIteration, Iteration: 1},
+			{Kind: BlockAssistantText, Text: "Line1\nLine2\nLine3\nLine4\nLine5\nLine6\nLine7\nLine8", AssistantFinal: true},
+			{Kind: BlockToolCall, ToolName: "bash", ToolArgs: "$ echo test", ToolDone: true, ToolResult: "test"},
+		},
+	}
+	got := stripANSI(m.renderMain())
+	want := stripANSI(renderMainBaseline(m))
+	if got != want {
+		t.Fatalf("viewport mismatch with baseline:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRenderMainViewport_MatchesBaselineWithEmptyBlocks(t *testing.T) {
+	m := Model{
+		width:  80,
+		height: 30,
+		blocks: []MainBlock{
+			{Kind: BlockIteration, Iteration: 1},
+			{Kind: BlockAssistantText, Text: ""}, // renders empty
+			{Kind: BlockToolCall, ToolName: "read", ToolArgs: "/path/file", ToolDone: true, ToolResult: "content"},
+			{Kind: BlockAssistantText, Text: ""}, // renders empty
+			{Kind: BlockInfo, InfoText: "done"},
+		},
+	}
+	got := stripANSI(m.renderMain())
+	want := stripANSI(renderMainBaseline(m))
+	if got != want {
+		t.Fatalf("viewport mismatch with baseline:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRenderMainViewport_MatchesBaselineStreamingAssistant(t *testing.T) {
+	m := Model{
+		width:   80,
+		height:  30,
+		running: true,
+		blocks: []MainBlock{
+			{Kind: BlockIteration, Iteration: 1},
+			{Kind: BlockAssistantText, Text: "# Heading\n\nSome text being typed...", AssistantFinal: false},
+		},
+	}
+	got := stripANSI(m.renderMain())
+	want := stripANSI(renderMainBaseline(m))
+	if got != want {
+		t.Fatalf("viewport mismatch with baseline:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRenderMainViewport_MatchesBaselineCompletedSession(t *testing.T) {
+	m := Model{
+		width:  80,
+		height: 30,
+		blocks: []MainBlock{
+			{Kind: BlockIteration, Iteration: 1},
+			{Kind: BlockAssistantText, Text: "# Analysis\n\nHere is my analysis of the code.", AssistantFinal: true},
+			{Kind: BlockToolCall, ToolName: "bash", ToolArgs: "$ go test ./...", ToolDone: true, ToolResult: "ok\nPASS"},
+			{Kind: BlockIteration, Iteration: 2},
+			{Kind: BlockAssistantText, Text: "Tests pass. Let me fix the issue.", AssistantFinal: true},
+			{Kind: BlockToolCall, ToolName: "edit", ToolArgs: "/path/to/file.go", ToolDone: true, ToolResult: "edited successfully"},
+			{Kind: BlockThinking, ThinkingLen: 150},
+			{Kind: BlockInfo, InfoText: "Run completed"},
+		},
+	}
+	got := stripANSI(m.renderMain())
+	want := stripANSI(renderMainBaseline(m))
+	if got != want {
+		t.Fatalf("viewport mismatch with baseline:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }

@@ -31,11 +31,11 @@ func (m *Model) invalidateAllMainLayouts() {
 func (m *Model) ensureMainLayout(width int) {
 	n := len(m.blocks)
 
-	// Width change → invalidate all block layout caches and rebuild fully.
+	// Width change → full index rebuild. Block-level Layout handles per-block
+	// width mismatch detection, so we only need to mark the index dirty here.
+	// Explicit block cache invalidation is handled by invalidateAllMainLayouts()
+	// in the WindowSizeMsg handler.
 	if width != m.mainLayoutWidth {
-		for i := range m.blocks {
-			m.blocks[i].InvalidateLayout()
-		}
 		m.mainLayoutWidth = width
 		m.mainIndexDirtyFrom = 0
 	}
@@ -86,6 +86,64 @@ func (m *Model) ensureMainLayout(width int) {
 
 	m.mainTotalLines = linePos
 	m.mainIndexDirtyFrom = n // all clean
+}
+
+// collectViewportLines returns the visible lines for the viewport range
+// [viewStart, viewEnd) from the cached block layouts and line index.
+// Lines are clipped to contentWidth. Separator lines (between non-empty blocks)
+// are returned as empty strings.
+//
+// ensureMainLayout must have been called for the current width before calling
+// this method.
+func (m *Model) collectViewportLines(viewStart, viewEnd, contentWidth int) []string {
+	if viewStart >= viewEnd {
+		return nil
+	}
+
+	result := make([]string, 0, viewEnd-viewStart)
+	linePos := viewStart
+
+	// Find the first non-empty block whose lines extend past viewStart.
+	startBlock := 0
+	for startBlock < len(m.blocks) {
+		bc := m.mainBlockLineCounts[startBlock]
+		if bc > 0 && m.mainBlockStarts[startBlock]+bc > viewStart {
+			break
+		}
+		startBlock++
+	}
+
+	for i := startBlock; i < len(m.blocks) && linePos < viewEnd; i++ {
+		bc := m.mainBlockLineCounts[i]
+		if bc == 0 {
+			continue
+		}
+		bs := m.mainBlockStarts[i]
+
+		// Emit separator/gap lines before this block that fall in the viewport.
+		for linePos < bs && linePos < viewEnd {
+			result = append(result, "")
+			linePos++
+		}
+
+		// Emit block lines that fall in the viewport.
+		localStart := 0
+		if linePos > bs {
+			localStart = linePos - bs
+		}
+		for j := localStart; j < bc && linePos < viewEnd; j++ {
+			result = append(result, clipToWidth(m.blocks[i].layoutLines[j], contentWidth))
+			linePos++
+		}
+	}
+
+	// Fill any remaining positions past all blocks.
+	for linePos < viewEnd {
+		result = append(result, "")
+		linePos++
+	}
+
+	return result
 }
 
 // growIntSlice returns s resized to exactly n elements, preserving existing
