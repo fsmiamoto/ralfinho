@@ -696,7 +696,7 @@ func TestQA_ScrollPositionsMatchBaseline(t *testing.T) {
 		blocks = append(blocks,
 			MainBlock{Kind: BlockIteration, Iteration: i},
 			MainBlock{Kind: BlockAssistantText, Text: fmt.Sprintf("## Iteration %d\n\nParagraph one.\n\nParagraph two with more text to create multiple lines when wrapped.", i), AssistantFinal: true},
-			MainBlock{Kind: BlockToolCall, ToolName: "bash", ToolArgs: fmt.Sprintf("$ cmd_%d", i), ToolDone: true, ToolResult: fmt.Sprintf("result line 1\nresult line 2\nresult line 3")},
+			MainBlock{Kind: BlockToolCall, ToolName: "bash", ToolArgs: fmt.Sprintf("$ cmd_%d", i), ToolDone: true, ToolResult: "result line 1\nresult line 2\nresult line 3"},
 		)
 	}
 

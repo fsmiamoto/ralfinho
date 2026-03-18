@@ -19,9 +19,10 @@ run *args:
 fmt:
     gofmt -w $(find . -name '*.go' -not -path './bin/*')
 
-# Lint checks (Go vet)
+# Lint checks (Go vet + staticcheck)
 lint:
     go vet ./...
+    staticcheck ./...
 
 # Run all tests
 test:

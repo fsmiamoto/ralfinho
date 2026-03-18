@@ -241,7 +241,7 @@ func TestModelKeyHandlingDismissesOverlayAndManagesQuitConfirmation(t *testing.T
 		t.Fatal("confirmQuit = true after cancellation, want false")
 	}
 
-	m, cmd = updateModelWithCmd(t, Model{}, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlC}))
+	m, _ = updateModelWithCmd(t, Model{}, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlC}))
 	if !m.confirmQuit || !m.confirmCtrlC {
 		t.Fatalf("after first ctrl+c confirm flags = (%v, %v), want (true, true)", m.confirmQuit, m.confirmCtrlC)
 	}
@@ -250,7 +250,7 @@ func TestModelKeyHandlingDismissesOverlayAndManagesQuitConfirmation(t *testing.T
 		t.Fatal("second ctrl+c should return tea.Quit")
 	}
 
-	m, cmd = updateModelWithCmd(t, Model{}, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'q'}}))
+	m, _ = updateModelWithCmd(t, Model{}, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'q'}}))
 	m, cmd = updateModelWithCmd(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'y'}}))
 	if !isQuitCmd(cmd) {
 		t.Fatal("q followed by y should return tea.Quit")
