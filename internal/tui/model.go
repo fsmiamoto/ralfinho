@@ -134,9 +134,23 @@ func (m Model) waitForEvent() tea.Cmd {
 // rawEventMsg wraps a runner.Event for internal routing.
 type rawEventMsg runner.Event
 
+// tickMsg is sent by the 1Hz timer to trigger a View() refresh for the
+// elapsed-time display while the agent is running.
+type tickMsg time.Time
+
+// tickCmd returns a Cmd that fires a tickMsg every second.
+func tickCmd() tea.Cmd {
+	return tea.Every(time.Second, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
-	return m.waitForEvent()
+	if !m.running {
+		return nil
+	}
+	return tea.Batch(m.waitForEvent(), tickCmd())
 }
 
 // Update implements tea.Model.
@@ -177,6 +191,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errorOverlay = msg.Result.Error
 		}
 		m.result = &msg.Result
+		return m, nil
+
+	case tickMsg:
+		if m.running {
+			return m, tickCmd()
+		}
 		return m, nil
 	}
 
