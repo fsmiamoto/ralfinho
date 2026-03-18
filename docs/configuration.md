@@ -32,6 +32,10 @@ max-iterations = 5
 runs-dir = ".ralfinho/runs"
 no-tui = false
 
+[templates]
+plan = "file:prompts/plan.md"
+default = "file:prompts/default.md"
+
 [agents.claude]
 extra-args = ["--model", "claude-opus-4-5"]
 
@@ -45,6 +49,32 @@ Supported top-level keys:
 - `max-iterations` — default iteration limit (`0` means unlimited)
 - `runs-dir` — default runs directory
 - `no-tui` — disable the TUI by default
+- `[templates]` — optional prompt template overrides
+  - `plan` — overrides the built-in `--plan` prompt template
+  - `default` — overrides the built-in fallback prompt
+
+Template values may be either:
+
+- inline template text, or
+- a `file:` reference such as `file:prompts/plan.md`
+
+`file:` paths are resolved relative to the config file that defines them. This
+means a global config can point to files under `~/.config/ralfinho/`, while a
+project-local `.ralfinho/config.toml` can point to files under `.ralfinho/`.
+If both global and local config files define different template fields, each one
+still resolves relative to its own source file.
+
+Both template overrides are rendered as Go `text/template` templates. The plan
+template receives:
+
+- `{{.PlanPath}}`
+- `{{.PlanContent}}`
+
+The `default` template is also rendered through `text/template` for
+consistency, though the built-in default prompt does not use any variables.
+
+The `--prompt <file>` CLI path is unchanged: it bypasses config templates and
+uses the prompt file contents verbatim.
 
 Per-agent settings:
 

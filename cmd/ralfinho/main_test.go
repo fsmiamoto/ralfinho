@@ -169,6 +169,8 @@ func TestFormatRunSummary(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestResolvePrompt(t *testing.T) {
+	clearConfiguredTemplates(t)
+
 	t.Run("prompt mode reads file verbatim", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "prompt.md")
@@ -218,6 +220,43 @@ func TestResolvePrompt(t *testing.T) {
 		}
 	})
 
+	t.Run("plan mode uses configured template override", func(t *testing.T) {
+		clearConfiguredTemplates(t)
+		configuredTemplates = config.ResolvedTemplates{Plan: "Configured plan: {{.PlanContent}}"}
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "PLAN.md")
+		if err := os.WriteFile(path, []byte("# Plan\n- configured task"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg := &cli.Config{InputMode: "plan", PlanFile: path}
+		got, err := resolvePrompt(cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(got, "Configured plan:") {
+			t.Fatalf("configured template missing from output: %q", got)
+		}
+		if !strings.Contains(got, "configured task") {
+			t.Fatalf("plan content missing from configured output: %q", got)
+		}
+	})
+
+	t.Run("default mode uses configured template override", func(t *testing.T) {
+		clearConfiguredTemplates(t)
+		configuredTemplates = config.ResolvedTemplates{Default: "Configured default prompt"}
+
+		cfg := &cli.Config{InputMode: "default"}
+		got, err := resolvePrompt(cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "Configured default prompt" {
+			t.Fatalf("got %q, want %q", got, "Configured default prompt")
+		}
+	})
+
 	t.Run("unknown mode returns error", func(t *testing.T) {
 		cfg := &cli.Config{InputMode: "bogus"}
 		_, err := resolvePrompt(cfg)
@@ -243,6 +282,8 @@ func TestResolvePrompt(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestResolveResumePrompt(t *testing.T) {
+	clearConfiguredTemplates(t)
+
 	t.Run("effective prompt reads file", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "effective-prompt.md")
@@ -299,6 +340,38 @@ func TestResolveResumePrompt(t *testing.T) {
 		}
 		if !strings.Contains(got, "task loop") {
 			t.Error("default prompt missing 'task loop'")
+		}
+	})
+
+	t.Run("plan source uses configured template override", func(t *testing.T) {
+		clearConfiguredTemplates(t)
+		configuredTemplates = config.ResolvedTemplates{Plan: "Resume template: {{.PlanContent}}"}
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "PLAN.md")
+		if err := os.WriteFile(path, []byte("# Plan\n- resumed task"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := resolveResumePrompt(viewer.ResumeSourcePlanFile, path)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(got, "Resume template:") || !strings.Contains(got, "resumed task") {
+			t.Fatalf("configured resume plan template not applied: %q", got)
+		}
+	})
+
+	t.Run("default source uses configured template override", func(t *testing.T) {
+		clearConfiguredTemplates(t)
+		configuredTemplates = config.ResolvedTemplates{Default: "Resume default prompt"}
+
+		got, err := resolveResumePrompt(viewer.ResumeSourceDefault, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "Resume default prompt" {
+			t.Fatalf("got %q, want %q", got, "Resume default prompt")
 		}
 	})
 

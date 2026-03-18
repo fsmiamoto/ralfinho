@@ -60,7 +60,12 @@ on useful improvements, a nice way to try out ralfinho for the first time.
 
 ### Config file
 
-See [docs/configuration.md](docs/configuration.md) for an example `config.toml` and further details.
+Ralfinho supports both global and project-local TOML config files. In addition
+to flag defaults, config can override the built-in `plan` and `default` prompt
+templates via a `[templates]` section, using either inline text or `file:`
+references.
+
+See [docs/configuration.md](docs/configuration.md) for examples and details.
 
 ### Browse and manage past runs
 

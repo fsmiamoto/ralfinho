@@ -16,7 +16,7 @@ func TestBuildFromPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := BuildFromPlan(planPath)
+	got, err := BuildFromPlan(planPath, "")
 	if err != nil {
 		t.Fatalf("BuildFromPlan() error: %v", err)
 	}
@@ -66,13 +66,49 @@ func TestBuildFromPlan(t *testing.T) {
 	}
 }
 
+func TestBuildFromPlan_CustomTemplate(t *testing.T) {
+	dir := t.TempDir()
+	planPath := filepath.Join(dir, "PLAN.md")
+	if err := os.WriteFile(planPath, []byte("- custom task\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := BuildFromPlan(planPath, "Plan={{.PlanPath}}\n{{.PlanContent}}")
+	if err != nil {
+		t.Fatalf("BuildFromPlan() error: %v", err)
+	}
+
+	if !strings.Contains(got, "Plan="+planPath) {
+		t.Fatalf("custom template output missing plan path: %q", got)
+	}
+	if !strings.Contains(got, "custom task") {
+		t.Fatalf("custom template output missing plan content: %q", got)
+	}
+}
+
 func TestBuildFromPlan_NonExistent(t *testing.T) {
-	_, err := BuildFromPlan("/nonexistent/path/PLAN.md")
+	_, err := BuildFromPlan("/nonexistent/path/PLAN.md", "")
 	if err == nil {
 		t.Fatal("expected error for non-existent plan file")
 	}
 	if !strings.Contains(err.Error(), "reading plan file") {
 		t.Errorf("error should mention reading plan file, got: %v", err)
+	}
+}
+
+func TestBuildFromPlan_InvalidTemplate(t *testing.T) {
+	dir := t.TempDir()
+	planPath := filepath.Join(dir, "PLAN.md")
+	if err := os.WriteFile(planPath, []byte("- task\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := BuildFromPlan(planPath, "{{if .PlanContent}}")
+	if err == nil {
+		t.Fatal("expected template parse error")
+	}
+	if !strings.Contains(err.Error(), "parsing template") {
+		t.Fatalf("error should mention parsing template, got: %v", err)
 	}
 }
 
@@ -105,7 +141,10 @@ func TestBuildFromPromptFile_NonExistent(t *testing.T) {
 }
 
 func TestBuildDefault(t *testing.T) {
-	got := BuildDefault()
+	got, err := BuildDefault("")
+	if err != nil {
+		t.Fatalf("BuildDefault() error: %v", err)
+	}
 
 	if got == "" {
 		t.Error("BuildDefault() returned empty string")
@@ -139,5 +178,25 @@ func TestBuildDefault(t *testing.T) {
 	// Must instruct to git commit.
 	if !strings.Contains(got, "Git commit") {
 		t.Error("BuildDefault() missing git commit instruction")
+	}
+}
+
+func TestBuildDefault_CustomTemplate(t *testing.T) {
+	got, err := BuildDefault("custom default template")
+	if err != nil {
+		t.Fatalf("BuildDefault() error: %v", err)
+	}
+	if got != "custom default template" {
+		t.Fatalf("BuildDefault() = %q, want %q", got, "custom default template")
+	}
+}
+
+func TestBuildDefault_InvalidTemplate(t *testing.T) {
+	_, err := BuildDefault("{{if .PlanPath}}")
+	if err == nil {
+		t.Fatal("expected template parse error")
+	}
+	if !strings.Contains(err.Error(), "parsing template") {
+		t.Fatalf("error should mention parsing template, got: %v", err)
 	}
 }

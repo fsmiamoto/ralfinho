@@ -130,6 +130,82 @@ func TestMainConfigLoadErrorIsReadable(t *testing.T) {
 	}
 }
 
+func TestMainConfiguredDefaultTemplateFromFileReferenceIsUsed(t *testing.T) {
+	dir := t.TempDir()
+	capturePath := filepath.Join(dir, "captured-prompt.md")
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", binDir, err)
+	}
+	writeFakePiBinary(t, filepath.Join(binDir, "pi"))
+
+	configDir := filepath.Join(dir, ".ralfinho")
+	promptDir := filepath.Join(configDir, "prompts")
+	if err := os.MkdirAll(promptDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", promptDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "default.md"), []byte("Configured default template from file"), 0644); err != nil {
+		t.Fatalf("WriteFile(default.md): %v", err)
+	}
+	configText := `[templates]
+default = "file:prompts/default.md"
+`
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(configText), 0644); err != nil {
+		t.Fatalf("WriteFile(config.toml): %v", err)
+	}
+
+	stdout, stderr, exitCode := runMainHelperProcess(t, dir, nil, map[string]string{
+		"XDG_CONFIG_HOME":              filepath.Join(dir, "xdg"),
+		"PATH":                         binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"RALFINHO_CAPTURE_PROMPT_FILE": capturePath,
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout=%q\nstderr=%q", exitCode, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	captured, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("ReadFile(captured prompt): %v", err)
+	}
+	if string(captured) != "Configured default template from file" {
+		t.Fatalf("captured prompt = %q, want %q", string(captured), "Configured default template from file")
+	}
+}
+
+func TestMainConfiguredTemplateMissingFileIsReadable(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, ".ralfinho")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", configDir, err)
+	}
+	configText := `[templates]
+default = "file:prompts/missing.md"
+`
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(configText), 0644); err != nil {
+		t.Fatalf("WriteFile(config.toml): %v", err)
+	}
+
+	stdout, stderr, exitCode := runMainHelperProcess(t, dir, nil, map[string]string{
+		"XDG_CONFIG_HOME": filepath.Join(dir, "xdg"),
+	})
+
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", exitCode)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "ralfinho: config: resolving templates.default:") {
+		t.Fatalf("stderr = %q, want readable template resolution error", stderr)
+	}
+	if !strings.Contains(stderr, "reading template file") {
+		t.Fatalf("stderr = %q, want readable template file error", stderr)
+	}
+}
+
 func TestMainMissingPromptFileErrorIsReadable(t *testing.T) {
 	dir := t.TempDir()
 	stdout, stderr, exitCode := runMainHelperProcess(t, dir, []string{"--prompt", "missing-prompt.md"}, map[string]string{
@@ -296,7 +372,19 @@ func writeFakePiBinary(t *testing.T, path string) {
 	t.Helper()
 
 	body := `#!/bin/sh
-printf '%s\n' "$@" > "$RALFINHO_ARGV_FILE"
+if [ -n "$RALFINHO_ARGV_FILE" ]; then
+	printf '%s\n' "$@" > "$RALFINHO_ARGV_FILE"
+fi
+if [ -n "$RALFINHO_CAPTURE_PROMPT_FILE" ]; then
+	for arg in "$@"; do
+		case "$arg" in
+			@*)
+				cp "${arg#@}" "$RALFINHO_CAPTURE_PROMPT_FILE"
+				break
+				;;
+		esac
+	done
+fi
 cat <<'JSONL'
 {"type":"message_start","message":{"role":"assistant","model":"fake-pi"}}
 {"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"<promise>COMPLETE</promise>"}}

@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/fsmiamoto/ralfinho/internal/cli"
+	"github.com/fsmiamoto/ralfinho/internal/config"
 	"github.com/fsmiamoto/ralfinho/internal/runner"
 	"github.com/fsmiamoto/ralfinho/internal/tui"
 	"github.com/fsmiamoto/ralfinho/internal/viewer"
@@ -91,6 +92,14 @@ func clearFileConfig(t *testing.T) {
 	prev := fileCfg
 	fileCfg = nil
 	t.Cleanup(func() { fileCfg = prev })
+}
+
+func clearConfiguredTemplates(t *testing.T) {
+	t.Helper()
+
+	prev := configuredTemplates
+	configuredTemplates = config.ResolvedTemplates{}
+	t.Cleanup(func() { configuredTemplates = prev })
 }
 
 func installFakePIBinary(t *testing.T, body string) {

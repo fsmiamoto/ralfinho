@@ -27,6 +27,11 @@ import (
 // it without threading the value through every call site.
 var fileCfg *config.FileConfig
 
+// configuredTemplates holds prompt template overrides resolved from the loaded
+// config file once at startup. Relative file: references are resolved before
+// the run starts so prompt-building helpers can use stable template content.
+var configuredTemplates config.ResolvedTemplates
+
 // teaProgram captures the Bubble Tea methods command flows need. Keeping
 // program construction behind a tiny interface makes the interactive command
 // paths testable without requiring a real terminal.
@@ -53,6 +58,11 @@ func main() {
 	// Load config file defaults (global + local, merged). Missing files are
 	// silently skipped; a parse error is fatal.
 	fileCfg, err = config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ralfinho: config: %v\n", err)
+		os.Exit(1)
+	}
+	configuredTemplates, err = config.ResolveTemplates(fileCfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ralfinho: config: %v\n", err)
 		os.Exit(1)
@@ -430,9 +440,9 @@ func resolveResumePrompt(source viewer.ResumeSource, path string) (string, error
 	case viewer.ResumeSourcePromptFile:
 		return prompt.BuildFromPromptFile(path)
 	case viewer.ResumeSourcePlanFile:
-		return prompt.BuildFromPlan(path)
+		return prompt.BuildFromPlan(path, configuredTemplates.Plan)
 	case viewer.ResumeSourceDefault:
-		return prompt.BuildDefault(), nil
+		return prompt.BuildDefault(configuredTemplates.Default)
 	default:
 		return "", fmt.Errorf("unknown resume source %q", source)
 	}
@@ -524,9 +534,9 @@ func resolvePrompt(cfg *cli.Config) (string, error) {
 	case "prompt":
 		return prompt.BuildFromPromptFile(cfg.PromptFile)
 	case "plan":
-		return prompt.BuildFromPlan(cfg.PlanFile)
+		return prompt.BuildFromPlan(cfg.PlanFile, configuredTemplates.Plan)
 	case "default":
-		return prompt.BuildDefault(), nil
+		return prompt.BuildDefault(configuredTemplates.Default)
 	default:
 		return "", fmt.Errorf("unknown input mode %q", cfg.InputMode)
 	}

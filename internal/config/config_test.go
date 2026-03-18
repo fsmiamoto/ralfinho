@@ -35,6 +35,10 @@ runs-dir = "/tmp/runs"
 no-tui = true
 max-iterations = 5
 
+[templates]
+plan = "file:prompts/plan.md"
+default = "inline default template"
+
 [agents.claude]
 extra-args = ["--model", "claude-opus-4-5"]
 
@@ -64,6 +68,15 @@ extra-args = ["--timeout", "30"]
 	}
 	if cfg.MaxIterations == nil || *cfg.MaxIterations != 5 {
 		t.Errorf("MaxIterations: expected *5, got %v", cfg.MaxIterations)
+	}
+	if cfg.Templates.Plan != "file:prompts/plan.md" {
+		t.Errorf("Templates.Plan: got %q, want %q", cfg.Templates.Plan, "file:prompts/plan.md")
+	}
+	if cfg.Templates.Default != "inline default template" {
+		t.Errorf("Templates.Default: got %q, want %q", cfg.Templates.Default, "inline default template")
+	}
+	if cfg.Dir != dir {
+		t.Errorf("Dir: got %q, want %q", cfg.Dir, dir)
 	}
 
 	claudeArgs, ok := cfg.Agents["claude"]
@@ -338,6 +351,119 @@ func TestMerge_OverrideWithoutAgentsStillCopiesBaseMap(t *testing.T) {
 	}
 }
 
+func TestMerge_TemplatesOverrideWhenOnlyOverrideHasTemplates(t *testing.T) {
+	t.Parallel()
+
+	base := &FileConfig{Agent: "pi"}
+	override := &FileConfig{
+		Templates: TemplatesConfig{
+			Plan:    "override plan",
+			Default: "override default",
+		},
+	}
+
+	got := merge(base, override)
+
+	if got.Templates.Plan != "override plan" {
+		t.Fatalf("Templates.Plan: got %q, want %q", got.Templates.Plan, "override plan")
+	}
+	if got.Templates.Default != "override default" {
+		t.Fatalf("Templates.Default: got %q, want %q", got.Templates.Default, "override default")
+	}
+}
+
+func TestMerge_TemplatesOverridePerField(t *testing.T) {
+	t.Parallel()
+
+	base := &FileConfig{
+		Templates: TemplatesConfig{
+			Plan:    "base plan",
+			Default: "base default",
+		},
+	}
+	override := &FileConfig{
+		Templates: TemplatesConfig{
+			Default: "override default",
+		},
+	}
+
+	got := merge(base, override)
+
+	if got.Templates.Plan != "base plan" {
+		t.Fatalf("Templates.Plan: got %q, want %q", got.Templates.Plan, "base plan")
+	}
+	if got.Templates.Default != "override default" {
+		t.Fatalf("Templates.Default: got %q, want %q", got.Templates.Default, "override default")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// template resolution tests
+// ---------------------------------------------------------------------------
+
+func TestResolveTemplateValue_FilePrefixResolvesRelativeToConfigDir(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	templateDir := filepath.Join(configDir, "prompts")
+	if err := os.MkdirAll(templateDir, 0755); err != nil {
+		t.Fatalf("mkdir prompts: %v", err)
+	}
+	path := filepath.Join(templateDir, "plan.md")
+	if err := os.WriteFile(path, []byte("relative template"), 0600); err != nil {
+		t.Fatalf("writing template: %v", err)
+	}
+
+	got, err := ResolveTemplateValue("file:prompts/plan.md", configDir)
+	if err != nil {
+		t.Fatalf("ResolveTemplateValue() error: %v", err)
+	}
+	if got != "relative template" {
+		t.Fatalf("ResolveTemplateValue() = %q, want %q", got, "relative template")
+	}
+}
+
+func TestResolveTemplateValue_FilePrefixUsesAbsolutePathAsIs(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "default.md")
+	if err := os.WriteFile(path, []byte("absolute template"), 0600); err != nil {
+		t.Fatalf("writing template: %v", err)
+	}
+
+	got, err := ResolveTemplateValue("file:"+path, filepath.Join(t.TempDir(), "ignored"))
+	if err != nil {
+		t.Fatalf("ResolveTemplateValue() error: %v", err)
+	}
+	if got != "absolute template" {
+		t.Fatalf("ResolveTemplateValue() = %q, want %q", got, "absolute template")
+	}
+}
+
+func TestResolveTemplateValue_InlineTextReturnedVerbatim(t *testing.T) {
+	t.Parallel()
+
+	got, err := ResolveTemplateValue("inline template", "/unused")
+	if err != nil {
+		t.Fatalf("ResolveTemplateValue() error: %v", err)
+	}
+	if got != "inline template" {
+		t.Fatalf("ResolveTemplateValue() = %q, want %q", got, "inline template")
+	}
+}
+
+func TestResolveTemplateValue_MissingFileReturnsReadableError(t *testing.T) {
+	t.Parallel()
+
+	_, err := ResolveTemplateValue("file:missing-template.md", t.TempDir())
+	if err == nil {
+		t.Fatal("expected error for missing template file")
+	}
+	if !strings.Contains(err.Error(), "reading template file") {
+		t.Fatalf("error should mention reading template file, got: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Load integration tests
 // ---------------------------------------------------------------------------
@@ -426,6 +552,71 @@ agent = "claude"
 	// RunsDir comes from global (not set locally).
 	if cfg.RunsDir != "/global/runs" {
 		t.Errorf("RunsDir: got %q, want %q", cfg.RunsDir, "/global/runs")
+	}
+}
+
+func TestLoad_ResolveTemplatesUsesOriginConfigDirPerField(t *testing.T) {
+	// Cannot use t.Parallel() alongside t.Setenv.
+
+	tmpDir := t.TempDir()
+
+	globalCfgDir := filepath.Join(tmpDir, "xdg")
+	globalRalfDir := filepath.Join(globalCfgDir, "ralfinho")
+	if err := os.MkdirAll(globalRalfDir, 0755); err != nil {
+		t.Fatalf("mkdir global config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(globalRalfDir, "global-plan.md"), []byte("global plan template"), 0600); err != nil {
+		t.Fatalf("writing global template: %v", err)
+	}
+	globalCfg := `
+[templates]
+plan = "file:global-plan.md"
+`
+	if err := os.WriteFile(filepath.Join(globalRalfDir, "config.toml"), []byte(globalCfg), 0600); err != nil {
+		t.Fatalf("writing global config: %v", err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", globalCfgDir)
+
+	projectDir := filepath.Join(tmpDir, "project")
+	localCfgDir := filepath.Join(projectDir, ".ralfinho")
+	localPromptDir := filepath.Join(localCfgDir, "prompts")
+	if err := os.MkdirAll(localPromptDir, 0755); err != nil {
+		t.Fatalf("mkdir local prompt dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localPromptDir, "default.md"), []byte("local default template"), 0600); err != nil {
+		t.Fatalf("writing local template: %v", err)
+	}
+	localCfg := `
+[templates]
+default = "file:prompts/default.md"
+`
+	if err := os.WriteFile(filepath.Join(localCfgDir, "config.toml"), []byte(localCfg), 0600); err != nil {
+		t.Fatalf("writing local config: %v", err)
+	}
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+
+	resolved, err := ResolveTemplates(cfg)
+	if err != nil {
+		t.Fatalf("ResolveTemplates error: %v", err)
+	}
+	if resolved.Plan != "global plan template" {
+		t.Fatalf("resolved.Plan = %q, want %q", resolved.Plan, "global plan template")
+	}
+	if resolved.Default != "local default template" {
+		t.Fatalf("resolved.Default = %q, want %q", resolved.Default, "local default template")
 	}
 }
 

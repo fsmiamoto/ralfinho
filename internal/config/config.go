@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -23,12 +24,40 @@ import (
 // empty string as "not set" — a deliberate empty string in the config is
 // therefore indistinguishable from omission, which is acceptable because
 // neither Agent nor RunsDir are ever validly empty.
+//
+// Dir is populated after loading and records the directory containing the TOML
+// file. It is not read from TOML. Template values also track their own origin
+// directories internally so merged global/local configs can still resolve
+// file-based template references relative to the file that defined each field.
 type FileConfig struct {
 	Agent         string                 `toml:"agent"`
 	MaxIterations *int                   `toml:"max-iterations"`
 	RunsDir       string                 `toml:"runs-dir"`
 	NoTUI         *bool                  `toml:"no-tui"`
 	Agents        map[string]AgentConfig `toml:"agents"`
+	Templates     TemplatesConfig        `toml:"templates"`
+	Dir           string                 `toml:"-"`
+}
+
+// TemplatesConfig holds optional prompt template overrides loaded from TOML.
+//
+// Plan and Default are the raw config values. Each may be inline template text
+// or a file: reference. The internal *_dir fields track which config file a
+// given value came from so merged configs can resolve relative paths correctly
+// on a per-field basis.
+type TemplatesConfig struct {
+	Plan    string `toml:"plan"`
+	Default string `toml:"default"`
+
+	planDir    string
+	defaultDir string
+}
+
+// ResolvedTemplates contains prompt template overrides after any file:
+// references have been resolved to their file contents.
+type ResolvedTemplates struct {
+	Plan    string
+	Default string
 }
 
 // AgentConfig holds per-agent settings that can be customised in the config
@@ -84,15 +113,28 @@ func loadFile(path string) (*FileConfig, error) {
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
+
+	cfg.Dir = filepath.Dir(path)
+	if cfg.Templates.Plan != "" {
+		cfg.Templates.planDir = cfg.Dir
+	}
+	if cfg.Templates.Default != "" {
+		cfg.Templates.defaultDir = cfg.Dir
+	}
+
 	return &cfg, nil
 }
 
 // merge combines base and override into a single FileConfig. For scalar fields,
 // the override replaces the base only when it carries a non-zero value. For
 // per-agent configs, the override replaces the base entry for the same agent
-// name (no deep-merge of individual agent fields).
+// name (no deep-merge of individual agent fields). Template fields merge
+// independently so one file can override only templates.plan or
+// templates.default.
 //
-// Neither argument is modified; a new FileConfig is always returned.
+// Neither argument is modified; a new FileConfig is always returned, except in
+// the historical nil-base/nil-override fast paths which return the non-nil
+// input directly.
 func merge(base, override *FileConfig) *FileConfig {
 	if base == nil && override == nil {
 		return &FileConfig{}
@@ -119,6 +161,17 @@ func merge(base, override *FileConfig) *FileConfig {
 	if override.NoTUI != nil {
 		result.NoTUI = override.NoTUI
 	}
+	if override.Dir != "" {
+		result.Dir = override.Dir
+	}
+	if override.Templates.Plan != "" {
+		result.Templates.Plan = override.Templates.Plan
+		result.Templates.planDir = override.Templates.planDir
+	}
+	if override.Templates.Default != "" {
+		result.Templates.Default = override.Templates.Default
+		result.Templates.defaultDir = override.Templates.defaultDir
+	}
 
 	// Merge per-agent configs: override wins per agent name (full replacement,
 	// not field-level merge within an agent). Build a new map to avoid aliasing
@@ -142,4 +195,60 @@ func merge(base, override *FileConfig) *FileConfig {
 	}
 
 	return &result
+}
+
+// ResolveTemplateValue resolves a config template value into template text.
+//
+// Values using the file: prefix are read from disk. Relative paths are
+// resolved relative to configDir; absolute paths are used as-is. Any other
+// value is treated as inline template text and returned verbatim.
+func ResolveTemplateValue(value, configDir string) (string, error) {
+	if !strings.HasPrefix(value, "file:") {
+		return value, nil
+	}
+
+	templatePath := strings.TrimPrefix(value, "file:")
+	if templatePath == "" {
+		return "", fmt.Errorf("template file path is empty")
+	}
+	if !filepath.IsAbs(templatePath) {
+		templatePath = filepath.Join(configDir, templatePath)
+	}
+
+	data, err := os.ReadFile(templatePath)
+	if err != nil {
+		return "", fmt.Errorf("reading template file %q: %w", templatePath, err)
+	}
+	return string(data), nil
+}
+
+// ResolveTemplates resolves any configured prompt template overrides after
+// global/local config merging.
+func ResolveTemplates(cfg *FileConfig) (ResolvedTemplates, error) {
+	if cfg == nil {
+		return ResolvedTemplates{}, nil
+	}
+
+	planDir := cfg.Templates.planDir
+	if planDir == "" {
+		planDir = cfg.Dir
+	}
+	plan, err := ResolveTemplateValue(cfg.Templates.Plan, planDir)
+	if err != nil {
+		return ResolvedTemplates{}, fmt.Errorf("resolving templates.plan: %w", err)
+	}
+
+	defaultDir := cfg.Templates.defaultDir
+	if defaultDir == "" {
+		defaultDir = cfg.Dir
+	}
+	defaultTemplate, err := ResolveTemplateValue(cfg.Templates.Default, defaultDir)
+	if err != nil {
+		return ResolvedTemplates{}, fmt.Errorf("resolving templates.default: %w", err)
+	}
+
+	return ResolvedTemplates{
+		Plan:    plan,
+		Default: defaultTemplate,
+	}, nil
 }
