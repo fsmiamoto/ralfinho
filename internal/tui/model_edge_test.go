@@ -41,7 +41,7 @@ func TestModelUpdateRawEventWithoutDisplayEventsStillSchedulesNextRead(t *testin
 	next := runner.Event{Type: runner.EventAgentEnd, ID: "agent-1"}
 	ch <- next
 
-	m := NewModel(ch)
+	m := NewModel(ch, "", "")
 	updated, cmd := m.Update(rawEventMsg(runner.Event{Type: runner.EventMessageUpdate}))
 	if cmd == nil {
 		t.Fatal("Update(rawEventMsg with no display events) returned nil cmd, want follow-up waitForEvent command")

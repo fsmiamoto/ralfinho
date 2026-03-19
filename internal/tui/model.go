@@ -43,9 +43,13 @@ type Model struct {
 	result    *runner.RunResult
 	startTime time.Time
 	modelName    string
+	agentName    string
 	iteration    int // current iteration count for header display
 
-	errorOverlay string // non-empty = show error modal overlay
+	errorOverlay       string // non-empty = show error modal overlay
+	promptText         string // full effective prompt text
+	promptOverlay      bool   // whether the prompt overlay is shown
+	promptOverlayScroll int   // scroll offset within the prompt overlay
 
 	// Main view (top pane) state.
 	blocks         []MainBlock // ordered content blocks for the main view
@@ -62,7 +66,7 @@ type Model struct {
 }
 
 // NewModel creates a TUI model that reads runner events from ch.
-func NewModel(ch <-chan runner.Event) Model {
+func NewModel(ch <-chan runner.Event, agentName string, promptText string) Model {
 	return Model{
 		paneRatio:      0.3,
 		running:        true,
@@ -73,12 +77,14 @@ func NewModel(ch <-chan runner.Event) Model {
 		mainAutoScroll: true,
 		activeToolIdx:  -1,
 		startTime:      time.Now(),
+		agentName:      agentName,
+		promptText:     promptText,
 	}
 }
 
 // NewViewerModel creates a read-only TUI model pre-loaded with events.
 // It is used for replaying a saved run — no event channel, not running.
-func NewViewerModel(events []DisplayEvent, meta runner.RunMeta) Model {
+func NewViewerModel(events []DisplayEvent, meta runner.RunMeta, promptText string) Model {
 	agentName := meta.Agent
 	if agentName == "" {
 		agentName = "pi"
@@ -94,6 +100,8 @@ func NewViewerModel(events []DisplayEvent, meta runner.RunMeta) Model {
 		autoScroll:     false,
 		mainAutoScroll: false,
 		activeToolIdx:  -1,
+		agentName:      agentName,
+		promptText:     promptText,
 	}
 
 	// Pre-build blocks from loaded display events.
@@ -380,6 +388,22 @@ func (m *Model) autoScrollMain() {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle prompt overlay keys.
+	if m.promptOverlay {
+		switch msg.String() {
+		case "j", "down":
+			m.promptOverlayScroll++
+		case "k", "up":
+			if m.promptOverlayScroll > 0 {
+				m.promptOverlayScroll--
+			}
+		default:
+			// p, Esc, or any other key dismisses the overlay.
+			m.promptOverlay = false
+		}
+		return m, nil
+	}
+
 	// Dismiss error overlay on any keypress.
 	if m.errorOverlay != "" {
 		m.errorOverlay = ""
@@ -509,6 +533,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		m.focusedPane = (m.focusedPane + 1) % 3
 
+	case "p":
+		m.promptOverlay = true
+		m.promptOverlayScroll = 0
+
 	case "r":
 		m.rawMode = !m.rawMode
 	}
@@ -579,6 +607,10 @@ func (m Model) paneHeight() int {
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
 		return "Initializing..."
+	}
+
+	if m.promptOverlay {
+		return m.renderPromptOverlay()
 	}
 
 	if m.errorOverlay != "" {
@@ -668,6 +700,9 @@ func (m Model) renderHeader() string {
 
 	// Build optional segments, only adding them if they fit.
 	var optional []string
+	if m.agentName != "" {
+		optional = append(optional, m.agentName)
+	}
 	if m.iteration > 0 {
 		optional = append(optional, fmt.Sprintf("Iteration #%d", m.iteration))
 	}
@@ -853,6 +888,7 @@ func (m Model) renderStatus() string {
 	right := statusKeyStyle.Render("↑↓") + ":nav" +
 		sep + statusKeyStyle.Render("Tab") + ":pane" +
 		sep + statusKeyStyle.Render("r") + ":" + modeStr +
+		sep + statusKeyStyle.Render("p") + ":prompt" +
 		sep + statusKeyStyle.Render("q") + ":quit"
 
 	leftW := lipgloss.Width(left)
@@ -918,6 +954,62 @@ func truncateToWidth(s string, maxW int) string {
 		return s
 	}
 	return clipToWidth(s, maxW-3) + "..."
+}
+
+// renderPromptOverlay renders the effective prompt text as a centered modal
+// card with j/k scrolling. It is dismissed by pressing p, Esc, or any
+// non-scroll key.
+func (m Model) renderPromptOverlay() string {
+	maxWidth := min(m.width*7/10, 80)
+	maxHeight := m.height * 6 / 10
+
+	// Word-wrap the prompt text to fit inside the card (accounting for border+padding).
+	innerWidth := maxWidth - 4 // 2 border + 2 padding
+	if innerWidth < 20 {
+		innerWidth = 20
+	}
+	body := WrapText(m.promptText, innerWidth)
+
+	// Split into lines and apply scroll.
+	lines := strings.Split(body, "\n")
+	totalLines := len(lines)
+
+	// Reserve space for title, blank line, hint, borders.
+	visibleLines := maxHeight - 6
+	if visibleLines < 3 {
+		visibleLines = 3
+	}
+
+	scroll := m.promptOverlayScroll
+	maxScroll := totalLines - visibleLines
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+
+	end := scroll + visibleLines
+	if end > totalLines {
+		end = totalLines
+	}
+	body = strings.Join(lines[scroll:end], "\n")
+
+	// Build title with scroll indicator when content is scrollable.
+	titleText := "Effective Prompt"
+	if totalLines > visibleLines {
+		titleText = fmt.Sprintf("Effective Prompt [%d/%d]", scroll+1, totalLines)
+	}
+	title := browserCardTitle.Render(titleText)
+
+	hint := dismissHintStyle.Render("p/Esc:close  j/k:scroll")
+
+	content := title + "\n\n" + body + "\n\n" + hint
+	card := browserCardBorder.Width(maxWidth).Render(content)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, card,
+		lipgloss.WithWhitespaceChars(" "),
+	)
 }
 
 // renderErrorOverlay renders the error text as a centered modal card.

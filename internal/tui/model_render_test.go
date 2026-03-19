@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -245,7 +246,7 @@ func TestRenderStatusAdjustsHintsForWidthAndConfirmationMode(t *testing.T) {
 }
 
 func TestRenderHeaderShowsElapsedTimeForRunningModel(t *testing.T) {
-	m := NewModel(nil)
+	m := NewModel(nil, "", "")
 	m.width = 80
 	m.iteration = 3
 	m.modelName = "claude-opus-4-1"
@@ -328,6 +329,175 @@ func TestRenderErrorOverlayUsesMinimumInnerWidthOnTinyTerminals(t *testing.T) {
 		if !strings.Contains(overlay, want) {
 			t.Fatalf("renderErrorOverlay() = %q, want substring %q", overlay, want)
 		}
+	}
+}
+
+func TestRenderHeaderShowsAgentNameAfterRalfinho(t *testing.T) {
+	tests := []struct {
+		name         string
+		width        int
+		agentName    string
+		wantContains []string
+		wantOmissions []string
+	}{
+		{
+			name:         "agent name shown when wide enough",
+			width:        60,
+			agentName:    "claude",
+			wantContains: []string{"ralfinho", "claude"},
+		},
+		{
+			name:         "agent name omitted when too narrow",
+			width:        12,
+			agentName:    "claude",
+			wantContains: []string{"ralfinho"},
+			wantOmissions: []string{"claude"},
+		},
+		{
+			name:         "agent name appears before iteration",
+			width:        80,
+			agentName:    "pi",
+			wantContains: []string{"ralfinho", "pi", "Iteration #3"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := Model{width: tt.width, agentName: tt.agentName, iteration: 3}
+			header := stripANSI(m.renderHeader())
+
+			for _, want := range tt.wantContains {
+				if !strings.Contains(header, want) {
+					t.Fatalf("renderHeader() = %q, want substring %q", header, want)
+				}
+			}
+			for _, unwanted := range tt.wantOmissions {
+				if strings.Contains(header, unwanted) {
+					t.Fatalf("renderHeader() = %q, should omit %q", header, unwanted)
+				}
+			}
+		})
+	}
+}
+
+func TestRenderStatusIncludesPromptHint(t *testing.T) {
+	m := Model{width: 80, status: "Idle"}
+	status := stripANSI(m.renderStatus())
+	if !strings.Contains(status, "p:prompt") {
+		t.Fatalf("renderStatus() = %q, want p:prompt hint", status)
+	}
+}
+
+func TestPromptOverlayToggledByPKey(t *testing.T) {
+	m := Model{width: 80, height: 24, promptText: "Do the thing"}
+
+	// p key opens the overlay.
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'p'}}))
+	if !m.promptOverlay {
+		t.Fatal("after p: promptOverlay = false, want true")
+	}
+	if m.promptOverlayScroll != 0 {
+		t.Fatalf("after p: promptOverlayScroll = %d, want 0", m.promptOverlayScroll)
+	}
+
+	// p key again closes the overlay (any non-scroll key dismisses).
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'p'}}))
+	if m.promptOverlay {
+		t.Fatal("after second p: promptOverlay = true, want false")
+	}
+}
+
+func TestPromptOverlayDismissedByEsc(t *testing.T) {
+	m := Model{width: 80, height: 24, promptOverlay: true, promptText: "some prompt"}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEscape}))
+	if m.promptOverlay {
+		t.Fatal("after Esc: promptOverlay = true, want false")
+	}
+}
+
+func TestPromptOverlayRendersPromptText(t *testing.T) {
+	m := Model{
+		width:         80,
+		height:        24,
+		promptOverlay: true,
+		promptText:    "Please fix all the bugs in the repository",
+	}
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Effective Prompt", "Please fix all the bugs", "p/Esc:close", "j/k:scroll"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("prompt overlay view = %q, want substring %q", view, want)
+		}
+	}
+	// Should not render the normal TUI panes.
+	if strings.Contains(view, "STREAM (") {
+		t.Fatalf("prompt overlay should replace the main layout, got %q", view)
+	}
+}
+
+func TestPromptOverlayScrollsWithJAndK(t *testing.T) {
+	// Build a prompt long enough to require scrolling.
+	var lines []string
+	for i := 0; i < 30; i++ {
+		lines = append(lines, fmt.Sprintf("Prompt line %d with some text to fill the width properly.", i+1))
+	}
+	promptText := strings.Join(lines, "\n")
+
+	m := Model{
+		width:         80,
+		height:        24,
+		promptOverlay: true,
+		promptText:    promptText,
+	}
+
+	// j scrolls down.
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'j'}}))
+	if m.promptOverlayScroll != 1 {
+		t.Fatalf("after j: promptOverlayScroll = %d, want 1", m.promptOverlayScroll)
+	}
+
+	// j again scrolls further.
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'j'}}))
+	if m.promptOverlayScroll != 2 {
+		t.Fatalf("after second j: promptOverlayScroll = %d, want 2", m.promptOverlayScroll)
+	}
+
+	// k scrolls back up.
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'k'}}))
+	if m.promptOverlayScroll != 1 {
+		t.Fatalf("after k: promptOverlayScroll = %d, want 1", m.promptOverlayScroll)
+	}
+
+	// k at scroll=0 does not go negative.
+	m.promptOverlayScroll = 0
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'k'}}))
+	if m.promptOverlayScroll != 0 {
+		t.Fatalf("k at top: promptOverlayScroll = %d, want 0", m.promptOverlayScroll)
+	}
+	// Overlay is still open after k.
+	if !m.promptOverlay {
+		t.Fatal("promptOverlay = false after k, want still open")
+	}
+}
+
+func TestPromptOverlayShowsScrollIndicatorWhenScrollable(t *testing.T) {
+	var lines []string
+	for i := 0; i < 50; i++ {
+		lines = append(lines, fmt.Sprintf("Line %d of the effective prompt text.", i+1))
+	}
+
+	m := Model{
+		width:               80,
+		height:              24,
+		promptOverlay:       true,
+		promptOverlayScroll: 5,
+		promptText:          strings.Join(lines, "\n"),
+	}
+
+	view := stripANSI(m.renderPromptOverlay())
+	if !strings.Contains(view, "Effective Prompt [") {
+		t.Fatalf("renderPromptOverlay() = %q, want scroll indicator in title", view)
 	}
 }
 

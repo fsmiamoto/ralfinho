@@ -21,7 +21,7 @@ func BenchmarkNewViewerModelLongSession(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		benchmarkViewerModelSink = NewViewerModel(events, meta)
+		benchmarkViewerModelSink = NewViewerModel(events, meta, "")
 	}
 }
 
@@ -46,7 +46,7 @@ func BenchmarkViewerViewLongSession(b *testing.B) {
 }
 
 func benchmarkLongSessionViewerModel() Model {
-	m := NewViewerModel(benchmarkLongSessionDisplayEvents(), benchmarkLongSessionMeta())
+	m := NewViewerModel(benchmarkLongSessionDisplayEvents(), benchmarkLongSessionMeta(), "")
 	m.width = 120
 	m.height = 40
 	m.cursor = len(m.events) - 1
