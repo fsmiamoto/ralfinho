@@ -464,6 +464,68 @@ func TestResolveTemplateValue_MissingFileReturnsReadableError(t *testing.T) {
 	}
 }
 
+func TestResolveTemplateValue_EmptyFilePath(t *testing.T) {
+	t.Parallel()
+
+	_, err := ResolveTemplateValue("file:", t.TempDir())
+	if err == nil {
+		t.Fatal("expected error for empty file: path")
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("error should mention empty path, got: %v", err)
+	}
+}
+
+func TestResolveTemplates_NilConfig(t *testing.T) {
+	t.Parallel()
+
+	resolved, err := ResolveTemplates(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved.Plan != "" || resolved.Default != "" {
+		t.Fatalf("expected empty resolved templates for nil config, got %+v", resolved)
+	}
+}
+
+func TestResolveTemplates_PlanFileError(t *testing.T) {
+	t.Parallel()
+
+	cfg := &FileConfig{
+		Dir: t.TempDir(),
+		Templates: TemplatesConfig{
+			Plan: "file:nonexistent.md",
+		},
+	}
+
+	_, err := ResolveTemplates(cfg)
+	if err == nil {
+		t.Fatal("expected error when plan template file is missing")
+	}
+	if !strings.Contains(err.Error(), "templates.plan") {
+		t.Fatalf("error should mention templates.plan, got: %v", err)
+	}
+}
+
+func TestResolveTemplates_DefaultFileError(t *testing.T) {
+	t.Parallel()
+
+	cfg := &FileConfig{
+		Dir: t.TempDir(),
+		Templates: TemplatesConfig{
+			Default: "file:nonexistent.md",
+		},
+	}
+
+	_, err := ResolveTemplates(cfg)
+	if err == nil {
+		t.Fatal("expected error when default template file is missing")
+	}
+	if !strings.Contains(err.Error(), "templates.default") {
+		t.Fatalf("error should mention templates.default, got: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Load integration tests
 // ---------------------------------------------------------------------------
