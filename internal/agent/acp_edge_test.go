@@ -14,6 +14,25 @@ import (
 	"time"
 )
 
+// syncBuffer is a thread-safe bytes.Buffer for tests that read and write
+// concurrently (e.g. polling log output while a goroutine is still writing).
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 type failNthWriter struct {
 	mu      sync.Mutex
 	writes  int
@@ -241,7 +260,7 @@ func TestParseSessionUpdate_InvalidJSON(t *testing.T) {
 
 func TestACPClient_AutoApprovePermissions_SendErrorLogsWarning(t *testing.T) {
 	writer := &failNthWriter{failOn: 2, err: errors.New("boom")}
-	var logs bytes.Buffer
+	var logs syncBuffer
 	c := &acpClient{
 		codec:       newRPCCodec(strings.NewReader(""), writer),
 		reverseReqs: make(chan *rpcMessage, 1),
