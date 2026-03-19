@@ -701,6 +701,117 @@ func TestClaudeMapper_SkipsAssistantAndRateLimitLines(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Test 15: handleStreamEvent with unparseable inner JSON is a no-op
+// ---------------------------------------------------------------------------
+
+func TestClaudeMapper_HandleStreamEvent_MalformedJSON(t *testing.T) {
+	onEvent, get := collectEvents()
+	m := newClaudeEventMapper(onEvent)
+
+	// The top-level type is "stream_event", but the inner JSON is garbage.
+	m.handleLine("stream_event", []byte(`{"type":"stream_event","event":not-valid-json}`))
+
+	evts := get()
+	if len(evts) != 0 {
+		t.Errorf("expected 0 events for malformed stream_event, got %d", len(evts))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 16: handleUserEvent with unparseable JSON is a no-op
+// ---------------------------------------------------------------------------
+
+func TestClaudeMapper_HandleUserEvent_MalformedJSON(t *testing.T) {
+	onEvent, get := collectEvents()
+	m := newClaudeEventMapper(onEvent)
+
+	// The top-level type is "user", but the payload is garbage.
+	m.handleLine("user", []byte(`{"type":"user","message":broken`))
+
+	evts := get()
+	if len(evts) != 0 {
+		t.Errorf("expected 0 events for malformed user line, got %d", len(evts))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 17: user event with non-tool_result content is skipped
+// ---------------------------------------------------------------------------
+
+func TestClaudeMapper_HandleUserEvent_SkipsNonToolResult(t *testing.T) {
+	onEvent, get := collectEvents()
+	m := newClaudeEventMapper(onEvent)
+
+	// User line containing a "text" content entry instead of "tool_result".
+	m.handleLine("user", []byte(
+		`{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}`))
+
+	evts := get()
+	if len(evts) != 0 {
+		t.Errorf("expected 0 events for non-tool_result user content, got %d", len(evts))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 18: mapMessageStart with nil message is a no-op
+// ---------------------------------------------------------------------------
+
+func TestClaudeMapper_MessageStart_NilMessage(t *testing.T) {
+	onEvent, get := collectEvents()
+	m := newClaudeEventMapper(onEvent)
+
+	// message_start event without a "message" field.
+	m.handleLine("stream_event", []byte(
+		`{"type":"stream_event","event":{"type":"message_start"}}`))
+
+	evts := get()
+	if len(evts) != 0 {
+		t.Errorf("expected 0 events for message_start with nil message, got %d", len(evts))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 19: mapContentBlockStart with nil content_block is a no-op
+// ---------------------------------------------------------------------------
+
+func TestClaudeMapper_ContentBlockStart_NilContentBlock(t *testing.T) {
+	onEvent, get := collectEvents()
+	m := newClaudeEventMapper(onEvent)
+
+	// content_block_start event without a "content_block" field.
+	m.handleLine("stream_event", []byte(
+		`{"type":"stream_event","event":{"type":"content_block_start"}}`))
+
+	evts := get()
+	if len(evts) != 0 {
+		t.Errorf("expected 0 events for content_block_start with nil content_block, got %d", len(evts))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 20: mapContentBlockDelta with nil delta is a no-op
+// ---------------------------------------------------------------------------
+
+func TestClaudeMapper_ContentBlockDelta_NilDelta(t *testing.T) {
+	onEvent, get := collectEvents()
+	m := newClaudeEventMapper(onEvent)
+
+	// content_block_delta event without a "delta" field.
+	m.handleLine("stream_event", []byte(
+		`{"type":"stream_event","event":{"type":"content_block_delta"}}`))
+
+	evts := get()
+	if len(evts) != 0 {
+		t.Errorf("expected 0 events for content_block_delta with nil delta, got %d", len(evts))
+	}
+
+	// Also verify no text was accumulated.
+	if got := m.assistantText(); got != "" {
+		t.Errorf("expected empty assistantText, got %q", got)
+	}
+}
+
 // ===========================================================================
 // Integration tests: ClaudeAgent.RunIteration with fake scripts
 // ===========================================================================
