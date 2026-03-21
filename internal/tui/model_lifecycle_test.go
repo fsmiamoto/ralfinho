@@ -553,6 +553,48 @@ func TestNewViewerModel_BlocksAreAssistantFinal(t *testing.T) {
 	}
 }
 
+func TestDoneMsg_StatusStuck_ShowsErrorOverlay(t *testing.T) {
+	m := NewModel(nil, "pi", "")
+	m.width = 80
+	m.height = 24
+
+	result := runner.RunResult{
+		Agent:      "pi",
+		Status:     runner.StatusStuck,
+		Iterations: 3,
+		Error:      "agent unresponsive for 5m0s (2 consecutive timeouts)",
+	}
+	updated, _ := m.Update(DoneMsg{Result: result})
+	m = updated.(Model)
+
+	if m.running {
+		t.Fatal("running = true after StatusStuck DoneMsg, want false")
+	}
+	if m.errorOverlay != result.Error {
+		t.Fatalf("errorOverlay = %q, want %q", m.errorOverlay, result.Error)
+	}
+	if !strings.Contains(m.status, "stuck") {
+		t.Fatalf("status = %q, want to contain 'stuck'", m.status)
+	}
+}
+
+func TestHandleRawEvent_SetsLastEventTime(t *testing.T) {
+	m := NewModel(nil, "pi", "")
+	m.running = true
+
+	if !m.lastEventTime.IsZero() {
+		t.Fatal("lastEventTime should be zero before any events")
+	}
+
+	ev := runner.Event{Type: runner.EventTurnEnd}
+	updated, _ := m.handleRawEvent(ev)
+	m = updated.(Model)
+
+	if m.lastEventTime.IsZero() {
+		t.Fatal("lastEventTime should be set after handleRawEvent")
+	}
+}
+
 func updateModel(t *testing.T, model Model, msg tea.Msg) Model {
 	t.Helper()
 	updated, _ := model.Update(msg)

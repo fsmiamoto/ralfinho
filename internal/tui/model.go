@@ -46,7 +46,8 @@ type Model struct {
 	agentName    string
 	iteration    int // current iteration count for header display
 
-	errorOverlay       string // non-empty = show error modal overlay
+	lastEventTime      time.Time // time of last raw event, for inactivity indicator
+	errorOverlay       string    // non-empty = show error modal overlay
 	errorOverlayScroll int    // scroll offset within the error overlay
 	promptText         string // full effective prompt text
 	promptOverlay      bool   // whether the prompt overlay is shown
@@ -215,6 +216,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleRawEvent(ev runner.Event) (tea.Model, tea.Cmd) {
+	m.lastEventTime = time.Now()
 	displayEvents := m.converter.Convert(&ev)
 	var cmds []tea.Cmd
 	for _, de := range displayEvents {
@@ -948,6 +950,13 @@ func (m Model) renderStatus() string {
 	left := m.status
 	if m.running {
 		left = "Running │ " + left
+		// Show inactivity indicator when no events received for >30s.
+		if !m.lastEventTime.IsZero() {
+			idle := time.Since(m.lastEventTime)
+			if idle > 30*time.Second {
+				left += fmt.Sprintf(" (no activity for %ds)", int(idle.Seconds()))
+			}
+		}
 	}
 
 	modeStr := "rendered"

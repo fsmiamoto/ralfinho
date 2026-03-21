@@ -300,6 +300,15 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 		}
 		return []DisplayEvent{MakeIterationEvent(c.iteration)}
 
+	case runner.EventInactivityTimeout:
+		return []DisplayEvent{{
+			Type:      DisplayInfo,
+			Summary:   "Inactivity timeout — retrying iteration",
+			Detail:    "Inactivity timeout — retrying iteration",
+			Timestamp: now,
+			Iteration: c.iteration,
+		}}
+
 	case runner.EventRateLimit:
 		summary := "Rate limit event"
 		if ev.RateLimit != nil {
