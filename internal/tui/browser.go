@@ -657,6 +657,7 @@ func (m BrowserModel) renderSessionsPane() string {
 		}
 
 		visibleRows := m.visibleSessionRows()
+		sep := lipgloss.NewStyle().Foreground(colorDim).Render(strings.Repeat("─", lineWidth))
 		var lines []string
 		for i := m.scroll; i < len(m.summaries) && i < m.scroll+visibleRows; i++ {
 			summary := m.summaries[i]
@@ -673,6 +674,10 @@ func (m BrowserModel) renderSessionsPane() string {
 					" "+browserRowStyle.Render(primary),
 					" "+browserSubtleStyle.Render(secondary),
 				)
+			}
+			// Add separator after each row except the last visible one.
+			if i < m.scroll+visibleRows-1 && i < len(m.summaries)-1 {
+				lines = append(lines, " "+sep)
 			}
 		}
 
@@ -1303,7 +1308,12 @@ func (m BrowserModel) previewWidth() int {
 }
 
 func (m BrowserModel) visibleSessionRows() int {
-	rows := (m.sessionsPaneHeight() - 1) / 2
+	h := m.sessionsPaneHeight() - 1 // subtract title line
+	if h <= 0 {
+		return 1
+	}
+	// 3 lines per row (primary + secondary + separator), +1 because last row has no separator
+	rows := (h + 1) / 3
 	if rows < 1 {
 		rows = 1
 	}

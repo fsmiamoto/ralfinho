@@ -2854,12 +2854,13 @@ func TestBrowserLayoutHelpers(t *testing.T) {
 		}
 	})
 
-	t.Run("visibleSessionRows is (sessionsPaneHeight-1)/2, min 1", func(t *testing.T) {
+	t.Run("visibleSessionRows accounts for separators, min 1", func(t *testing.T) {
 		// side-by-side: paneHeight=height-4; sessionsPaneHeight=paneHeight
-		// height=40 → paneHeight=36 → rows=(36-1)/2=17
+		// height=40 → paneHeight=36 → h=35 → rows=(35+1)/3=12
 		m := newModel(100, 40)
 		got := m.visibleSessionRows()
-		want := (m.sessionsPaneHeight() - 1) / 2
+		h := m.sessionsPaneHeight() - 1
+		want := (h + 1) / 3
 		if want < 1 {
 			want = 1
 		}

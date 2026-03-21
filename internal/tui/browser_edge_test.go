@@ -444,7 +444,7 @@ func TestBrowserRenderHelpersCoverRemainingBrowserBranches(t *testing.T) {
 	})
 
 	t.Run("sessions pane renders both selected and non-selected rows", func(t *testing.T) {
-		m := initBrowserModel(makeSummaries(3), 100, 12)
+		m := initBrowserModel(makeSummaries(3), 100, 14)
 		m.cursor = 1
 
 		pane := stripANSI(m.renderSessionsPane())
