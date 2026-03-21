@@ -685,7 +685,9 @@ func (m Model) renderMain() string {
 	displayContent := strings.Join(lines, "\n")
 
 	title := " LIVE "
-	if ind := scrollIndicator(scroll, visibleLines, totalLines); ind != "" {
+	if m.mainAutoScroll && totalLines > visibleLines {
+		title = " LIVE [AUTO] "
+	} else if ind := scrollIndicator(scroll, visibleLines, totalLines); ind != "" {
 		title = fmt.Sprintf(" LIVE %s ", ind)
 	}
 

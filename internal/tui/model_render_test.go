@@ -159,6 +159,45 @@ func TestRenderMainShowsScrollTitleAndVisibleContent(t *testing.T) {
 	}
 }
 
+func TestRenderMainShowsAutoIndicatorWhenAutoScrolling(t *testing.T) {
+	m := Model{
+		width:          80,
+		height:         12,
+		mainAutoScroll: true,
+		mainScroll:     999999, // clamped to max
+		blocks: []MainBlock{{
+			Kind:     BlockInfo,
+			InfoText: "line1\nline2\nline3\nline4\nline5\nline6",
+		}},
+	}
+
+	main := stripANSI(m.renderMain())
+	if !strings.Contains(main, "LIVE [AUTO]") {
+		t.Fatalf("renderMain() with autoScroll = %q, want 'LIVE [AUTO]'", main)
+	}
+}
+
+func TestRenderMainShowsScrollIndicatorWhenNotAutoScrolling(t *testing.T) {
+	m := Model{
+		width:          80,
+		height:         12,
+		mainAutoScroll: false,
+		mainScroll:     999999, // clamped to max → "Bot"
+		blocks: []MainBlock{{
+			Kind:     BlockInfo,
+			InfoText: "line1\nline2\nline3\nline4\nline5\nline6",
+		}},
+	}
+
+	main := stripANSI(m.renderMain())
+	if strings.Contains(main, "[AUTO]") {
+		t.Fatalf("renderMain() without autoScroll should not show [AUTO], got %q", main)
+	}
+	if !strings.Contains(main, "LIVE Bot") {
+		t.Fatalf("renderMain() without autoScroll = %q, want 'LIVE Bot'", main)
+	}
+}
+
 func TestRenderStreamTruncatesLongSummariesAndShowsSelection(t *testing.T) {
 	m := Model{
 		width:     40,
@@ -742,7 +781,9 @@ func renderMainBaseline(m Model) string {
 	displayContent := strings.Join(lines, "\n")
 
 	title := " LIVE "
-	if ind := scrollIndicator(scroll, visibleLines, len(allLines)); ind != "" {
+	if m.mainAutoScroll && len(allLines) > visibleLines {
+		title = " LIVE [AUTO] "
+	} else if ind := scrollIndicator(scroll, visibleLines, len(allLines)); ind != "" {
 		title = fmt.Sprintf(" LIVE %s ", ind)
 	}
 
