@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -30,13 +31,14 @@ import (
 // directories internally so merged global/local configs can still resolve
 // file-based template references relative to the file that defined each field.
 type FileConfig struct {
-	Agent         string                 `toml:"agent"`
-	MaxIterations *int                   `toml:"max-iterations"`
-	RunsDir       string                 `toml:"runs-dir"`
-	NoTUI         *bool                  `toml:"no-tui"`
-	Agents        map[string]AgentConfig `toml:"agents"`
-	Templates     TemplatesConfig        `toml:"templates"`
-	Dir           string                 `toml:"-"`
+	Agent             string                 `toml:"agent"`
+	MaxIterations     *int                   `toml:"max-iterations"`
+	InactivityTimeout *string                `toml:"inactivity-timeout"`
+	RunsDir           string                 `toml:"runs-dir"`
+	NoTUI             *bool                  `toml:"no-tui"`
+	Agents            map[string]AgentConfig `toml:"agents"`
+	Templates         TemplatesConfig        `toml:"templates"`
+	Dir               string                 `toml:"-"`
 }
 
 // TemplatesConfig holds optional prompt template overrides loaded from TOML.
@@ -155,6 +157,9 @@ func merge(base, override *FileConfig) *FileConfig {
 	if override.MaxIterations != nil {
 		result.MaxIterations = override.MaxIterations
 	}
+	if override.InactivityTimeout != nil {
+		result.InactivityTimeout = override.InactivityTimeout
+	}
 	if override.RunsDir != "" {
 		result.RunsDir = override.RunsDir
 	}
@@ -251,4 +256,19 @@ func ResolveTemplates(cfg *FileConfig) (ResolvedTemplates, error) {
 		Plan:    plan,
 		Default: defaultTemplate,
 	}, nil
+}
+
+// ParseInactivityTimeout parses the InactivityTimeout field from a merged
+// FileConfig into a time.Duration. Returns 0 when the field is nil (not set),
+// which the runner interprets as "use default". Returns an error if the value
+// is present but cannot be parsed as a Go duration string (e.g. "5m", "30s").
+func ParseInactivityTimeout(cfg *FileConfig) (time.Duration, error) {
+	if cfg == nil || cfg.InactivityTimeout == nil {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(*cfg.InactivityTimeout)
+	if err != nil {
+		return 0, fmt.Errorf("parsing inactivity-timeout %q: %w", *cfg.InactivityTimeout, err)
+	}
+	return d, nil
 }

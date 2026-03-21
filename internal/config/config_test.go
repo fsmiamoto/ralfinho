@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -351,6 +352,51 @@ func TestMerge_OverrideWithoutAgentsStillCopiesBaseMap(t *testing.T) {
 	}
 }
 
+func TestMerge_InactivityTimeoutLocalWins(t *testing.T) {
+	t.Parallel()
+
+	global := strPtr("5m")
+	local := strPtr("2m")
+	base := &FileConfig{InactivityTimeout: global}
+	override := &FileConfig{InactivityTimeout: local}
+
+	got := merge(base, override)
+
+	if got.InactivityTimeout == nil || *got.InactivityTimeout != "2m" {
+		t.Errorf("InactivityTimeout: expected *\"2m\", got %v", got.InactivityTimeout)
+	}
+}
+
+func TestMerge_InactivityTimeoutOmittedIsNil(t *testing.T) {
+	t.Parallel()
+
+	base := &FileConfig{Agent: "pi"}
+	override := &FileConfig{Agent: "claude"}
+
+	got := merge(base, override)
+
+	if got.InactivityTimeout != nil {
+		t.Errorf("InactivityTimeout: expected nil when omitted in both, got %v", got.InactivityTimeout)
+	}
+}
+
+func TestMerge_InactivityTimeoutBasePreservedWhenOverrideOmits(t *testing.T) {
+	t.Parallel()
+
+	global := strPtr("5m")
+	base := &FileConfig{InactivityTimeout: global}
+	override := &FileConfig{Agent: "claude"}
+
+	got := merge(base, override)
+
+	if got.InactivityTimeout == nil || *got.InactivityTimeout != "5m" {
+		t.Errorf("InactivityTimeout: expected *\"5m\" from base, got %v", got.InactivityTimeout)
+	}
+}
+
+// strPtr is a helper that returns a pointer to the given string.
+func strPtr(s string) *string { return &s }
+
 func TestMerge_TemplatesOverrideWhenOnlyOverrideHasTemplates(t *testing.T) {
 	t.Parallel()
 
@@ -523,6 +569,106 @@ func TestResolveTemplates_DefaultFileError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "templates.default") {
 		t.Fatalf("error should mention templates.default, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// InactivityTimeout tests
+// ---------------------------------------------------------------------------
+
+func TestLoadFile_InactivityTimeout(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	content := `inactivity-timeout = "3m"` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+
+	cfg, err := loadFile(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.InactivityTimeout == nil {
+		t.Fatal("InactivityTimeout should be non-nil when set")
+	}
+	if *cfg.InactivityTimeout != "3m" {
+		t.Errorf("InactivityTimeout: got %q, want %q", *cfg.InactivityTimeout, "3m")
+	}
+}
+
+func TestLoadFile_InactivityTimeoutOmitted(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	content := `agent = "pi"` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+
+	cfg, err := loadFile(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.InactivityTimeout != nil {
+		t.Errorf("InactivityTimeout: expected nil when omitted, got %v", cfg.InactivityTimeout)
+	}
+}
+
+func TestParseInactivityTimeout_ValidDuration(t *testing.T) {
+	t.Parallel()
+
+	s := "3m"
+	cfg := &FileConfig{InactivityTimeout: &s}
+	d, err := ParseInactivityTimeout(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if d != 3*time.Minute {
+		t.Errorf("got %v, want %v", d, 3*time.Minute)
+	}
+}
+
+func TestParseInactivityTimeout_NilConfig(t *testing.T) {
+	t.Parallel()
+
+	d, err := ParseInactivityTimeout(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if d != 0 {
+		t.Errorf("got %v, want 0", d)
+	}
+}
+
+func TestParseInactivityTimeout_NilField(t *testing.T) {
+	t.Parallel()
+
+	cfg := &FileConfig{}
+	d, err := ParseInactivityTimeout(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if d != 0 {
+		t.Errorf("got %v, want 0", d)
+	}
+}
+
+func TestParseInactivityTimeout_InvalidDuration(t *testing.T) {
+	t.Parallel()
+
+	s := "not-a-duration"
+	cfg := &FileConfig{InactivityTimeout: &s}
+	_, err := ParseInactivityTimeout(cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid duration")
+	}
+	if !strings.Contains(err.Error(), "parsing inactivity-timeout") {
+		t.Fatalf("error should mention parsing inactivity-timeout, got: %v", err)
 	}
 }
 

@@ -33,14 +33,15 @@ const completionMarker = "<promise>COMPLETE</promise>"
 
 // RunConfig holds the parameters for a single run.
 type RunConfig struct {
-	Agent         string
-	Prompt        string // the full prompt text to send each iteration
-	MaxIterations int    // 0 = unlimited
-	RunsDir       string
-	PromptSource  string       // "prompt", "plan", or "default"
-	PromptFile    string       // path when PromptSource is "prompt"
-	PlanFile      string       // path when PromptSource is "plan"
-	EventChan     chan<- Event // optional: send events to TUI
+	Agent             string
+	Prompt            string        // the full prompt text to send each iteration
+	MaxIterations     int           // 0 = unlimited
+	InactivityTimeout time.Duration // 0 = use default (5m)
+	RunsDir           string
+	PromptSource      string       // "prompt", "plan", or "default"
+	PromptFile        string       // path when PromptSource is "prompt"
+	PlanFile          string       // path when PromptSource is "plan"
+	EventChan         chan<- Event // optional: send events to TUI
 
 	// AgentExtraArgs holds extra arguments to append to the agent subprocess
 	// command line. Sourced from per-agent config file settings.

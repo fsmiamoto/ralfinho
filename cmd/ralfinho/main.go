@@ -32,6 +32,10 @@ var fileCfg *config.FileConfig
 // the run starts so prompt-building helpers can use stable template content.
 var configuredTemplates config.ResolvedTemplates
 
+// inactivityTimeout holds the parsed inactivity timeout from the config file.
+// Zero means "not set" (the runner applies a default of 5 minutes).
+var inactivityTimeout time.Duration
+
 // teaProgram captures the Bubble Tea methods command flows need. Keeping
 // program construction behind a tiny interface makes the interactive command
 // paths testable without requiring a real terminal.
@@ -63,6 +67,11 @@ func main() {
 		os.Exit(1)
 	}
 	configuredTemplates, err = config.ResolveTemplates(fileCfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ralfinho: config: %v\n", err)
+		os.Exit(1)
+	}
+	inactivityTimeout, err = config.ParseInactivityTimeout(fileCfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ralfinho: config: %v\n", err)
 		os.Exit(1)
@@ -118,14 +127,15 @@ func main() {
 // runPlain runs the agent with plain stderr output (original behavior).
 func runPlain(cfg *cli.Config, promptText string) {
 	r := runner.New(runner.RunConfig{
-		Agent:          cfg.Agent,
-		Prompt:         promptText,
-		MaxIterations:  cfg.MaxIterations,
-		RunsDir:        cfg.RunsDir,
-		PromptSource:   cfg.InputMode,
-		PromptFile:     cfg.PromptFile,
-		PlanFile:       cfg.PlanFile,
-		AgentExtraArgs: extraArgsForAgent(cfg.Agent),
+		Agent:             cfg.Agent,
+		Prompt:            promptText,
+		MaxIterations:     cfg.MaxIterations,
+		InactivityTimeout: inactivityTimeout,
+		RunsDir:           cfg.RunsDir,
+		PromptSource:      cfg.InputMode,
+		PromptFile:        cfg.PromptFile,
+		PlanFile:          cfg.PlanFile,
+		AgentExtraArgs:    extraArgsForAgent(cfg.Agent),
 	})
 
 	result := r.Run(context.Background())
@@ -137,14 +147,15 @@ func runPlain(cfg *cli.Config, promptText string) {
 // runTUI runs the agent with the Bubble Tea TUI.
 func runTUI(cfg *cli.Config, promptText string) {
 	result, err := runAgentWithTUI(runner.RunConfig{
-		Agent:          cfg.Agent,
-		Prompt:         promptText,
-		MaxIterations:  cfg.MaxIterations,
-		RunsDir:        cfg.RunsDir,
-		PromptSource:   cfg.InputMode,
-		PromptFile:     cfg.PromptFile,
-		PlanFile:       cfg.PlanFile,
-		AgentExtraArgs: extraArgsForAgent(cfg.Agent),
+		Agent:             cfg.Agent,
+		Prompt:            promptText,
+		MaxIterations:     cfg.MaxIterations,
+		InactivityTimeout: inactivityTimeout,
+		RunsDir:           cfg.RunsDir,
+		PromptSource:      cfg.InputMode,
+		PromptFile:        cfg.PromptFile,
+		PlanFile:          cfg.PlanFile,
+		AgentExtraArgs:    extraArgsForAgent(cfg.Agent),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ralfinho: %v\n", err)
@@ -409,14 +420,15 @@ func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
 	inputMode, promptFile, planFile := resumePromptMeta(result.ResumeSource, result.ResumePath)
 
 	runResult, err := runAgentWithTUI(runner.RunConfig{
-		Agent:          agentName,
-		Prompt:         promptText,
-		MaxIterations:  cfg.MaxIterations,
-		RunsDir:        cfg.RunsDir,
-		PromptSource:   inputMode,
-		PromptFile:     promptFile,
-		PlanFile:       planFile,
-		AgentExtraArgs: extraArgsForAgent(agentName),
+		Agent:             agentName,
+		Prompt:            promptText,
+		MaxIterations:     cfg.MaxIterations,
+		InactivityTimeout: inactivityTimeout,
+		RunsDir:           cfg.RunsDir,
+		PromptSource:      inputMode,
+		PromptFile:        promptFile,
+		PlanFile:          planFile,
+		AgentExtraArgs:    extraArgsForAgent(agentName),
 	})
 	if err != nil {
 		return err
