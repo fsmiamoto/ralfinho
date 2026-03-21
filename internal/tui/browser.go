@@ -81,6 +81,8 @@ type BrowserModel struct {
 	searchQuery   string
 	searching     bool
 
+	helpOverlay bool
+
 	confirmingDelete   bool
 	confirmDeleteRunID string
 	confirmDeleteDir   string
@@ -156,6 +158,14 @@ func (m BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m BrowserModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.helpOverlay {
+		switch msg.String() {
+		case "?", "q", "esc":
+			m.helpOverlay = false
+		}
+		return m, nil
+	}
+
 	if m.confirmingDelete {
 		return m.handleConfirmDeleteKey(msg)
 	}
@@ -196,8 +206,11 @@ func (m BrowserModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case "/", "?":
+	case "/":
 		m.searching = true
+
+	case "?":
+		m.helpOverlay = true
 
 	case "q", "esc", "ctrl+c":
 		return m, tea.Quit
@@ -528,9 +541,46 @@ func (m BrowserModel) matchesBrowserFilters(summary viewer.RunSummary) bool {
 	return true
 }
 
+func (m BrowserModel) renderBrowserHelpOverlay() string {
+	maxWidth := min(m.width*7/10, 60)
+
+	body := "" +
+		"Navigation\n" +
+		"  j/k, ↑/↓     Scroll / move cursor\n" +
+		"  g / G         Jump to top / bottom\n" +
+		"  Ctrl+d/u      Half-page scroll\n" +
+		"  Tab           Switch pane focus\n" +
+		"\n" +
+		"Sessions\n" +
+		"  Enter/o       Open session\n" +
+		"  r             Resume session\n" +
+		"  x             Delete session\n" +
+		"  /             Search\n" +
+		"  s             Cycle sort mode\n" +
+		"  a/t/d/p       Cycle filters\n" +
+		"\n" +
+		"Other\n" +
+		"  q/Esc         Quit\n" +
+		"  ?             Toggle this help"
+
+	title := browserCardTitle.Render("Keybindings")
+	hint := dismissHintStyle.Render("?/q/Esc:close")
+
+	content := title + "\n\n" + body + "\n\n" + hint
+	card := browserCardBorder.Width(maxWidth).Render(content)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, card,
+		lipgloss.WithWhitespaceChars(" "),
+	)
+}
+
 func (m BrowserModel) View() string {
 	if m.width == 0 || m.height == 0 {
 		return m.renderBrowserLoading()
+	}
+
+	if m.helpOverlay {
+		return m.renderBrowserHelpOverlay()
 	}
 
 	header := m.renderBrowserHeader()

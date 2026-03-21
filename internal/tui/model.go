@@ -51,6 +51,7 @@ type Model struct {
 	promptText         string // full effective prompt text
 	promptOverlay      bool   // whether the prompt overlay is shown
 	promptOverlayScroll int   // scroll offset within the prompt overlay
+	helpOverlay        bool   // whether the help/keybinding overlay is shown
 
 	// Main view (top pane) state.
 	blocks         []MainBlock // ordered content blocks for the main view
@@ -422,6 +423,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle help overlay keys.
+	if m.helpOverlay {
+		switch msg.String() {
+		case "?", "q", "esc":
+			m.helpOverlay = false
+		}
+		return m, nil
+	}
+
 	// Handle quit confirmation state.
 	if m.confirmQuit {
 		if m.confirmCtrlC && msg.String() == "ctrl+c" {
@@ -551,6 +561,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "r":
 		m.rawMode = !m.rawMode
+
+	case "?":
+		m.helpOverlay = true
 	}
 
 	return m, nil
@@ -619,6 +632,10 @@ func (m Model) paneHeight() int {
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
 		return "Initializing..."
+	}
+
+	if m.helpOverlay {
+		return m.renderHelpOverlay()
 	}
 
 	if m.promptOverlay {
@@ -935,6 +952,7 @@ func (m Model) renderStatus() string {
 		sep + statusKeyStyle.Render("Tab") + ":pane" +
 		sep + statusKeyStyle.Render("r") + ":" + modeStr +
 		sep + statusKeyStyle.Render("p") + ":prompt" +
+		sep + statusKeyStyle.Render("?") + ":help" +
 		sep + statusKeyStyle.Render("q") + ":quit"
 
 	leftW := lipgloss.Width(left)
@@ -1000,6 +1018,37 @@ func truncateToWidth(s string, maxW int) string {
 		return s
 	}
 	return clipToWidth(s, maxW-3) + "..."
+}
+
+// renderHelpOverlay renders a centered keybinding reference card.
+func (m Model) renderHelpOverlay() string {
+	maxWidth := min(m.width*7/10, 60)
+
+	body := "" +
+		"Navigation\n" +
+		"  j/k, ↑/↓     Scroll / move cursor\n" +
+		"  g / G         Jump to top / bottom\n" +
+		"  Ctrl+d/u      Half-page scroll\n" +
+		"  Tab           Cycle pane focus\n" +
+		"\n" +
+		"View\n" +
+		"  r             Toggle raw / rendered\n" +
+		"  p             Show effective prompt\n" +
+		"\n" +
+		"Other\n" +
+		"  q             Quit (press again to confirm)\n" +
+		"  Ctrl+C        Quit (press again to confirm)\n" +
+		"  ?             Toggle this help"
+
+	title := browserCardTitle.Render("Keybindings")
+	hint := dismissHintStyle.Render("?/q/Esc:close")
+
+	content := title + "\n\n" + body + "\n\n" + hint
+	card := browserCardBorder.Width(maxWidth).Render(content)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, card,
+		lipgloss.WithWhitespaceChars(" "),
+	)
 }
 
 // renderPromptOverlay renders the effective prompt text as a centered modal

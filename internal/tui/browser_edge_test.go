@@ -48,12 +48,21 @@ func TestBrowserInitAndUpdateWindowSizeAndNoOp(t *testing.T) {
 	}
 }
 
-func TestBrowserQuestionMarkStartsSearchAndUnknownKeyIsNoOp(t *testing.T) {
-	t.Run("question mark enters search mode", func(t *testing.T) {
+func TestBrowserQuestionMarkOpensHelpAndUnknownKeyIsNoOp(t *testing.T) {
+	t.Run("question mark opens help overlay", func(t *testing.T) {
 		m := initBrowserModel(makeSummaries(1), 100, 30)
 		m = pressKey(t, m, "?")
-		if !m.searching {
-			t.Fatal("searching = false after ?, want true")
+		if !m.helpOverlay {
+			t.Fatal("helpOverlay = false after ?, want true")
+		}
+	})
+
+	t.Run("help overlay dismissed by question mark", func(t *testing.T) {
+		m := initBrowserModel(makeSummaries(1), 100, 30)
+		m = pressKey(t, m, "?")
+		m = pressKey(t, m, "?")
+		if m.helpOverlay {
+			t.Fatal("helpOverlay = true after second ?, want false")
 		}
 	})
 
