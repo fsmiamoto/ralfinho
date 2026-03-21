@@ -69,6 +69,10 @@ var (
 			Foreground(ColorAccent).
 			Bold(true)
 
+	focusedTitleStyle = lipgloss.NewStyle().
+				Foreground(colorBright).
+				Background(ColorAccent).
+				Bold(true)
 )
 
 // Stream pane event styles — pre-computed to avoid allocations per render.

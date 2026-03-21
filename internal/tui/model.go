@@ -673,14 +673,16 @@ func (m Model) renderMain() string {
 	}
 
 	border := focusedBorder
+	ts := focusedTitleStyle
 	if m.focusedPane != 0 {
 		border = unfocusedBorder
+		ts = titleStyle
 	}
 
 	return border.
 		Width(w - 2).
 		Height(ph).
-		Render(titleStyle.Render(title) + "\n" + displayContent)
+		Render(ts.Render(title) + "\n" + displayContent)
 }
 
 func (m Model) renderHeader() string {
@@ -775,14 +777,16 @@ func (m Model) renderStream() string {
 
 	title := fmt.Sprintf(" STREAM (%d) ", len(m.events))
 	border := focusedBorder
+	ts := focusedTitleStyle
 	if m.focusedPane != 1 {
 		border = unfocusedBorder
+		ts = titleStyle
 	}
 
 	return border.
 		Width(sw - 2).
 		Height(ph).
-		Render(titleStyle.Render(title) + "\n" + content)
+		Render(ts.Render(title) + "\n" + content)
 }
 
 func (m Model) renderDetail() string {
@@ -848,14 +852,16 @@ func (m Model) renderDetail() string {
 	}
 
 	border := focusedBorder
+	ts := focusedTitleStyle
 	if m.focusedPane != 2 {
 		border = unfocusedBorder
+		ts = titleStyle
 	}
 
 	return border.
 		Width(dw - 2).
 		Height(ph).
-		Render(titleStyle.Render(title) + "\n" + displayContent)
+		Render(ts.Render(title) + "\n" + displayContent)
 }
 
 func (m Model) renderStatus() string {

@@ -636,14 +636,16 @@ func (m BrowserModel) renderSessionsPane() string {
 	}
 
 	border := unfocusedBorder
+	ts := titleStyle
 	if m.focusedPane == 0 {
 		border = focusedBorder
+		ts = focusedTitleStyle
 	}
 
 	return border.
 		Width(w - 2).
 		Height(ph).
-		Render(titleStyle.Render(title) + "\n" + content)
+		Render(ts.Render(title) + "\n" + content)
 }
 
 func (m BrowserModel) renderPreviewPane() string {
@@ -709,14 +711,16 @@ func (m BrowserModel) renderPreviewPane() string {
 	}
 
 	border := unfocusedBorder
+	ts := titleStyle
 	if m.focusedPane == 1 {
 		border = focusedBorder
+		ts = focusedTitleStyle
 	}
 
 	return border.
 		Width(w - 2).
 		Height(ph).
-		Render(titleStyle.Render(title) + "\n" + content)
+		Render(ts.Render(title) + "\n" + content)
 }
 
 func (m BrowserModel) renderBrowserStatus() string {
