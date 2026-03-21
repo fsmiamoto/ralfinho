@@ -37,7 +37,7 @@ func TestModelViewShowsErrorOverlay(t *testing.T) {
 	}
 
 	view := stripANSI(m.View())
-	for _, want := range []string{"Error", "permission denied while writing", "meta.json after a failed run", "Press any key to dismiss"} {
+	for _, want := range []string{"Error", "permission denied while writing", "meta.json after a failed run", "j/k:scroll", "any key:dismiss"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("overlay view = %q, want substring %q", view, want)
 		}
@@ -361,7 +361,7 @@ func TestRenderStatusCoversRunningRawAndTruncationBranches(t *testing.T) {
 	})
 }
 
-func TestRenderErrorOverlayTruncatesTallMessages(t *testing.T) {
+func TestRenderErrorOverlayScrollsTallMessages(t *testing.T) {
 	m := Model{
 		width:  40,
 		height: 10,
@@ -374,15 +374,20 @@ func TestRenderErrorOverlayTruncatesTallMessages(t *testing.T) {
 		}, "\n"),
 	}
 
+	// At scroll=0, shows first visible lines and Top indicator.
 	overlay := stripANSI(m.renderErrorOverlay())
-	for _, want := range []string{"Error", "line 1", "line 2", "line 3", "...", "Press any key to dismiss"} {
+	for _, want := range []string{"Error", "line 1", "line 2", "line 3", "j/k:scroll", "key:dismiss"} {
 		if !strings.Contains(overlay, want) {
 			t.Fatalf("renderErrorOverlay() = %q, want substring %q", overlay, want)
 		}
 	}
-	for _, unwanted := range []string{"line 4", "line 5"} {
-		if strings.Contains(overlay, unwanted) {
-			t.Fatalf("renderErrorOverlay() = %q, should omit truncated line %q", overlay, unwanted)
+
+	// Scrolling down reveals later lines.
+	m.errorOverlayScroll = 2
+	overlay = stripANSI(m.renderErrorOverlay())
+	for _, want := range []string{"line 3", "line 4", "line 5"} {
+		if !strings.Contains(overlay, want) {
+			t.Fatalf("renderErrorOverlay() scrolled = %q, want substring %q", overlay, want)
 		}
 	}
 }
@@ -390,7 +395,7 @@ func TestRenderErrorOverlayTruncatesTallMessages(t *testing.T) {
 func TestRenderErrorOverlayUsesMinimumInnerWidthOnTinyTerminals(t *testing.T) {
 	m := Model{width: 34, height: 12, errorOverlay: strings.Repeat("x", 25)}
 	overlay := stripANSI(m.renderErrorOverlay())
-	for _, want := range []string{"Error", "xxxxxxxxxxxxxxxxxxxx", "xxxxx", "Press any key to", "dismiss"} {
+	for _, want := range []string{"Error", "xxxxxxxxxxxxxxxxxxxx", "xxxxx", "j/k:scroll", "key:dismiss"} {
 		if !strings.Contains(overlay, want) {
 			t.Fatalf("renderErrorOverlay() = %q, want substring %q", overlay, want)
 		}

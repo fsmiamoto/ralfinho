@@ -47,6 +47,7 @@ type Model struct {
 	iteration    int // current iteration count for header display
 
 	errorOverlay       string // non-empty = show error modal overlay
+	errorOverlayScroll int    // scroll offset within the error overlay
 	promptText         string // full effective prompt text
 	promptOverlay      bool   // whether the prompt overlay is shown
 	promptOverlayScroll int   // scroll offset within the prompt overlay
@@ -197,6 +198,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = fmt.Sprintf("Done — %s | %s (%d iterations)", msg.Result.Agent, msg.Result.Status, msg.Result.Iterations)
 		if msg.Result.Error != "" {
 			m.errorOverlay = msg.Result.Error
+			m.errorOverlayScroll = 0
 		}
 		m.result = &msg.Result
 		return m, nil
@@ -404,9 +406,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Dismiss error overlay on any keypress.
+	// Handle error overlay keys (j/k scroll, any other key dismisses).
 	if m.errorOverlay != "" {
-		m.errorOverlay = ""
+		switch msg.String() {
+		case "j", "down":
+			m.errorOverlayScroll++
+		case "k", "up":
+			if m.errorOverlayScroll > 0 {
+				m.errorOverlayScroll--
+			}
+		default:
+			m.errorOverlay = ""
+			m.errorOverlayScroll = 0
+		}
 		return m, nil
 	}
 
@@ -1047,12 +1059,10 @@ func (m Model) renderPromptOverlay() string {
 }
 
 // renderErrorOverlay renders the error text as a centered modal card.
-// The overlay is dismissed by any keypress.
+// Supports j/k scrolling; any other key dismisses.
 func (m Model) renderErrorOverlay() string {
 	maxWidth := min(m.width*7/10, 80)
 	maxHeight := m.height * 6 / 10
-
-	title := browserCardTitleWarning.Render("Error")
 
 	// Word-wrap the error text to fit inside the card (accounting for border+padding).
 	innerWidth := maxWidth - 4 // 2 border + 2 padding
@@ -1061,18 +1071,38 @@ func (m Model) renderErrorOverlay() string {
 	}
 	body := WrapText(m.errorOverlay, innerWidth)
 
-	// Truncate body lines if they exceed max height (leave room for title + blank + hint).
+	// Scroll through body lines instead of truncating.
 	lines := strings.Split(body, "\n")
-	maxBodyLines := maxHeight - 6 // title + blank + hint + borders
-	if maxBodyLines < 3 {
-		maxBodyLines = 3
-	}
-	if len(lines) > maxBodyLines {
-		lines = append(lines[:maxBodyLines], "...")
-	}
-	body = strings.Join(lines, "\n")
+	totalLines := len(lines)
 
-	hint := dismissHintStyle.Render("Press any key to dismiss")
+	visibleLines := maxHeight - 6 // title + blank + hint + borders
+	if visibleLines < 3 {
+		visibleLines = 3
+	}
+
+	scroll := m.errorOverlayScroll
+	maxScroll := totalLines - visibleLines
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+
+	end := scroll + visibleLines
+	if end > totalLines {
+		end = totalLines
+	}
+	body = strings.Join(lines[scroll:end], "\n")
+
+	// Build title with scroll indicator when content is scrollable.
+	titleText := "Error"
+	if ind := scrollIndicator(scroll, visibleLines, totalLines); ind != "" {
+		titleText = fmt.Sprintf("Error %s", ind)
+	}
+	title := browserCardTitleWarning.Render(titleText)
+
+	hint := dismissHintStyle.Render("j/k:scroll  any key:dismiss")
 
 	content := title + "\n\n" + body + "\n\n" + hint
 	card := browserCardBorderWarning.Width(maxWidth).Render(content)
