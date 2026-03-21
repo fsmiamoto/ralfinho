@@ -731,10 +731,7 @@ func (m Model) renderHeader() string {
 		optional = append(optional, m.modelName)
 	}
 	if m.running && !m.startTime.IsZero() {
-		elapsed := time.Since(m.startTime).Truncate(time.Second)
-		mins := int(elapsed.Minutes())
-		secs := int(elapsed.Seconds()) % 60
-		optional = append(optional, fmt.Sprintf("%dm %ds", mins, secs))
+		optional = append(optional, formatElapsed(time.Since(m.startTime)))
 	}
 
 	bar := strings.Join(parts, sep)
@@ -746,6 +743,18 @@ func (m Model) renderHeader() string {
 	}
 
 	return headerStyle.Width(m.width).Render(bar)
+}
+
+func formatElapsed(d time.Duration) string {
+	totalSecs := int(d.Truncate(time.Second).Seconds())
+	switch {
+	case totalSecs < 60:
+		return fmt.Sprintf("%ds", totalSecs)
+	case totalSecs < 3600:
+		return fmt.Sprintf("%dm %ds", totalSecs/60, totalSecs%60)
+	default:
+		return fmt.Sprintf("%dh %dm", totalSecs/3600, (totalSecs%3600)/60)
+	}
 }
 
 func (m Model) renderStream() string {

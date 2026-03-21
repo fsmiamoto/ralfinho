@@ -1053,3 +1053,28 @@ func TestQA_LargeModelAllScrollPositionsMatchBaseline(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatElapsed(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "0s"},
+		{5 * time.Second, "5s"},
+		{59 * time.Second, "59s"},
+		{60 * time.Second, "1m 0s"},
+		{90 * time.Second, "1m 30s"},
+		{2*time.Minute + 12*time.Second, "2m 12s"},
+		{59*time.Minute + 59*time.Second, "59m 59s"},
+		{time.Hour, "1h 0m"},
+		{time.Hour + 2*time.Minute, "1h 2m"},
+		{2*time.Hour + 30*time.Minute + 45*time.Second, "2h 30m"},
+		// sub-second fractions are truncated
+		{5*time.Second + 999*time.Millisecond, "5s"},
+	}
+	for _, tt := range tests {
+		if got := formatElapsed(tt.d); got != tt.want {
+			t.Errorf("formatElapsed(%v) = %q, want %q", tt.d, got, tt.want)
+		}
+	}
+}
