@@ -26,6 +26,7 @@ const (
 	StatusInterrupted          Status = "interrupted"
 	StatusFailed               Status = "failed"
 	StatusMaxIterationsReached Status = "max_iterations_reached"
+	StatusStuck                Status = "stuck"
 )
 
 // completionMarker is the sentinel that signals the agent considers itself done.
@@ -59,18 +60,19 @@ type RunResult struct {
 
 // Runner drives the agent iteration loop.
 type Runner struct {
-	cfg         RunConfig
-	runID       string
-	stdin       io.Reader // user input (for interactive prompts)
-	stderr      io.Writer // progress output goes here
-	events      []Event   // all parsed events across all iterations
-	eventsFile  *os.File  // events.jsonl
-	rawFile     *os.File  // raw-output.log
-	sessionFile *os.File  // session.log
-	startedAt   time.Time
-	iteration   int             // current iteration number
-	sessionText strings.Builder // accumulates assistant text for session.log
-	iterAgent   agent.Agent     // agent implementation for running iterations
+	cfg                 RunConfig
+	runID               string
+	stdin               io.Reader // user input (for interactive prompts)
+	stderr              io.Writer // progress output goes here
+	events              []Event   // all parsed events across all iterations
+	eventsFile          *os.File  // events.jsonl
+	rawFile             *os.File  // raw-output.log
+	sessionFile         *os.File  // session.log
+	startedAt           time.Time
+	iteration           int             // current iteration number
+	sessionText         strings.Builder // accumulates assistant text for session.log
+	iterAgent           agent.Agent     // agent implementation for running iterations
+	consecutiveTimeouts int             // reset to 0 on any successful iteration
 }
 
 // New creates a Runner with the given config. Progress output goes to stderr.
@@ -163,14 +165,39 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 
 		switch status {
 		case iterComplete:
+			r.consecutiveTimeouts = 0
 			result.Status = StatusCompleted
 			r.logf("agent signalled COMPLETE\n")
 			done = true
 		case iterContinue:
+			r.consecutiveTimeouts = 0
 			// next iteration
 		case iterInterrupted:
 			result.Status = StatusInterrupted
 			done = true
+		case iterTimedOut:
+			timeout := r.cfg.InactivityTimeout
+			if timeout == 0 {
+				timeout = defaultInactivityTimeout
+			}
+			r.consecutiveTimeouts++
+			if r.consecutiveTimeouts < 2 {
+				r.logf("inactivity timeout — retrying iteration\n")
+				r.sessionLogf("[%s] inactivity timeout — retrying iteration\n", r.timestamp())
+				r.sendEvent(Event{
+					Type:      EventInactivityTimeout,
+					ID:        fmt.Sprintf("timeout-%d", r.iteration),
+					Timestamp: time.Now().Format(time.RFC3339),
+				})
+				// Don't count the timed-out iteration.
+				result.Iterations--
+			} else {
+				result.Status = StatusStuck
+				result.Error = fmt.Sprintf("agent unresponsive for %s (2 consecutive timeouts)", timeout)
+				r.logf("%s\n", result.Error)
+				r.sessionLogf("[%s] %s\n", r.timestamp(), result.Error)
+				done = true
+			}
 		}
 	}
 
@@ -187,7 +214,11 @@ const (
 	iterContinue iterStatus = iota
 	iterComplete
 	iterInterrupted
+	iterTimedOut
 )
+
+// defaultInactivityTimeout is the default duration before the watchdog fires.
+const defaultInactivityTimeout = 5 * time.Minute
 
 // runIteration runs one invocation of the agent and processes its output.
 func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
@@ -200,9 +231,18 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 	defer cancel()
 
 	interrupted := false
+	timedOut := false
 	var mu sync.Mutex
 
-	// Monitor for SIGINT in the background.
+	// --- Inactivity watchdog ---
+	timeout := r.cfg.InactivityTimeout
+	if timeout == 0 {
+		timeout = defaultInactivityTimeout
+	}
+	watchdog := time.NewTimer(timeout)
+	defer watchdog.Stop()
+
+	// Monitor for SIGINT and watchdog in the background.
 	// The done channel ensures this goroutine exits when runIteration returns,
 	// since signal.Stop does not close sigCh and the goroutine would leak.
 	done := make(chan struct{})
@@ -215,6 +255,11 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 				interrupted = true
 				mu.Unlock()
 				cancel()
+			case <-watchdog.C:
+				mu.Lock()
+				timedOut = true
+				mu.Unlock()
+				cancel()
 			case <-done:
 				return
 			}
@@ -224,6 +269,9 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 	// Delegate to the agent. The onEvent callback persists, stores, and
 	// processes each event as it arrives.
 	assistantText, err := r.iterAgent.RunIteration(iterCtx, r.cfg.Prompt, func(ev Event) {
+		// Reset the inactivity watchdog on every event.
+		watchdog.Reset(timeout)
+
 		// Persist to events.jsonl.
 		if r.eventsFile != nil {
 			if data, merr := json.Marshal(ev); merr == nil {
@@ -243,6 +291,7 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 	// Check if we were interrupted (takes priority over other outcomes).
 	mu.Lock()
 	wasInterrupted := interrupted
+	wasTimedOut := timedOut
 	mu.Unlock()
 
 	if wasInterrupted {
@@ -250,6 +299,11 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 			return iterContinue, nil
 		}
 		return iterInterrupted, nil
+	}
+
+	// Check if the inactivity watchdog fired.
+	if wasTimedOut {
+		return iterTimedOut, nil
 	}
 
 	// If the parent context was cancelled (e.g. user quit the TUI),

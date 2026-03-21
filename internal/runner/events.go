@@ -24,6 +24,7 @@ const (
 	EventTurnEnd             = events.EventTurnEnd
 	EventAgentEnd            = events.EventAgentEnd
 	EventIteration           = events.EventIteration
+	EventInactivityTimeout   = events.EventInactivityTimeout
 	EventRateLimit           = events.EventRateLimit
 )
 

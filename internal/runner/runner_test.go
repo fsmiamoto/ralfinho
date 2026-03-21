@@ -657,7 +657,7 @@ func TestRunner_WriteMeta_Terminal_HasEndedAt(t *testing.T) {
 	r, runDir := newTestRunner(t)
 	r.startedAt = time.Now()
 
-	for _, status := range []Status{StatusCompleted, StatusFailed, StatusInterrupted, StatusMaxIterationsReached} {
+	for _, status := range []Status{StatusCompleted, StatusFailed, StatusInterrupted, StatusMaxIterationsReached, StatusStuck} {
 		r.writeMeta(status, 5)
 
 		data, err := os.ReadFile(runDir + "/meta.json")
@@ -1211,5 +1211,161 @@ func TestRun_StoresEventsInMemory(t *testing.T) {
 	}
 	if r.events[0].Type != events.EventSession {
 		t.Errorf("first in-memory event = %s, want %s", r.events[0].Type, events.EventSession)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Inactivity watchdog
+// ---------------------------------------------------------------------------
+
+// agentBehavior defines a single iteration's behavior for flexAgent.
+type agentBehavior = func(ctx context.Context, onEvent func(events.Event)) (string, error)
+
+// flexAgent allows per-call behavior specification for testing the watchdog.
+type flexAgent struct {
+	behaviors []agentBehavior
+	callCount int
+}
+
+func (f *flexAgent) RunIteration(ctx context.Context, _ string, onEvent func(events.Event)) (string, error) {
+	if f.callCount >= len(f.behaviors) {
+		return "", fmt.Errorf("flexAgent: no more behaviors (call %d)", f.callCount)
+	}
+	fn := f.behaviors[f.callCount]
+	f.callCount++
+	return fn(ctx, onEvent)
+}
+
+func TestRun_InactivityTimeout_RetriesOnce(t *testing.T) {
+	// Agent hangs on every call — never sends events.
+	hang := func(ctx context.Context, _ func(events.Event)) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	ch := make(chan Event, 100)
+	fa := &flexAgent{behaviors: []agentBehavior{hang, hang}}
+
+	r := New(RunConfig{
+		Agent:             "test",
+		Prompt:            "test",
+		InactivityTimeout: 100 * time.Millisecond,
+		RunsDir:           t.TempDir(),
+		EventChan:         ch,
+	})
+	r.iterAgent = fa
+	r.stderr = io.Discard
+
+	result := r.Run(context.Background())
+
+	if result.Status != StatusStuck {
+		t.Errorf("status = %s, want %s", result.Status, StatusStuck)
+	}
+	if fa.callCount != 2 {
+		t.Errorf("agent called %d times, want 2", fa.callCount)
+	}
+	if result.Error == "" {
+		t.Error("expected non-empty error message")
+	}
+	if !strings.Contains(result.Error, "2 consecutive timeouts") {
+		t.Errorf("error = %q, want it to contain '2 consecutive timeouts'", result.Error)
+	}
+	// The timed-out iteration is not counted, so 1 iteration is recorded
+	// (the second timeout doesn't decrement).
+	if result.Iterations != 1 {
+		t.Errorf("iterations = %d, want 1", result.Iterations)
+	}
+
+	// Verify an EventInactivityTimeout was sent to the TUI channel.
+	var gotTimeout bool
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type == EventInactivityTimeout {
+				gotTimeout = true
+			}
+		default:
+			goto drainDone
+		}
+	}
+drainDone:
+	if !gotTimeout {
+		t.Error("expected EventInactivityTimeout on TUI channel")
+	}
+}
+
+func TestRun_InactivityTimeout_ResetsOnEvent(t *testing.T) {
+	// Agent sends events at intervals shorter than the timeout — no timeout.
+	slowComplete := func(ctx context.Context, onEvent func(events.Event)) (string, error) {
+		for i := 0; i < 5; i++ {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(30 * time.Millisecond):
+				onEvent(events.Event{Type: events.EventMessageUpdate})
+			}
+		}
+		return completionMarker, nil
+	}
+	fa := &flexAgent{behaviors: []agentBehavior{slowComplete}}
+
+	r := New(RunConfig{
+		Agent:             "test",
+		Prompt:            "test",
+		InactivityTimeout: 200 * time.Millisecond,
+		RunsDir:           t.TempDir(),
+	})
+	r.iterAgent = fa
+	r.stderr = io.Discard
+
+	result := r.Run(context.Background())
+
+	if result.Status != StatusCompleted {
+		t.Errorf("status = %s, want %s", result.Status, StatusCompleted)
+	}
+	if result.Iterations != 1 {
+		t.Errorf("iterations = %d, want 1", result.Iterations)
+	}
+}
+
+func TestRun_InactivityTimeout_ResetsAfterSuccess(t *testing.T) {
+	hang := func(ctx context.Context, _ func(events.Event)) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	continueIter := func(_ context.Context, onEvent func(events.Event)) (string, error) {
+		onEvent(events.Event{Type: events.EventTurnEnd})
+		return "continuing", nil
+	}
+	complete := func(_ context.Context, onEvent func(events.Event)) (string, error) {
+		onEvent(events.Event{Type: events.EventTurnEnd})
+		return completionMarker, nil
+	}
+
+	// Sequence: hang → succeed(continue) → hang → succeed(complete)
+	// First hang triggers timeout+retry, succeed resets the counter,
+	// second hang triggers timeout+retry (proving the reset worked),
+	// final call completes.
+	fa := &flexAgent{behaviors: []agentBehavior{hang, continueIter, hang, complete}}
+
+	r := New(RunConfig{
+		Agent:             "test",
+		Prompt:            "test",
+		InactivityTimeout: 100 * time.Millisecond,
+		RunsDir:           t.TempDir(),
+	})
+	r.iterAgent = fa
+	r.stderr = io.Discard
+
+	result := r.Run(context.Background())
+
+	if result.Status != StatusCompleted {
+		t.Errorf("status = %s, want %s", result.Status, StatusCompleted)
+	}
+	if fa.callCount != 4 {
+		t.Errorf("agent called %d times, want 4", fa.callCount)
+	}
+	// Two successful iterations (timed-out ones are not counted).
+	if result.Iterations != 2 {
+		t.Errorf("iterations = %d, want 2", result.Iterations)
 	}
 }

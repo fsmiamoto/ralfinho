@@ -26,6 +26,10 @@ const (
 	// Synthetic events emitted by the runner (not from the agent).
 	EventIteration EventType = "iteration"
 
+	// EventInactivityTimeout is emitted when the inactivity watchdog fires
+	// and the runner retries the iteration.
+	EventInactivityTimeout EventType = "inactivity_timeout"
+
 	// EventRateLimit is emitted when the agent backend reports rate limiting.
 	EventRateLimit EventType = "rate_limit"
 )
