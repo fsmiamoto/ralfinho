@@ -176,3 +176,9 @@ var (
 
 	dismissHintStyle = lipgloss.NewStyle().Faint(true)
 )
+
+// Browser session list row styles.
+var (
+	browserRowStyle    = lipgloss.NewStyle().Foreground(colorBright)
+	browserSubtleStyle = lipgloss.NewStyle().Foreground(colorDim)
+)

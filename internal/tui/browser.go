@@ -1390,11 +1390,6 @@ func (m BrowserModel) previewPaneHeight() int {
 	return h
 }
 
-var (
-	browserRowStyle    = lipgloss.NewStyle().Foreground(colorBright)
-	browserSubtleStyle = lipgloss.NewStyle().Foreground(colorDim)
-)
-
 func browserPrimaryRow(summary viewer.RunSummary, width int) string {
 	date := browserCompactDate(summary)
 	prefix := shortID(summary.RunID)
