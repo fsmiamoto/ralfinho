@@ -627,6 +627,23 @@ func (m Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, headerBar, mainView, bottomRow, statusBar)
 }
 
+// scrollIndicator returns a vim-style scroll position string:
+// "" if everything fits, "Top", "Bot", or "N%".
+func scrollIndicator(scroll, visibleLines, totalLines int) string {
+	if totalLines <= visibleLines {
+		return ""
+	}
+	if scroll == 0 {
+		return "Top"
+	}
+	maxScroll := totalLines - visibleLines
+	if scroll >= maxScroll {
+		return "Bot"
+	}
+	pct := scroll * 100 / totalLines
+	return fmt.Sprintf("%d%%", pct)
+}
+
 func (m Model) renderMain() string {
 	w := m.width
 	ph := m.mainHeight()
@@ -668,8 +685,8 @@ func (m Model) renderMain() string {
 	displayContent := strings.Join(lines, "\n")
 
 	title := " LIVE "
-	if totalLines > visibleLines {
-		title = fmt.Sprintf(" LIVE [%d/%d] ", scroll+1, totalLines)
+	if ind := scrollIndicator(scroll, visibleLines, totalLines); ind != "" {
+		title = fmt.Sprintf(" LIVE %s ", ind)
 	}
 
 	border := focusedBorder
@@ -847,8 +864,8 @@ func (m Model) renderDetail() string {
 	displayContent := strings.Join(lines, "\n")
 
 	title := " DETAIL "
-	if totalLines > visibleLines {
-		title = fmt.Sprintf(" DETAIL [%d/%d] ", scroll+1, totalLines)
+	if ind := scrollIndicator(scroll, visibleLines, totalLines); ind != "" {
+		title = fmt.Sprintf(" DETAIL %s ", ind)
 	}
 
 	border := focusedBorder
@@ -1003,8 +1020,8 @@ func (m Model) renderPromptOverlay() string {
 
 	// Build title with scroll indicator when content is scrollable.
 	titleText := "Effective Prompt"
-	if totalLines > visibleLines {
-		titleText = fmt.Sprintf("Effective Prompt [%d/%d]", scroll+1, totalLines)
+	if ind := scrollIndicator(scroll, visibleLines, totalLines); ind != "" {
+		titleText = fmt.Sprintf("Effective Prompt %s", ind)
 	}
 	title := browserCardTitle.Render(titleText)
 

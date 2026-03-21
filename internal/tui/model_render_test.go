@@ -111,6 +111,32 @@ func TestRenderHeaderIncludesOptionalSegmentsWhenWideAndDropsThemWhenNarrow(t *t
 	}
 }
 
+func TestScrollIndicator(t *testing.T) {
+	tests := []struct {
+		name                          string
+		scroll, visible, total int
+		want                          string
+	}{
+		{"fits in view", 0, 10, 5, ""},
+		{"exact fit", 0, 10, 10, ""},
+		{"at top", 0, 10, 100, "Top"},
+		{"at bottom", 90, 10, 100, "Bot"},
+		{"middle", 50, 10, 100, "50%"},
+		{"near top", 5, 10, 100, "5%"},
+		{"near bottom", 85, 10, 100, "85%"},
+		{"one before bottom", 89, 10, 100, "89%"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := scrollIndicator(tt.scroll, tt.visible, tt.total)
+			if got != tt.want {
+				t.Fatalf("scrollIndicator(%d, %d, %d) = %q, want %q",
+					tt.scroll, tt.visible, tt.total, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRenderMainShowsScrollTitleAndVisibleContent(t *testing.T) {
 	m := Model{
 		width:  80,
@@ -123,7 +149,7 @@ func TestRenderMainShowsScrollTitleAndVisibleContent(t *testing.T) {
 	}
 
 	main := stripANSI(m.renderMain())
-	for _, want := range []string{"LIVE [3/6]", "line3", "line4", "line5", "line6"} {
+	for _, want := range []string{"LIVE Bot", "line3", "line4", "line5", "line6"} {
 		if !strings.Contains(main, want) {
 			t.Fatalf("renderMain() = %q, want substring %q", main, want)
 		}
@@ -496,8 +522,12 @@ func TestPromptOverlayShowsScrollIndicatorWhenScrollable(t *testing.T) {
 	}
 
 	view := stripANSI(m.renderPromptOverlay())
-	if !strings.Contains(view, "Effective Prompt [") {
-		t.Fatalf("renderPromptOverlay() = %q, want scroll indicator in title", view)
+	// Vim-style scroll indicator: should show a percentage or Top/Bot, not [N/M].
+	hasIndicator := strings.Contains(view, "Effective Prompt Top") ||
+		strings.Contains(view, "Effective Prompt Bot") ||
+		strings.Contains(view, "Effective Prompt ") && strings.Contains(view, "%")
+	if !hasIndicator {
+		t.Fatalf("renderPromptOverlay() = %q, want vim-style scroll indicator in title", view)
 	}
 }
 
@@ -712,8 +742,8 @@ func renderMainBaseline(m Model) string {
 	displayContent := strings.Join(lines, "\n")
 
 	title := " LIVE "
-	if len(allLines) > visibleLines {
-		title = fmt.Sprintf(" LIVE [%d/%d] ", scroll+1, len(allLines))
+	if ind := scrollIndicator(scroll, visibleLines, len(allLines)); ind != "" {
+		title = fmt.Sprintf(" LIVE %s ", ind)
 	}
 
 	border := focusedBorder

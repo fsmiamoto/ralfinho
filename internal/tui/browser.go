@@ -698,15 +698,14 @@ func (m BrowserModel) renderPreviewPane() string {
 		}
 		content = strings.Join(lines, "\n")
 
+		warn := ""
 		if browserHasArtifactIssues(*summary) {
-			title = " PREVIEW ⚠ "
+			warn = "⚠ "
 		}
-		if len(allLines) > visibleLines {
-			if browserHasArtifactIssues(*summary) {
-				title = fmt.Sprintf(" PREVIEW ⚠ [%d/%d] ", scroll+1, len(allLines))
-			} else {
-				title = fmt.Sprintf(" PREVIEW [%d/%d] ", scroll+1, len(allLines))
-			}
+		if ind := scrollIndicator(scroll, visibleLines, len(allLines)); ind != "" {
+			title = fmt.Sprintf(" PREVIEW %s%s ", warn, ind)
+		} else if warn != "" {
+			title = " PREVIEW ⚠ "
 		}
 	}
 

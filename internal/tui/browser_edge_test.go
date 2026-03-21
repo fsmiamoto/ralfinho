@@ -492,8 +492,8 @@ func TestBrowserRenderPreviewPaneClampsLocalScrollAndShowsWarningPaging(t *testi
 		m.previewScroll = 1 << 20
 
 		preview := stripANSI(m.renderPreviewPane())
-		if !strings.Contains(preview, "PREVIEW ⚠ [") {
-			t.Fatalf("renderPreviewPane() = %q, want warning title with paging", preview)
+		if !strings.Contains(preview, "PREVIEW ⚠ Bot") {
+			t.Fatalf("renderPreviewPane() = %q, want warning title clamped to bottom", preview)
 		}
 	})
 
@@ -503,8 +503,8 @@ func TestBrowserRenderPreviewPaneClampsLocalScrollAndShowsWarningPaging(t *testi
 		m.previewScroll = -5
 
 		preview := stripANSI(m.renderPreviewPane())
-		if !strings.Contains(preview, "PREVIEW ⚠ [1/") {
-			t.Fatalf("renderPreviewPane() = %q, want warning title clamped to the first page", preview)
+		if !strings.Contains(preview, "PREVIEW ⚠ Top") {
+			t.Fatalf("renderPreviewPane() = %q, want warning title clamped to top", preview)
 		}
 		if !strings.Contains(preview, "Run: warn-run") {
 			t.Fatalf("renderPreviewPane() = %q, want the first preview page content", preview)
