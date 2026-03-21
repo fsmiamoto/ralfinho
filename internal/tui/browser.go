@@ -829,7 +829,7 @@ func (m BrowserModel) browserStatusLeft() string {
 		return fmt.Sprintf("0/%d runs │ search/filter hid all matches", len(m.allSummaries))
 	}
 
-	left := fmt.Sprintf("%d/%d runs │ focus:%s │ %s", len(m.summaries), len(m.allSummaries), m.focusedPaneLabel(), browserSelectionStatus(m.summaries[m.cursor]))
+	left := fmt.Sprintf("%d/%d runs │ %s", len(m.summaries), len(m.allSummaries), shortID(m.summaries[m.cursor].RunID))
 	if browserHasArtifactIssues(m.summaries[m.cursor]) {
 		left += " │ artifact warnings"
 	}
@@ -1260,12 +1260,6 @@ func (m BrowserModel) currentSummary() *viewer.RunSummary {
 	return &m.summaries[m.cursor]
 }
 
-func (m BrowserModel) focusedPaneLabel() string {
-	if m.focusedPane == 1 {
-		return "preview"
-	}
-	return "sessions"
-}
 
 func (m BrowserModel) browserPaneHeight() int {
 	h := m.height - 4
@@ -1461,9 +1455,6 @@ func browserPreviewText(summary *viewer.RunSummary) string {
 	return strings.Join(lines, "\n")
 }
 
-func browserSelectionStatus(summary viewer.RunSummary) string {
-	return fmt.Sprintf("%s • %s", shortID(summary.RunID), browserPromptDescriptor(summary))
-}
 
 func browserPromptDescriptor(summary viewer.RunSummary) string {
 	label := strings.TrimSpace(summary.PromptLabel)
