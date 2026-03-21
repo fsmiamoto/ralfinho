@@ -296,7 +296,7 @@ func TestRenderStatusAdjustsHintsForWidthAndConfirmationMode(t *testing.T) {
 	t.Run("quit confirmation", func(t *testing.T) {
 		m := Model{width: 40, confirmQuit: true}
 		status := stripANSI(m.renderStatus())
-		if !strings.Contains(status, "Quit? Press y to confirm") {
+		if !strings.Contains(status, "Press q again to quit") {
 			t.Fatalf("renderStatus() = %q, want quit confirmation", status)
 		}
 	})

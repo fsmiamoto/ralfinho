@@ -251,9 +251,9 @@ func TestModelKeyHandlingDismissesOverlayAndManagesQuitConfirmation(t *testing.T
 	}
 
 	m, _ = updateModelWithCmd(t, Model{}, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'q'}}))
-	m, cmd = updateModelWithCmd(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'y'}}))
+	m, cmd = updateModelWithCmd(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'q'}}))
 	if !isQuitCmd(cmd) {
-		t.Fatal("q followed by y should return tea.Quit")
+		t.Fatal("q followed by q should return tea.Quit")
 	}
 }
 

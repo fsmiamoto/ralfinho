@@ -437,7 +437,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.confirmCtrlC && msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
-		if !m.confirmCtrlC && msg.String() == "y" {
+		if !m.confirmCtrlC && msg.String() == "q" {
 			return m, tea.Quit
 		}
 		m.confirmQuit = false
@@ -925,9 +925,9 @@ func (m Model) renderStatus() string {
 	if m.confirmQuit {
 		var bar string
 		if m.confirmCtrlC {
-			bar = "Press Ctrl+C again to quit, any other key to cancel"
+			bar = "Press Ctrl+C again to quit"
 		} else {
-			bar = "Quit? Press y to confirm, any other key to cancel"
+			bar = "Press q again to quit"
 		}
 		return statusBarStyle.Width(m.width).Render(bar)
 	}
