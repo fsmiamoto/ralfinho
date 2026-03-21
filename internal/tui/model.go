@@ -871,46 +871,49 @@ func (m Model) renderDetail() string {
 		}
 	}
 
-	if content == "" {
-		content = "(no detail)"
-	}
-
-	// Split into lines and apply scroll.
-	allLines := strings.Split(content, "\n")
-	totalLines := len(allLines)
 	visibleLines := ph - 1
-
-	maxScroll := totalLines - visibleLines
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-
-	scroll := m.detailScroll
-	if scroll > maxScroll {
-		scroll = maxScroll
-	}
-
-	start := scroll
-	end := start + visibleLines
-	if end > totalLines {
-		end = totalLines
-	}
-
-	var lines []string
-	for i := start; i < end; i++ {
-		lines = append(lines, clipToWidth(allLines[i], contentWidth))
-	}
-
-	// Pad.
-	for len(lines) < visibleLines {
-		lines = append(lines, "")
-	}
-
-	displayContent := strings.Join(lines, "\n")
-
+	var displayContent string
 	title := " DETAIL "
-	if ind := scrollIndicator(scroll, visibleLines, totalLines); ind != "" {
-		title = fmt.Sprintf(" DETAIL %s ", ind)
+
+	if content == "" {
+		hint := lipgloss.NewStyle().Foreground(colorDim).Render("Select an event to see details")
+		displayContent = lipgloss.Place(contentWidth, visibleLines, lipgloss.Center, lipgloss.Center, hint)
+	} else {
+		// Split into lines and apply scroll.
+		allLines := strings.Split(content, "\n")
+		totalLines := len(allLines)
+
+		maxScroll := totalLines - visibleLines
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+
+		scroll := m.detailScroll
+		if scroll > maxScroll {
+			scroll = maxScroll
+		}
+
+		start := scroll
+		end := start + visibleLines
+		if end > totalLines {
+			end = totalLines
+		}
+
+		var lines []string
+		for i := start; i < end; i++ {
+			lines = append(lines, clipToWidth(allLines[i], contentWidth))
+		}
+
+		// Pad.
+		for len(lines) < visibleLines {
+			lines = append(lines, "")
+		}
+
+		displayContent = strings.Join(lines, "\n")
+
+		if ind := scrollIndicator(scroll, visibleLines, totalLines); ind != "" {
+			title = fmt.Sprintf(" DETAIL %s ", ind)
+		}
 	}
 
 	border := focusedBorder
