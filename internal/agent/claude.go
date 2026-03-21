@@ -244,8 +244,10 @@ func (m *claudeEventMapper) handleLine(lineType string, raw []byte) {
 		m.handleUserEvent(raw)
 	case "result":
 		m.handleResult()
-	case "assistant", "rate_limit_event", "system":
-		// Skip — assistant is redundant with stream_events, others are
+	case "rate_limit_event":
+		m.handleRateLimitEvent(raw)
+	case "assistant", "system":
+		// Skip — assistant is redundant with stream_events, system is
 		// informational only.
 	}
 }
@@ -433,6 +435,25 @@ func (m *claudeEventMapper) mapMessageStop() {
 	if m.inMessage {
 		m.emitMessageEnd()
 	}
+}
+
+// handleRateLimitEvent parses a rate_limit_event line and emits an
+// EventRateLimit with the requests_remaining count.
+func (m *claudeEventMapper) handleRateLimitEvent(raw []byte) {
+	var rl struct {
+		RateLimit struct {
+			RequestsRemaining int `json:"requests_remaining"`
+		} `json:"rate_limit"`
+	}
+	if err := json.Unmarshal(raw, &rl); err != nil {
+		return
+	}
+	m.onEvent(events.Event{
+		Type: events.EventRateLimit,
+		RateLimit: &events.RateLimitInfo{
+			RequestsRemaining: rl.RateLimit.RequestsRemaining,
+		},
+	})
 }
 
 // ---------------------------------------------------------------------------

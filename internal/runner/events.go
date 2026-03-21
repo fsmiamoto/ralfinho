@@ -24,6 +24,7 @@ const (
 	EventTurnEnd             = events.EventTurnEnd
 	EventAgentEnd            = events.EventAgentEnd
 	EventIteration           = events.EventIteration
+	EventRateLimit           = events.EventRateLimit
 )
 
 type Event = events.Event
@@ -31,3 +32,4 @@ type MessageEnvelope = events.MessageEnvelope
 type AssistantEvent = events.AssistantEvent
 type ContentBlock = events.ContentBlock
 type ToolArgs = events.ToolArgs
+type RateLimitInfo = events.RateLimitInfo

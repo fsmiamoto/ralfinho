@@ -300,6 +300,23 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 		}
 		return []DisplayEvent{MakeIterationEvent(c.iteration)}
 
+	case runner.EventRateLimit:
+		summary := "Rate limit event"
+		if ev.RateLimit != nil {
+			if ev.RateLimit.RequestsRemaining == 0 {
+				summary = "Rate limited — waiting for capacity"
+			} else {
+				summary = fmt.Sprintf("Rate limit: %d requests remaining", ev.RateLimit.RequestsRemaining)
+			}
+		}
+		return []DisplayEvent{{
+			Type:      DisplayInfo,
+			Summary:   summary,
+			Detail:    summary,
+			Timestamp: now,
+			Iteration: c.iteration,
+		}}
+
 	default:
 		return nil
 	}

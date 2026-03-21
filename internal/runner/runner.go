@@ -353,6 +353,17 @@ func (r *Runner) handleEvent(ev *Event) {
 	case EventAgentEnd:
 		r.logf("  agent end\n")
 		r.sessionLogf("[%s] agent end\n", r.timestamp())
+
+	case EventRateLimit:
+		if ev.RateLimit != nil {
+			if ev.RateLimit.RequestsRemaining == 0 {
+				r.logf("  ⚠ rate limited — waiting for capacity\n")
+				r.sessionLogf("[%s] ⚠ rate limited — waiting for capacity\n", r.timestamp())
+			} else {
+				r.logf("  ⚠ rate limit: %d requests remaining\n", ev.RateLimit.RequestsRemaining)
+				r.sessionLogf("[%s] ⚠ rate limit: %d requests remaining\n", r.timestamp(), ev.RateLimit.RequestsRemaining)
+			}
+		}
 	}
 }
 

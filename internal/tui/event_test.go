@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fsmiamoto/ralfinho/internal/events"
 	"github.com/fsmiamoto/ralfinho/internal/runner"
 )
 
@@ -625,5 +626,63 @@ func TestJsonToText(t *testing.T) {
 				t.Errorf("jsonToText(%s) = %q, want %q", string(tt.raw), got, tt.want)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Rate limit event conversion
+// ---------------------------------------------------------------------------
+
+func TestEventConverter_RateLimit_WithRemaining(t *testing.T) {
+	c := NewEventConverter()
+	ev := &runner.Event{
+		Type: runner.EventRateLimit,
+		RateLimit: &events.RateLimitInfo{
+			RequestsRemaining: 42,
+		},
+	}
+	result := c.Convert(ev)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 display event, got %d", len(result))
+	}
+	if result[0].Type != DisplayInfo {
+		t.Errorf("expected DisplayInfo, got %q", result[0].Type)
+	}
+	wantSummary := "Rate limit: 42 requests remaining"
+	if result[0].Summary != wantSummary {
+		t.Errorf("summary = %q, want %q", result[0].Summary, wantSummary)
+	}
+}
+
+func TestEventConverter_RateLimit_ZeroRemaining(t *testing.T) {
+	c := NewEventConverter()
+	ev := &runner.Event{
+		Type: runner.EventRateLimit,
+		RateLimit: &events.RateLimitInfo{
+			RequestsRemaining: 0,
+		},
+	}
+	result := c.Convert(ev)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 display event, got %d", len(result))
+	}
+	wantSummary := "Rate limited — waiting for capacity"
+	if result[0].Summary != wantSummary {
+		t.Errorf("summary = %q, want %q", result[0].Summary, wantSummary)
+	}
+}
+
+func TestEventConverter_RateLimit_NilInfo(t *testing.T) {
+	c := NewEventConverter()
+	ev := &runner.Event{
+		Type: runner.EventRateLimit,
+	}
+	result := c.Convert(ev)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 display event, got %d", len(result))
+	}
+	wantSummary := "Rate limit event"
+	if result[0].Summary != wantSummary {
+		t.Errorf("summary = %q, want %q", result[0].Summary, wantSummary)
 	}
 }

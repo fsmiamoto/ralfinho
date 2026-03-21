@@ -25,6 +25,9 @@ const (
 
 	// Synthetic events emitted by the runner (not from the agent).
 	EventIteration EventType = "iteration"
+
+	// EventRateLimit is emitted when the agent backend reports rate limiting.
+	EventRateLimit EventType = "rate_limit"
 )
 
 // Event is the top-level envelope for every JSONL line emitted by an agent.
@@ -54,6 +57,14 @@ type Event struct {
 
 	// agent_end
 	Messages json.RawMessage `json:"messages,omitempty"`
+
+	// rate_limit
+	RateLimit *RateLimitInfo `json:"rateLimit,omitempty"`
+}
+
+// RateLimitInfo carries rate limit details from the agent backend.
+type RateLimitInfo struct {
+	RequestsRemaining int `json:"requests_remaining"`
 }
 
 // MessageEnvelope is used for message_start / message_end payloads.

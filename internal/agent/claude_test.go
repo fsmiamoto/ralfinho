@@ -680,24 +680,75 @@ func TestClaudeMapper_ResultEmitsTurnEnd(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 14: assistant and rate_limit_event lines are skipped
+// Test 14: assistant and system lines are skipped; rate_limit_event emits event
 // ---------------------------------------------------------------------------
 
-func TestClaudeMapper_SkipsAssistantAndRateLimitLines(t *testing.T) {
+func TestClaudeMapper_SkipsAssistantAndSystemLines(t *testing.T) {
 	onEvent, get := collectEvents()
 	m := newClaudeEventMapper(onEvent)
 
 	// Feed lines that should be ignored.
 	m.handleLine("assistant", []byte(
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello"}]}}`))
-	m.handleLine("rate_limit_event", []byte(
-		`{"type":"rate_limit_event","rate_limit":{"requests_remaining":100}}`))
 	m.handleLine("system", []byte(
 		`{"type":"system","session_id":"sess-1","model":"claude-sonnet-4-20250514"}`))
 
 	evts := get()
 	if len(evts) != 0 {
 		t.Errorf("expected 0 events for skipped line types, got %d", len(evts))
+	}
+}
+
+func TestClaudeMapper_RateLimitEvent(t *testing.T) {
+	onEvent, get := collectEvents()
+	m := newClaudeEventMapper(onEvent)
+
+	m.handleLine("rate_limit_event", []byte(
+		`{"type":"rate_limit_event","rate_limit":{"requests_remaining":42}}`))
+
+	evts := get()
+	if len(evts) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(evts))
+	}
+	if evts[0].Type != events.EventRateLimit {
+		t.Errorf("expected EventRateLimit, got %q", evts[0].Type)
+	}
+	if evts[0].RateLimit == nil {
+		t.Fatal("expected RateLimit to be non-nil")
+	}
+	if evts[0].RateLimit.RequestsRemaining != 42 {
+		t.Errorf("expected RequestsRemaining=42, got %d", evts[0].RateLimit.RequestsRemaining)
+	}
+}
+
+func TestClaudeMapper_RateLimitEvent_ZeroRemaining(t *testing.T) {
+	onEvent, get := collectEvents()
+	m := newClaudeEventMapper(onEvent)
+
+	m.handleLine("rate_limit_event", []byte(
+		`{"type":"rate_limit_event","rate_limit":{"requests_remaining":0}}`))
+
+	evts := get()
+	if len(evts) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(evts))
+	}
+	if evts[0].RateLimit == nil {
+		t.Fatal("expected RateLimit to be non-nil")
+	}
+	if evts[0].RateLimit.RequestsRemaining != 0 {
+		t.Errorf("expected RequestsRemaining=0, got %d", evts[0].RateLimit.RequestsRemaining)
+	}
+}
+
+func TestClaudeMapper_RateLimitEvent_MalformedJSON(t *testing.T) {
+	onEvent, get := collectEvents()
+	m := newClaudeEventMapper(onEvent)
+
+	m.handleLine("rate_limit_event", []byte(`not-valid-json`))
+
+	evts := get()
+	if len(evts) != 0 {
+		t.Errorf("expected 0 events for malformed rate_limit_event, got %d", len(evts))
 	}
 }
 
@@ -873,7 +924,7 @@ func realisticClaudeOutput(t *testing.T) []string {
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Let me run that."}]}}`,
 		// User tool_result.
 		fmt.Sprintf(`{"type":"user","message":{"content":[%s]}}`, toolResult),
-		// Rate limit event (should be skipped).
+		// Rate limit event (emits EventRateLimit).
 		`{"type":"rate_limit_event","rate_limit":{"requests_remaining":100}}`,
 		// Second assistant message.
 		`{"type":"stream_event","event":{"type":"message_start","message":{"role":"assistant","model":"claude-sonnet-4-20250514"}}}`,
@@ -920,6 +971,7 @@ func TestClaudeAgent_RunIteration_ParsesStreamJSON(t *testing.T) {
 		events.EventToolExecutionStart,  // Bash, tu-1
 		events.EventToolExecutionUpdate, // accumulated args
 		events.EventToolExecutionEnd,    // tool result
+		events.EventRateLimit,           // rate limit info
 		events.EventMessageStart,        // second message
 		events.EventMessageUpdate,       // "Done."
 		events.EventMessageEnd,          // message_stop
