@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -785,6 +786,11 @@ func renderMainBaseline(m Model) string {
 
 	displayContent := strings.Join(lines, "\n")
 
+	if len(m.blocks) == 0 {
+		msg := lipgloss.NewStyle().Foreground(colorDim).Render("Waiting for agent output…")
+		displayContent = lipgloss.Place(contentWidth, visibleLines, lipgloss.Center, lipgloss.Center, msg)
+	}
+
 	title := " LIVE "
 	if m.mainAutoScroll && len(allLines) > visibleLines {
 		title = " LIVE [AUTO] "
@@ -890,6 +896,23 @@ func TestRenderMainViewport_MatchesBaselineCompletedSession(t *testing.T) {
 		},
 	}
 	got := stripANSI(m.renderMain())
+	want := stripANSI(renderMainBaseline(m))
+	if got != want {
+		t.Fatalf("viewport mismatch with baseline:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRenderMain_EmptyState(t *testing.T) {
+	m := Model{
+		width:  80,
+		height: 30,
+		blocks: nil,
+	}
+	got := stripANSI(m.renderMain())
+	if !strings.Contains(got, "Waiting for agent output") {
+		t.Fatalf("empty LIVE pane should show waiting message, got:\n%s", got)
+	}
+	// Baseline should also match.
 	want := stripANSI(renderMainBaseline(m))
 	if got != want {
 		t.Fatalf("viewport mismatch with baseline:\ngot:\n%s\nwant:\n%s", got, want)

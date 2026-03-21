@@ -713,6 +713,11 @@ func (m Model) renderMain() string {
 
 	displayContent := strings.Join(lines, "\n")
 
+	if len(m.blocks) == 0 {
+		msg := lipgloss.NewStyle().Foreground(colorDim).Render("Waiting for agent output…")
+		displayContent = lipgloss.Place(contentWidth, visibleLines, lipgloss.Center, lipgloss.Center, msg)
+	}
+
 	title := " LIVE "
 	if m.mainAutoScroll && totalLines > visibleLines {
 		title = " LIVE [AUTO] "
