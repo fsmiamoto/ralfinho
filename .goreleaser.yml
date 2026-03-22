@@ -1,0 +1,47 @@
+version: 2
+
+project_name: ralfinho
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: ralfinho
+    main: ./cmd/ralfinho
+    binary: ralfinho
+    ldflags:
+      - -s -w -X github.com/fsmiamoto/ralfinho/internal/cli.Version={{.Version}}
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: ralfinho
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    files:
+      - none*
+
+checksum:
+  name_template: "checksums.txt"
+
+brews:
+  - name: ralfinho
+    repository:
+      owner: fsmiamoto
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    directory: Formula
+    homepage: "https://github.com/fsmiamoto/ralfinho"
+    description: "There are many Ralphs out there, but this one is mine."
+    install: |
+      bin.install "ralfinho"
+    test: |
+      system "#{bin}/ralfinho", "--version"
