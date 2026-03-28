@@ -86,6 +86,24 @@ Ralfinho supports multiple AI agent backends via the `--agent` flag:
 [pi](https://pi.dev) (default), [kiro](https://kiro.dev), and
 [claude-code](https://code.claude.com).
 
+## TUI Keybindings
+
+During a live run or when viewing a past session:
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Cycle focus between panes |
+| `j`/`k` | Scroll in focused pane |
+| `r` | Toggle raw / rendered detail view |
+| `p` | Show effective prompt |
+| `n` | Show memory files (NOTES.md / PROGRESS.md) |
+| `?` | Show keybinding help |
+| `q` | Quit (press twice to confirm) |
+
+The memory overlay (`n`) reads files from disk on each open, so it always
+shows the latest content written by the agent. Use `Tab` inside the overlay
+to switch between NOTES and PROGRESS.
+
 ## Run Artifacts
 
 Each run is saved to `.ralfinho/runs/<uuid>/`:
@@ -95,3 +113,10 @@ Each run is saved to `.ralfinho/runs/<uuid>/`:
 - `effective-prompt.md` — the prompt that was sent
 - `session.log` — human-readable timestamped log
 - `raw-output.log` — raw agent stdout
+- `NOTES.md` — agent's cross-iteration notes and decisions
+- `PROGRESS.md` — agent's task completion tracking
+
+NOTES.md and PROGRESS.md are the agent's session-scoped memory. They are
+created per-run (not in the project root), so multiple runs never clobber
+each other's state. When resuming a past session, memory files are
+automatically copied into the new run so the agent picks up where it left off.

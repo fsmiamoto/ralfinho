@@ -69,9 +69,17 @@ template receives:
 
 - `{{.PlanPath}}`
 - `{{.PlanContent}}`
+- `{{.NotesPath}}`
+- `{{.ProgressPath}}`
 
-The `default` template is also rendered through `text/template` for
-consistency, though the built-in default prompt does not use any variables.
+The `default` template receives:
+
+- `{{.NotesPath}}`
+- `{{.ProgressPath}}`
+
+`NotesPath` and `ProgressPath` resolve to the per-run memory file paths
+(e.g. `.ralfinho/runs/<uuid>/NOTES.md`). The built-in templates use these
+to tell the agent where to read and write its cross-iteration memory.
 
 The `--prompt <file>` CLI path is unchanged: it bypasses config templates and
 uses the prompt file contents verbatim.
