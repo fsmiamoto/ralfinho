@@ -1369,3 +1369,129 @@ func TestRun_InactivityTimeout_ResetsAfterSuccess(t *testing.T) {
 		t.Errorf("iterations = %d, want 2", result.Iterations)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// NewRunID and RunConfig.RunID
+// ---------------------------------------------------------------------------
+
+func TestNewRunID_IsValidUUID(t *testing.T) {
+	re := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	id := NewRunID()
+	if !re.MatchString(id) {
+		t.Errorf("NewRunID() = %q, does not match UUID v4 pattern", id)
+	}
+}
+
+func TestNew_UsesProvidedRunID(t *testing.T) {
+	r := New(RunConfig{
+		Agent:  "test",
+		Prompt: "test",
+		RunID:  "my-custom-run-id",
+	})
+	if r.runID != "my-custom-run-id" {
+		t.Errorf("runID = %q, want %q", r.runID, "my-custom-run-id")
+	}
+}
+
+func TestNew_GeneratesRunIDWhenEmpty(t *testing.T) {
+	r := New(RunConfig{
+		Agent:  "test",
+		Prompt: "test",
+	})
+	if r.runID == "" {
+		t.Error("runID should not be empty when RunID is not set")
+	}
+}
+
+func TestRun_UsesProvidedRunID(t *testing.T) {
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{text: completionMarker},
+		},
+	}
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:  "test",
+		Prompt: "check run id",
+		RunID:  "provided-run-id",
+	})
+
+	result := r.Run(context.Background())
+
+	if result.RunID != "provided-run-id" {
+		t.Errorf("result.RunID = %q, want %q", result.RunID, "provided-run-id")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Memory file creation
+// ---------------------------------------------------------------------------
+
+func TestRun_CreatesMemoryFiles(t *testing.T) {
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{text: completionMarker},
+		},
+	}
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:  "test",
+		Prompt: "check memory files",
+	})
+
+	r.Run(context.Background())
+
+	runDir := filepath.Join(r.cfg.RunsDir, r.runID)
+	for _, name := range []string{"NOTES.md", "PROGRESS.md"} {
+		path := filepath.Join(runDir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("expected %s to exist: %v", name, err)
+			continue
+		}
+		if len(data) != 0 {
+			t.Errorf("%s should be empty, got %q", name, string(data))
+		}
+	}
+}
+
+func TestInitMemoryFiles_SkipsExistingFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	runID := "skip-existing"
+	runDir := filepath.Join(tmpDir, runID)
+	if err := os.MkdirAll(runDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-create NOTES.md with content (simulating resume copy).
+	existing := "# Previous session notes"
+	if err := os.WriteFile(filepath.Join(runDir, "NOTES.md"), []byte(existing), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &Runner{
+		cfg: RunConfig{
+			RunsDir: tmpDir,
+		},
+		runID:  runID,
+		stderr: io.Discard,
+	}
+
+	r.initMemoryFiles()
+
+	// NOTES.md should keep its content.
+	data, err := os.ReadFile(filepath.Join(runDir, "NOTES.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != existing {
+		t.Errorf("NOTES.md = %q, want %q (should not be overwritten)", string(data), existing)
+	}
+
+	// PROGRESS.md should be created empty.
+	data, err = os.ReadFile(filepath.Join(runDir, "PROGRESS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Errorf("PROGRESS.md should be empty, got %q", string(data))
+	}
+}

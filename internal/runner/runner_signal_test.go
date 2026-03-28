@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -239,6 +240,99 @@ func TestRunner_RunIteration_LogsWarningWhenEventsJSONLWriteFails(t *testing.T) 
 	}
 	if !strings.Contains(stderr.String(), "warning: writing to events.jsonl:") {
 		t.Fatalf("stderr = %q, want events.jsonl warning", stderr.String())
+	}
+}
+
+func TestRunner_RunIteration_TUIMode_IgnoresSIGINT(t *testing.T) {
+	// In TUI mode (EventChan set), SIGINT should NOT trigger askContinue
+	// because stdin is owned by Bubble Tea. Verify by sending SIGINT to
+	// the process while a TUI-mode iteration is running — the runner
+	// should NOT call askContinue (which would block forever on stdin).
+	//
+	// We register a temporary SIGINT catcher so the signal doesn't kill
+	// the test process, then verify the runner returns iterContinue (the
+	// agent returned normally with no completion marker).
+	guardCh := make(chan os.Signal, 1)
+	signal.Notify(guardCh, os.Interrupt)
+	defer signal.Stop(guardCh)
+
+	agent := &cancelOnContextAgent{started: make(chan struct{})}
+	ch := make(chan Event, 100)
+	r := newTestRunnerWithIterAgent(t, agent, RunConfig{
+		Agent:     "test",
+		Prompt:    "tui mode sigint",
+		EventChan: ch,
+	})
+	r.stderr = io.Discard
+
+	resultCh := make(chan struct {
+		status iterStatus
+		err    error
+	}, 1)
+
+	go func() {
+		status, err := r.runIteration(context.Background())
+		resultCh <- struct {
+			status iterStatus
+			err    error
+		}{status: status, err: err}
+	}()
+
+	select {
+	case <-agent.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for fake agent to start")
+	}
+
+	// Send SIGINT — in TUI mode the runner does not register for it,
+	// so the agent's context should NOT be cancelled by the signal.
+	sendInterruptSignal(t)
+
+	// Drain our guard channel.
+	select {
+	case <-guardCh:
+	case <-time.After(time.Second):
+	}
+
+	// The agent is still blocked on ctx.Done(). Since the runner didn't
+	// catch SIGINT, we need to cancel via parent context. In production
+	// this happens when the TUI exits.
+	// Use a fresh context cancel to simulate TUI quit.
+	// But first, the agent's context should still be alive (not cancelled
+	// by SIGINT). We verify this by checking the agent is still running.
+	select {
+	case <-resultCh:
+		t.Fatal("runIteration returned early — SIGINT should have been ignored in TUI mode")
+	case <-time.After(100 * time.Millisecond):
+		// Good — the runner is still running, SIGINT was ignored.
+	}
+}
+
+func TestRun_TUIMode_ContinuesAfterIteration(t *testing.T) {
+	// Verify the iteration loop continues in TUI mode (the bug was that
+	// spurious SIGINTs from child process cleanup would cause askContinue
+	// to block on stdin, preventing iteration 2 from ever starting).
+	ch := make(chan Event, 100)
+	fa := &fakeAgent{
+		responses: []fakeResponse{
+			{text: "working..."},
+			{text: "still working..."},
+			{text: "all done " + completionMarker},
+		},
+	}
+	r := newTestRunnerWithAgent(t, fa, RunConfig{
+		Agent:     "test",
+		Prompt:    "multi-iteration tui",
+		EventChan: ch,
+	})
+
+	result := r.Run(context.Background())
+
+	if result.Status != StatusCompleted {
+		t.Errorf("status = %s, want %s", result.Status, StatusCompleted)
+	}
+	if result.Iterations != 3 {
+		t.Errorf("iterations = %d, want 3", result.Iterations)
 	}
 }
 

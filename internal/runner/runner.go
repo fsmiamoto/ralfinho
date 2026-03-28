@@ -43,6 +43,7 @@ type RunConfig struct {
 	PromptFile        string       // path when PromptSource is "prompt"
 	PlanFile          string       // path when PromptSource is "plan"
 	EventChan         chan<- Event // optional: send events to TUI
+	RunID             string       // optional: pre-generated run ID; if empty, a UUID is generated
 
 	// AgentExtraArgs holds extra arguments to append to the agent subprocess
 	// command line. Sourced from per-agent config file settings.
@@ -75,11 +76,19 @@ type Runner struct {
 	consecutiveTimeouts int             // reset to 0 on any successful iteration
 }
 
+// NewRunID generates a new UUID suitable for use as a run ID.
+func NewRunID() string { return newUUID() }
+
 // New creates a Runner with the given config. Progress output goes to stderr.
+// If cfg.RunID is set, it is used as the run ID; otherwise a new UUID is generated.
 func New(cfg RunConfig) *Runner {
+	runID := cfg.RunID
+	if runID == "" {
+		runID = newUUID()
+	}
 	return &Runner{
 		cfg:    cfg,
-		runID:  newUUID(),
+		runID:  runID,
 		stdin:  os.Stdin,
 		stderr: os.Stderr,
 	}
@@ -106,6 +115,9 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 
 	// Open persistence files.
 	r.openRunFiles()
+
+	// Create empty memory files so the TUI always has something to read.
+	r.initMemoryFiles()
 
 	// Write initial meta.json so external tools can see the run immediately.
 	r.writeMeta(StatusRunning, 0)
@@ -222,11 +234,6 @@ const defaultInactivityTimeout = 5 * time.Minute
 
 // runIteration runs one invocation of the agent and processes its output.
 func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
-	// Set up signal handling: catch SIGINT, cancel the agent's context.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT)
-	defer signal.Stop(sigCh)
-
 	iterCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -247,6 +254,24 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 	// since signal.Stop does not close sigCh and the goroutine would leak.
 	done := make(chan struct{})
 	defer close(done)
+
+	// In TUI mode, skip SIGINT registration entirely. The TUI owns stdin
+	// (Bubble Tea raw mode) and handles Ctrl+C as a key event with its own
+	// quit confirmation flow. User interruption reaches the runner via
+	// parent context cancellation when the TUI exits. Registering for
+	// SIGINT in TUI mode caused two problems:
+	//  1. askContinue() blocks forever trying to read from stdin that
+	//     Bubble Tea is consuming.
+	//  2. Spurious SIGINTs from child process group cleanup (e.g. pi
+	//     killing timed-out bash commands) would falsely interrupt the
+	//     iteration loop, preventing continuation to the next iteration.
+	var sigCh chan os.Signal
+	if r.cfg.EventChan == nil {
+		sigCh = make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT)
+		defer signal.Stop(sigCh)
+	}
+
 	go func() {
 		for {
 			select {
@@ -506,6 +531,22 @@ func (r *Runner) openRunFiles() {
 	if err != nil {
 		r.logf("warning: could not create session.log: %v\n", err)
 		r.sessionFile = nil
+	}
+}
+
+// initMemoryFiles creates empty NOTES.md and PROGRESS.md in the run directory
+// so the TUI overlay always has something to read, even before the agent writes.
+// Files that already exist (e.g. copied from a resumed session) are left untouched.
+func (r *Runner) initMemoryFiles() {
+	dir := filepath.Join(r.cfg.RunsDir, r.runID)
+	for _, name := range []string{"NOTES.md", "PROGRESS.md"} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err == nil {
+			continue // already exists (e.g. from resume copy)
+		}
+		if err := os.WriteFile(path, []byte(""), 0644); err != nil {
+			r.logf("warning: could not create %s: %v\n", name, err)
+		}
 	}
 }
 
