@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/fsmiamoto/ralfinho/internal/runner"
 )
 
 func stripANSI(s string) string {
@@ -312,7 +314,7 @@ func TestRenderStatusAdjustsHintsForWidthAndConfirmationMode(t *testing.T) {
 }
 
 func TestRenderHeaderShowsElapsedTimeForRunningModel(t *testing.T) {
-	m := NewModel(nil, "", "")
+	m := NewModel(nil, "", "", "", "")
 	m.width = 80
 	m.iteration = 3
 	m.modelName = "claude-opus-4-1"
@@ -341,9 +343,9 @@ func TestRenderHeaderHandlesVeryNarrowWidths(t *testing.T) {
 
 func TestRenderStatusCoversRunningRawAndTruncationBranches(t *testing.T) {
 	t.Run("running raw mode", func(t *testing.T) {
-		m := Model{width: 80, status: "Iteration #4", running: true, rawMode: true}
+		m := Model{width: 100, status: "Iteration #4", running: true, rawMode: true}
 		status := stripANSI(m.renderStatus())
-		for _, want := range []string{"Running │ Iteration #4", "r:raw", "q:quit"} {
+		for _, want := range []string{"Running │ Iteration #4", "r:raw", "n:memory", "q:quit"} {
 			if !strings.Contains(status, want) {
 				t.Fatalf("renderStatus() = %q, want substring %q", status, want)
 			}
@@ -573,6 +575,210 @@ func TestPromptOverlayShowsScrollIndicatorWhenScrollable(t *testing.T) {
 		strings.Contains(view, "Effective Prompt ") && strings.Contains(view, "%")
 	if !hasIndicator {
 		t.Fatalf("renderPromptOverlay() = %q, want vim-style scroll indicator in title", view)
+	}
+}
+
+func TestMemoryOverlayToggledByNKey(t *testing.T) {
+	m := Model{width: 80, height: 24}
+
+	// n key opens the overlay.
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'n'}}))
+	if !m.memoryOverlay {
+		t.Fatal("after n: memoryOverlay = false, want true")
+	}
+	if m.memoryOverlayTab != 0 {
+		t.Fatalf("after n: memoryOverlayTab = %d, want 0", m.memoryOverlayTab)
+	}
+	if m.memoryOverlayScroll != 0 {
+		t.Fatalf("after n: memoryOverlayScroll = %d, want 0", m.memoryOverlayScroll)
+	}
+
+	// n key again closes the overlay.
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'n'}}))
+	if m.memoryOverlay {
+		t.Fatal("after second n: memoryOverlay = true, want false")
+	}
+}
+
+func TestMemoryOverlayDismissedByEscAndQ(t *testing.T) {
+	for _, key := range []tea.Key{
+		{Type: tea.KeyEscape},
+		{Type: tea.KeyRunes, Runes: []rune{'q'}},
+	} {
+		m := Model{width: 80, height: 24, memoryOverlay: true}
+		m = updateModel(t, m, tea.KeyMsg(key))
+		if m.memoryOverlay {
+			t.Fatalf("after %q: memoryOverlay = true, want false", key)
+		}
+	}
+}
+
+func TestMemoryOverlayTabSwitching(t *testing.T) {
+	m := Model{width: 80, height: 24, memoryOverlay: true, memoryOverlayTab: 0}
+
+	// Tab switches to PROGRESS (tab 1).
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyTab}))
+	if m.memoryOverlayTab != 1 {
+		t.Fatalf("after Tab: memoryOverlayTab = %d, want 1", m.memoryOverlayTab)
+	}
+	// Scroll resets on tab switch.
+	if m.memoryOverlayScroll != 0 {
+		t.Fatalf("after Tab: memoryOverlayScroll = %d, want 0", m.memoryOverlayScroll)
+	}
+
+	// Tab again wraps back to NOTES (tab 0).
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyTab}))
+	if m.memoryOverlayTab != 0 {
+		t.Fatalf("after second Tab: memoryOverlayTab = %d, want 0", m.memoryOverlayTab)
+	}
+}
+
+func TestMemoryOverlayScrollsWithJAndK(t *testing.T) {
+	m := Model{width: 80, height: 24, memoryOverlay: true}
+
+	// j scrolls down.
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'j'}}))
+	if m.memoryOverlayScroll != 1 {
+		t.Fatalf("after j: memoryOverlayScroll = %d, want 1", m.memoryOverlayScroll)
+	}
+
+	// k scrolls back up.
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'k'}}))
+	if m.memoryOverlayScroll != 0 {
+		t.Fatalf("after k: memoryOverlayScroll = %d, want 0", m.memoryOverlayScroll)
+	}
+
+	// k at scroll=0 does not go negative.
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'k'}}))
+	if m.memoryOverlayScroll != 0 {
+		t.Fatalf("k at top: memoryOverlayScroll = %d, want 0", m.memoryOverlayScroll)
+	}
+	if !m.memoryOverlay {
+		t.Fatal("memoryOverlay = false after k, want still open")
+	}
+}
+
+func TestMemoryOverlayKeysDoNotLeakToMainModel(t *testing.T) {
+	m := Model{width: 80, height: 24, memoryOverlay: true, focusedPane: 0, mainScroll: 5}
+
+	// j in overlay should scroll the overlay, not the main view.
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'j'}}))
+	if m.mainScroll != 5 {
+		t.Fatalf("j in overlay changed mainScroll: got %d, want 5", m.mainScroll)
+	}
+	if m.memoryOverlayScroll != 1 {
+		t.Fatalf("j in overlay: memoryOverlayScroll = %d, want 1", m.memoryOverlayScroll)
+	}
+}
+
+func TestMemoryOverlayRendersFileContent(t *testing.T) {
+	// Create a temp file to simulate NOTES.md.
+	dir := t.TempDir()
+	notesPath := dir + "/NOTES.md"
+	os.WriteFile(notesPath, []byte("some notes here"), 0644)
+
+	m := Model{
+		width:         80,
+		height:        24,
+		memoryOverlay: true,
+		notesPath:     notesPath,
+		progressPath:  dir + "/PROGRESS.md", // does not exist
+	}
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Memory Files", "NOTES", "PROGRESS", "some notes here", "n/Esc:close", "Tab:switch", "j/k:scroll"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("memory overlay view missing %q, got:\n%s", want, view)
+		}
+	}
+	// Should not render the normal TUI panes.
+	if strings.Contains(view, "STREAM (") {
+		t.Fatal("memory overlay should replace the main layout")
+	}
+}
+
+func TestMemoryOverlayShowsMissingFileMessage(t *testing.T) {
+	m := Model{
+		width:         80,
+		height:        24,
+		memoryOverlay: true,
+		notesPath:     "/nonexistent/NOTES.md",
+	}
+
+	view := stripANSI(m.renderMemoryOverlay())
+	if !strings.Contains(view, "(file not found)") {
+		t.Fatalf("renderMemoryOverlay() missing '(file not found)', got:\n%s", view)
+	}
+}
+
+func TestMemoryOverlayShowsEmptyMessage(t *testing.T) {
+	dir := t.TempDir()
+	notesPath := dir + "/NOTES.md"
+	os.WriteFile(notesPath, []byte(""), 0644)
+
+	m := Model{
+		width:         80,
+		height:        24,
+		memoryOverlay: true,
+		notesPath:     notesPath,
+	}
+
+	view := stripANSI(m.renderMemoryOverlay())
+	if !strings.Contains(view, "(empty)") {
+		t.Fatalf("renderMemoryOverlay() missing '(empty)', got:\n%s", view)
+	}
+}
+
+func TestMemoryOverlayShowsNoPathMessage(t *testing.T) {
+	m := Model{
+		width:         80,
+		height:        24,
+		memoryOverlay: true,
+		// notesPath and progressPath are empty
+	}
+
+	view := stripANSI(m.renderMemoryOverlay())
+	if !strings.Contains(view, "(no path configured)") {
+		t.Fatalf("renderMemoryOverlay() missing '(no path configured)', got:\n%s", view)
+	}
+}
+
+func TestStatusBarContainsMemoryHint(t *testing.T) {
+	m := NewModel(nil, "", "", "", "")
+	m.width = 200 // wide enough to show all hints
+	m.height = 24
+	status := stripANSI(m.renderStatus())
+	if !strings.Contains(status, "n:memory") {
+		t.Fatalf("renderStatus() = %q, want n:memory hint", status)
+	}
+}
+
+func TestHelpOverlayContainsMemoryKeybinding(t *testing.T) {
+	m := Model{width: 80, height: 40, helpOverlay: true}
+	view := stripANSI(m.renderHelpOverlay())
+	if !strings.Contains(view, "n") || !strings.Contains(view, "memory") {
+		t.Fatalf("renderHelpOverlay() missing memory keybinding, got:\n%s", view)
+	}
+}
+
+func TestViewerModelSupportsMemoryOverlay(t *testing.T) {
+	dir := t.TempDir()
+	notesPath := dir + "/NOTES.md"
+	os.WriteFile(notesPath, []byte("viewer notes"), 0644)
+
+	m := NewViewerModel(nil, runner.RunMeta{}, "", notesPath, "")
+	m.width = 80
+	m.height = 24
+
+	// n key opens the overlay.
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'n'}}))
+	if !m.memoryOverlay {
+		t.Fatal("viewer model: after n: memoryOverlay = false, want true")
+	}
+
+	view := stripANSI(m.renderMemoryOverlay())
+	if !strings.Contains(view, "viewer notes") {
+		t.Fatalf("viewer model memory overlay missing content, got:\n%s", view)
 	}
 }
 

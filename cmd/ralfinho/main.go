@@ -198,7 +198,9 @@ func runAgentWithTUI(runCfg runner.RunConfig) (runner.RunResult, error) {
 		close(eventCh) // signal TUI that no more events are coming
 	}()
 
-	model := tui.NewModel(eventCh, runCfg.Agent, runCfg.Prompt)
+	notesPath := filepath.Join(runCfg.RunsDir, runCfg.RunID, "NOTES.md")
+	progressPath := filepath.Join(runCfg.RunsDir, runCfg.RunID, "PROGRESS.md")
+	model := tui.NewModel(eventCh, runCfg.Agent, runCfg.Prompt, notesPath, progressPath)
 	p := newTeaProgram(model, tea.WithAltScreen())
 
 	// Feed DoneMsg to the program when the runner finishes.
@@ -269,7 +271,9 @@ func openRunViewer(runsDir, runID string) error {
 		displayEvents = append(displayEvents, des...)
 	}
 
-	model := tui.NewViewerModel(displayEvents, saved.Meta, saved.Prompt)
+	viewNotesPath := filepath.Join(runsDir, runID, "NOTES.md")
+	viewProgressPath := filepath.Join(runsDir, runID, "PROGRESS.md")
+	model := tui.NewViewerModel(displayEvents, saved.Meta, saved.Prompt, viewNotesPath, viewProgressPath)
 	p := newTeaProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

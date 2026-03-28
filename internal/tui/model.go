@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -54,6 +55,12 @@ type Model struct {
 	promptOverlayScroll int   // scroll offset within the prompt overlay
 	helpOverlay        bool   // whether the help/keybinding overlay is shown
 
+	memoryOverlay       bool   // whether the memory overlay is shown
+	memoryOverlayTab    int    // 0=NOTES, 1=PROGRESS
+	memoryOverlayScroll int    // scroll offset within the memory overlay
+	notesPath           string // path to NOTES.md in the run directory
+	progressPath        string // path to PROGRESS.md in the run directory
+
 	// Main view (top pane) state.
 	blocks         []MainBlock // ordered content blocks for the main view
 	mainScroll     int         // scroll offset in main view (line-based)
@@ -69,7 +76,7 @@ type Model struct {
 }
 
 // NewModel creates a TUI model that reads runner events from ch.
-func NewModel(ch <-chan runner.Event, agentName string, promptText string) Model {
+func NewModel(ch <-chan runner.Event, agentName, promptText, notesPath, progressPath string) Model {
 	return Model{
 		paneRatio:      0.3,
 		running:        true,
@@ -82,12 +89,14 @@ func NewModel(ch <-chan runner.Event, agentName string, promptText string) Model
 		startTime:      time.Now(),
 		agentName:      agentName,
 		promptText:     promptText,
+		notesPath:      notesPath,
+		progressPath:   progressPath,
 	}
 }
 
 // NewViewerModel creates a read-only TUI model pre-loaded with events.
 // It is used for replaying a saved run — no event channel, not running.
-func NewViewerModel(events []DisplayEvent, meta runner.RunMeta, promptText string) Model {
+func NewViewerModel(events []DisplayEvent, meta runner.RunMeta, promptText, notesPath, progressPath string) Model {
 	agentName := meta.Agent
 	if agentName == "" {
 		agentName = "pi"
@@ -105,6 +114,8 @@ func NewViewerModel(events []DisplayEvent, meta runner.RunMeta, promptText strin
 		activeToolIdx:  -1,
 		agentName:      agentName,
 		promptText:     promptText,
+		notesPath:      notesPath,
+		progressPath:   progressPath,
 	}
 
 	// Pre-build blocks from loaded display events.
@@ -425,6 +436,24 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle memory overlay keys.
+	if m.memoryOverlay {
+		switch msg.String() {
+		case "j", "down":
+			m.memoryOverlayScroll++
+		case "k", "up":
+			if m.memoryOverlayScroll > 0 {
+				m.memoryOverlayScroll--
+			}
+		case "tab":
+			m.memoryOverlayTab = (m.memoryOverlayTab + 1) % 2
+			m.memoryOverlayScroll = 0
+		case "n", "esc", "q":
+			m.memoryOverlay = false
+		}
+		return m, nil
+	}
+
 	// Handle help overlay keys.
 	if m.helpOverlay {
 		switch msg.String() {
@@ -564,6 +593,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.rawMode = !m.rawMode
 
+	case "n":
+		m.memoryOverlay = true
+		m.memoryOverlayTab = 0
+		m.memoryOverlayScroll = 0
+
 	case "?":
 		m.helpOverlay = true
 	}
@@ -638,6 +672,10 @@ func (m Model) View() string {
 
 	if m.helpOverlay {
 		return m.renderHelpOverlay()
+	}
+
+	if m.memoryOverlay {
+		return m.renderMemoryOverlay()
 	}
 
 	if m.promptOverlay {
@@ -969,6 +1007,7 @@ func (m Model) renderStatus() string {
 		sep + statusKeyStyle.Render("Tab") + ":pane" +
 		sep + statusKeyStyle.Render("r") + ":" + modeStr +
 		sep + statusKeyStyle.Render("p") + ":prompt" +
+		sep + statusKeyStyle.Render("n") + ":memory" +
 		sep + statusKeyStyle.Render("?") + ":help" +
 		sep + statusKeyStyle.Render("q") + ":quit"
 
@@ -1051,6 +1090,7 @@ func (m Model) renderHelpOverlay() string {
 		"View\n" +
 		"  r             Toggle raw / rendered\n" +
 		"  p             Show effective prompt\n" +
+		"  n             Show memory files (NOTES / PROGRESS)\n" +
 		"\n" +
 		"Other\n" +
 		"  q             Quit (press again to confirm)\n" +
@@ -1117,6 +1157,85 @@ func (m Model) renderPromptOverlay() string {
 	hint := dismissHintStyle.Render("p/Esc:close  j/k:scroll")
 
 	content := title + "\n\n" + body + "\n\n" + hint
+	card := browserCardBorder.Width(maxWidth).Render(content)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, card,
+		lipgloss.WithWhitespaceChars(" "),
+	)
+}
+
+// renderMemoryOverlay renders the NOTES/PROGRESS memory files as a centered
+// modal card with tab switching and j/k scrolling.
+func (m Model) renderMemoryOverlay() string {
+	maxWidth := min(m.width*7/10, 80)
+	maxHeight := m.height * 6 / 10
+
+	innerWidth := maxWidth - 4 // 2 border + 2 padding
+	if innerWidth < 20 {
+		innerWidth = 20
+	}
+
+	// Read the file for the active tab.
+	tabNames := [2]string{"NOTES", "PROGRESS"}
+	paths := [2]string{m.notesPath, m.progressPath}
+	filePath := paths[m.memoryOverlayTab]
+
+	var body string
+	if filePath == "" {
+		body = lipgloss.NewStyle().Faint(true).Render("(no path configured)")
+	} else if data, err := os.ReadFile(filePath); err != nil {
+		body = lipgloss.NewStyle().Faint(true).Render("(file not found)")
+	} else if len(data) == 0 {
+		body = lipgloss.NewStyle().Faint(true).Render("(empty)")
+	} else {
+		body = WrapText(string(data), innerWidth)
+	}
+
+	// Split into lines and apply scroll.
+	lines := strings.Split(body, "\n")
+	totalLines := len(lines)
+
+	visibleLines := maxHeight - 8 // title + tab bar + blank lines + hint + borders
+	if visibleLines < 3 {
+		visibleLines = 3
+	}
+
+	scroll := m.memoryOverlayScroll
+	maxScroll := totalLines - visibleLines
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+
+	end := scroll + visibleLines
+	if end > totalLines {
+		end = totalLines
+	}
+	body = strings.Join(lines[scroll:end], "\n")
+
+	// Build tab bar.
+	var tabs []string
+	for i, name := range tabNames {
+		if i == m.memoryOverlayTab {
+			tabs = append(tabs, lipgloss.NewStyle().Bold(true).Foreground(colorBright).Render("["+name+"]"))
+		} else {
+			tabs = append(tabs, lipgloss.NewStyle().Faint(true).Render(" "+name+" "))
+		}
+	}
+	tabBar := strings.Join(tabs, "  ")
+
+	// Build title with scroll indicator.
+	titleText := "Memory Files"
+	if ind := scrollIndicator(scroll, visibleLines, totalLines); ind != "" {
+		titleText = fmt.Sprintf("Memory Files %s", ind)
+	}
+	title := browserCardTitle.Render(titleText)
+
+	hint := dismissHintStyle.Render("n/Esc:close  Tab:switch  j/k:scroll")
+
+	content := title + "\n\n" + tabBar + "\n\n" + body + "\n\n" + hint
 	card := browserCardBorder.Width(maxWidth).Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, card,
