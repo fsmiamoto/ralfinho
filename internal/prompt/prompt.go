@@ -9,14 +9,16 @@ import (
 
 // planData is the data passed into the plan/default templates.
 type planData struct {
-	PlanPath    string
-	PlanContent string
+	PlanPath     string
+	PlanContent  string
+	NotesPath    string
+	ProgressPath string
 }
 
 // BuildFromPlan reads planPath, renders either the built-in plan template or a
 // caller-provided override with the plan content, and returns the final prompt
 // string.
-func BuildFromPlan(planPath, templateOverride string) (string, error) {
+func BuildFromPlan(planPath, templateOverride, notesPath, progressPath string) (string, error) {
 	data, err := os.ReadFile(planPath)
 	if err != nil {
 		return "", fmt.Errorf("reading plan file %q: %w", planPath, err)
@@ -28,8 +30,10 @@ func BuildFromPlan(planPath, templateOverride string) (string, error) {
 	}
 
 	return renderTemplate(templateText, planData{
-		PlanPath:    planPath,
-		PlanContent: string(data),
+		PlanPath:     planPath,
+		PlanContent:  string(data),
+		NotesPath:    notesPath,
+		ProgressPath: progressPath,
 	})
 }
 
@@ -43,13 +47,17 @@ func BuildFromPromptFile(promptPath string) (string, error) {
 	return string(data), nil
 }
 
-// BuildDefault returns either the built-in default prompt or a caller-provided
-// template override rendered with an empty planData value.
-func BuildDefault(templateOverride string) (string, error) {
-	if templateOverride == "" {
-		return defaultPrompt, nil
+// BuildDefault returns the built-in default prompt or a caller-provided
+// template override, rendered with the given memory file paths.
+func BuildDefault(templateOverride, notesPath, progressPath string) (string, error) {
+	templateText := defaultPromptTemplate
+	if templateOverride != "" {
+		templateText = templateOverride
 	}
-	return renderTemplate(templateOverride, planData{})
+	return renderTemplate(templateText, planData{
+		NotesPath:    notesPath,
+		ProgressPath: progressPath,
+	})
 }
 
 func renderTemplate(templateText string, data planData) (string, error) {

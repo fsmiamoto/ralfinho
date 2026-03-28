@@ -452,9 +452,9 @@ func resolveResumePrompt(source viewer.ResumeSource, path string) (string, error
 	case viewer.ResumeSourcePromptFile:
 		return prompt.BuildFromPromptFile(path)
 	case viewer.ResumeSourcePlanFile:
-		return prompt.BuildFromPlan(path, configuredTemplates.Plan)
+		return prompt.BuildFromPlan(path, configuredTemplates.Plan, "", "")
 	case viewer.ResumeSourceDefault:
-		return prompt.BuildDefault(configuredTemplates.Default)
+		return prompt.BuildDefault(configuredTemplates.Default, "", "")
 	default:
 		return "", fmt.Errorf("unknown resume source %q", source)
 	}
@@ -546,9 +546,9 @@ func resolvePrompt(cfg *cli.Config) (string, error) {
 	case "prompt":
 		return prompt.BuildFromPromptFile(cfg.PromptFile)
 	case "plan":
-		return prompt.BuildFromPlan(cfg.PlanFile, configuredTemplates.Plan)
+		return prompt.BuildFromPlan(cfg.PlanFile, configuredTemplates.Plan, "", "")
 	case "default":
-		return prompt.BuildDefault(configuredTemplates.Default)
+		return prompt.BuildDefault(configuredTemplates.Default, "", "")
 	default:
 		return "", fmt.Errorf("unknown input mode %q", cfg.InputMode)
 	}
