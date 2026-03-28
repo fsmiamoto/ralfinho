@@ -105,8 +105,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Pre-generate the run ID so memory file paths can be embedded in the
+	// prompt before the runner starts.
+	runID := runner.NewRunID()
+	notesPath := filepath.Join(cfg.RunsDir, runID, "NOTES.md")
+	progressPath := filepath.Join(cfg.RunsDir, runID, "PROGRESS.md")
+
 	// Resolve the prompt text.
-	promptText, err := resolvePrompt(cfg)
+	promptText, err := resolvePrompt(cfg, notesPath, progressPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ralfinho: %v\n", err)
 		os.Exit(1)
@@ -118,14 +124,14 @@ func main() {
 	}
 
 	if cfg.NoTUI {
-		runPlain(cfg, promptText)
+		runPlain(cfg, promptText, runID)
 	} else {
-		runTUI(cfg, promptText)
+		runTUI(cfg, promptText, runID)
 	}
 }
 
 // runPlain runs the agent with plain stderr output (original behavior).
-func runPlain(cfg *cli.Config, promptText string) {
+func runPlain(cfg *cli.Config, promptText, runID string) {
 	r := runner.New(runner.RunConfig{
 		Agent:             cfg.Agent,
 		Prompt:            promptText,
@@ -136,6 +142,7 @@ func runPlain(cfg *cli.Config, promptText string) {
 		PromptFile:        cfg.PromptFile,
 		PlanFile:          cfg.PlanFile,
 		AgentExtraArgs:    extraArgsForAgent(cfg.Agent),
+		RunID:             runID,
 	})
 
 	result := r.Run(context.Background())
@@ -145,7 +152,7 @@ func runPlain(cfg *cli.Config, promptText string) {
 }
 
 // runTUI runs the agent with the Bubble Tea TUI.
-func runTUI(cfg *cli.Config, promptText string) {
+func runTUI(cfg *cli.Config, promptText, runID string) {
 	result, err := runAgentWithTUI(runner.RunConfig{
 		Agent:             cfg.Agent,
 		Prompt:            promptText,
@@ -156,6 +163,7 @@ func runTUI(cfg *cli.Config, promptText string) {
 		PromptFile:        cfg.PromptFile,
 		PlanFile:          cfg.PlanFile,
 		AgentExtraArgs:    extraArgsForAgent(cfg.Agent),
+		RunID:             runID,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ralfinho: %v\n", err)
@@ -402,7 +410,11 @@ func formatMetaDate(s string) string {
 // from a previous session. It blocks until the TUI-driven run finishes (or the
 // user quits early) and then returns so the browser loop can reopen.
 func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
-	promptText, err := resolveResumePrompt(result.ResumeSource, result.ResumePath)
+	runID := runner.NewRunID()
+	notesPath := filepath.Join(cfg.RunsDir, runID, "NOTES.md")
+	progressPath := filepath.Join(cfg.RunsDir, runID, "PROGRESS.md")
+
+	promptText, err := resolveResumePrompt(result.ResumeSource, result.ResumePath, notesPath, progressPath)
 	if err != nil {
 		return fmt.Errorf("resolving prompt: %w", err)
 	}
@@ -429,6 +441,7 @@ func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
 		PromptFile:        promptFile,
 		PlanFile:          planFile,
 		AgentExtraArgs:    extraArgsForAgent(agentName),
+		RunID:             runID,
 	})
 	if err != nil {
 		return err
@@ -441,7 +454,7 @@ func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
 // resolveResumePrompt reads the prompt text for a resumed run based on the
 // saved artifact source. It never tries to restore an in-progress backend
 // session; the result is always a fresh prompt string for a new run.
-func resolveResumePrompt(source viewer.ResumeSource, path string) (string, error) {
+func resolveResumePrompt(source viewer.ResumeSource, path, notesPath, progressPath string) (string, error) {
 	switch source {
 	case viewer.ResumeSourceEffectivePrompt:
 		data, err := os.ReadFile(path)
@@ -452,9 +465,9 @@ func resolveResumePrompt(source viewer.ResumeSource, path string) (string, error
 	case viewer.ResumeSourcePromptFile:
 		return prompt.BuildFromPromptFile(path)
 	case viewer.ResumeSourcePlanFile:
-		return prompt.BuildFromPlan(path, configuredTemplates.Plan, "", "")
+		return prompt.BuildFromPlan(path, configuredTemplates.Plan, notesPath, progressPath)
 	case viewer.ResumeSourceDefault:
-		return prompt.BuildDefault(configuredTemplates.Default, "", "")
+		return prompt.BuildDefault(configuredTemplates.Default, notesPath, progressPath)
 	default:
 		return "", fmt.Errorf("unknown resume source %q", source)
 	}
@@ -541,14 +554,14 @@ func extraArgsForAgent(agentName string) []string {
 }
 
 // resolvePrompt reads the prompt content based on the CLI config.
-func resolvePrompt(cfg *cli.Config) (string, error) {
+func resolvePrompt(cfg *cli.Config, notesPath, progressPath string) (string, error) {
 	switch cfg.InputMode {
 	case "prompt":
 		return prompt.BuildFromPromptFile(cfg.PromptFile)
 	case "plan":
-		return prompt.BuildFromPlan(cfg.PlanFile, configuredTemplates.Plan, "", "")
+		return prompt.BuildFromPlan(cfg.PlanFile, configuredTemplates.Plan, notesPath, progressPath)
 	case "default":
-		return prompt.BuildDefault(configuredTemplates.Default, "", "")
+		return prompt.BuildDefault(configuredTemplates.Default, notesPath, progressPath)
 	default:
 		return "", fmt.Errorf("unknown input mode %q", cfg.InputMode)
 	}

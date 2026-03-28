@@ -180,7 +180,7 @@ func TestResolvePrompt(t *testing.T) {
 		}
 
 		cfg := &cli.Config{InputMode: "prompt", PromptFile: path}
-		got, err := resolvePrompt(cfg)
+		got, err := resolvePrompt(cfg, "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -197,7 +197,7 @@ func TestResolvePrompt(t *testing.T) {
 		}
 
 		cfg := &cli.Config{InputMode: "plan", PlanFile: path}
-		got, err := resolvePrompt(cfg)
+		got, err := resolvePrompt(cfg, "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -211,7 +211,7 @@ func TestResolvePrompt(t *testing.T) {
 
 	t.Run("default mode returns built-in prompt", func(t *testing.T) {
 		cfg := &cli.Config{InputMode: "default"}
-		got, err := resolvePrompt(cfg)
+		got, err := resolvePrompt(cfg, "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -231,7 +231,7 @@ func TestResolvePrompt(t *testing.T) {
 		}
 
 		cfg := &cli.Config{InputMode: "plan", PlanFile: path}
-		got, err := resolvePrompt(cfg)
+		got, err := resolvePrompt(cfg, "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -248,7 +248,7 @@ func TestResolvePrompt(t *testing.T) {
 		configuredTemplates = config.ResolvedTemplates{Default: "Configured default prompt"}
 
 		cfg := &cli.Config{InputMode: "default"}
-		got, err := resolvePrompt(cfg)
+		got, err := resolvePrompt(cfg, "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -259,7 +259,7 @@ func TestResolvePrompt(t *testing.T) {
 
 	t.Run("unknown mode returns error", func(t *testing.T) {
 		cfg := &cli.Config{InputMode: "bogus"}
-		_, err := resolvePrompt(cfg)
+		_, err := resolvePrompt(cfg, "", "")
 		if err == nil {
 			t.Fatal("expected error for unknown input mode")
 		}
@@ -270,9 +270,63 @@ func TestResolvePrompt(t *testing.T) {
 
 	t.Run("prompt mode with missing file returns error", func(t *testing.T) {
 		cfg := &cli.Config{InputMode: "prompt", PromptFile: "/nonexistent/file.md"}
-		_, err := resolvePrompt(cfg)
+		_, err := resolvePrompt(cfg, "", "")
 		if err == nil {
 			t.Fatal("expected error for missing prompt file")
+		}
+	})
+
+	t.Run("plan mode embeds memory file paths", func(t *testing.T) {
+		clearConfiguredTemplates(t)
+		dir := t.TempDir()
+		path := filepath.Join(dir, "PLAN.md")
+		if err := os.WriteFile(path, []byte("# Plan"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg := &cli.Config{InputMode: "plan", PlanFile: path}
+		got, err := resolvePrompt(cfg, "/runs/abc/NOTES.md", "/runs/abc/PROGRESS.md")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(got, "/runs/abc/NOTES.md") {
+			t.Error("notes path missing from plan mode output")
+		}
+		if !strings.Contains(got, "/runs/abc/PROGRESS.md") {
+			t.Error("progress path missing from plan mode output")
+		}
+	})
+
+	t.Run("default mode embeds memory file paths", func(t *testing.T) {
+		clearConfiguredTemplates(t)
+		cfg := &cli.Config{InputMode: "default"}
+		got, err := resolvePrompt(cfg, "/runs/xyz/NOTES.md", "/runs/xyz/PROGRESS.md")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(got, "/runs/xyz/NOTES.md") {
+			t.Error("notes path missing from default mode output")
+		}
+		if !strings.Contains(got, "/runs/xyz/PROGRESS.md") {
+			t.Error("progress path missing from default mode output")
+		}
+	})
+
+	t.Run("prompt mode ignores memory paths (verbatim)", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "prompt.md")
+		content := "Custom prompt, no templates."
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg := &cli.Config{InputMode: "prompt", PromptFile: path}
+		got, err := resolvePrompt(cfg, "/runs/abc/NOTES.md", "/runs/abc/PROGRESS.md")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != content {
+			t.Errorf("prompt mode should return verbatim content, got %q", got)
 		}
 	})
 }
@@ -292,7 +346,7 @@ func TestResolveResumePrompt(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got, err := resolveResumePrompt(viewer.ResumeSourceEffectivePrompt, path)
+		got, err := resolveResumePrompt(viewer.ResumeSourceEffectivePrompt, path, "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -308,7 +362,7 @@ func TestResolveResumePrompt(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got, err := resolveResumePrompt(viewer.ResumeSourcePromptFile, path)
+		got, err := resolveResumePrompt(viewer.ResumeSourcePromptFile, path, "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -324,7 +378,7 @@ func TestResolveResumePrompt(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got, err := resolveResumePrompt(viewer.ResumeSourcePlanFile, path)
+		got, err := resolveResumePrompt(viewer.ResumeSourcePlanFile, path, "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -334,7 +388,7 @@ func TestResolveResumePrompt(t *testing.T) {
 	})
 
 	t.Run("default source", func(t *testing.T) {
-		got, err := resolveResumePrompt(viewer.ResumeSourceDefault, "")
+		got, err := resolveResumePrompt(viewer.ResumeSourceDefault, "", "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -353,7 +407,7 @@ func TestResolveResumePrompt(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got, err := resolveResumePrompt(viewer.ResumeSourcePlanFile, path)
+		got, err := resolveResumePrompt(viewer.ResumeSourcePlanFile, path, "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -366,7 +420,7 @@ func TestResolveResumePrompt(t *testing.T) {
 		clearConfiguredTemplates(t)
 		configuredTemplates = config.ResolvedTemplates{Default: "Resume default prompt"}
 
-		got, err := resolveResumePrompt(viewer.ResumeSourceDefault, "")
+		got, err := resolveResumePrompt(viewer.ResumeSourceDefault, "", "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -376,16 +430,50 @@ func TestResolveResumePrompt(t *testing.T) {
 	})
 
 	t.Run("unknown source returns error", func(t *testing.T) {
-		_, err := resolveResumePrompt("unknown_source", "")
+		_, err := resolveResumePrompt("unknown_source", "", "", "")
 		if err == nil {
 			t.Fatal("expected error for unknown resume source")
 		}
 	})
 
 	t.Run("missing effective prompt file returns error", func(t *testing.T) {
-		_, err := resolveResumePrompt(viewer.ResumeSourceEffectivePrompt, "/nonexistent/file.md")
+		_, err := resolveResumePrompt(viewer.ResumeSourceEffectivePrompt, "/nonexistent/file.md", "", "")
 		if err == nil {
 			t.Fatal("expected error for missing file")
+		}
+	})
+
+	t.Run("plan source embeds memory file paths", func(t *testing.T) {
+		clearConfiguredTemplates(t)
+		dir := t.TempDir()
+		path := filepath.Join(dir, "PLAN.md")
+		if err := os.WriteFile(path, []byte("# Plan"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := resolveResumePrompt(viewer.ResumeSourcePlanFile, path, "/runs/r1/NOTES.md", "/runs/r1/PROGRESS.md")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(got, "/runs/r1/NOTES.md") {
+			t.Error("notes path missing from resume plan output")
+		}
+		if !strings.Contains(got, "/runs/r1/PROGRESS.md") {
+			t.Error("progress path missing from resume plan output")
+		}
+	})
+
+	t.Run("default source embeds memory file paths", func(t *testing.T) {
+		clearConfiguredTemplates(t)
+		got, err := resolveResumePrompt(viewer.ResumeSourceDefault, "", "/runs/r2/NOTES.md", "/runs/r2/PROGRESS.md")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(got, "/runs/r2/NOTES.md") {
+			t.Error("notes path missing from resume default output")
+		}
+		if !strings.Contains(got, "/runs/r2/PROGRESS.md") {
+			t.Error("progress path missing from resume default output")
 		}
 	})
 }

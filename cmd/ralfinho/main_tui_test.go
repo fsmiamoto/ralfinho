@@ -304,7 +304,7 @@ JSONL
 	})
 
 	stdout, stderr := captureCommandOutput(t, func() {
-		runTUI(&cli.Config{Agent: "pi", RunsDir: t.TempDir()}, "finish immediately")
+		runTUI(&cli.Config{Agent: "pi", RunsDir: t.TempDir()}, "finish immediately", "")
 	})
 
 	if stdout != "" {

@@ -326,12 +326,12 @@ func TestCommandHelperProcess(t *testing.T) {
 		newTeaProgram = func(model tea.Model, _ ...tea.ProgramOption) teaProgram {
 			return newDoneAwareTeaProgramWithError(model, errors.New(os.Getenv("HELPER_TUI_ERROR")))
 		}
-		runTUI(&cli.Config{Agent: "pi", RunsDir: os.Getenv("HELPER_RUNS_DIR")}, "finish immediately")
+		runTUI(&cli.Config{Agent: "pi", RunsDir: os.Getenv("HELPER_RUNS_DIR")}, "finish immediately", "")
 	case "run-tui-interrupted":
 		newTeaProgram = func(model tea.Model, _ ...tea.ProgramOption) teaProgram {
 			return &scriptedTeaProgram{run: func() (tea.Model, error) { return model, nil }}
 		}
-		runTUI(&cli.Config{Agent: "pi", RunsDir: os.Getenv("HELPER_RUNS_DIR")}, "keep working")
+		runTUI(&cli.Config{Agent: "pi", RunsDir: os.Getenv("HELPER_RUNS_DIR")}, "keep working", "")
 	default:
 		t.Fatalf("unknown HELPER_ACTION %q", os.Getenv("HELPER_ACTION"))
 	}
