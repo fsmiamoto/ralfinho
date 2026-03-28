@@ -693,6 +693,139 @@ func TestExtraArgsForAgentUsesLoadedFileConfig(t *testing.T) {
 // isSubdir
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// copyFileIfExists
+// ---------------------------------------------------------------------------
+
+func TestCopyFileIfExistsCopiesContent(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.md")
+	dst := filepath.Join(dir, "dst.md")
+
+	content := "# Notes\nSome accumulated context."
+	if err := os.WriteFile(src, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	copyFileIfExists(src, dst)
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("dst file not created: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("copied content = %q, want %q", string(got), content)
+	}
+}
+
+func TestCopyFileIfExistsMissingSrcIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "dst.md")
+
+	copyFileIfExists(filepath.Join(dir, "nonexistent.md"), dst)
+
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatal("dst file should not exist when src is missing")
+	}
+}
+
+func TestCopyFileIfExistsEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.md")
+	dst := filepath.Join(dir, "dst.md")
+
+	if err := os.WriteFile(src, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	copyFileIfExists(src, dst)
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("dst file not created: %v", err)
+	}
+	if string(got) != "" {
+		t.Errorf("copied content = %q, want empty", string(got))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// resumeRunFromBrowser memory copy integration
+// ---------------------------------------------------------------------------
+
+func TestResumeMemoryCopyIntegration(t *testing.T) {
+	runsDir := t.TempDir()
+
+	// Simulate an old run directory with memory files.
+	oldRunID := "old-run-id-1234"
+	oldRunDir := filepath.Join(runsDir, oldRunID)
+	if err := os.MkdirAll(oldRunDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	oldNotes := "# Old Notes\nDecision: use approach A."
+	oldProgress := "# Old Progress\n- [x] Task 1\n- [ ] Task 2"
+	if err := os.WriteFile(filepath.Join(oldRunDir, "NOTES.md"), []byte(oldNotes), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldRunDir, "PROGRESS.md"), []byte(oldProgress), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the copy logic from resumeRunFromBrowser.
+	newRunID := "new-run-id-5678"
+	newRunDir := filepath.Join(runsDir, newRunID)
+	if err := os.MkdirAll(newRunDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	copyFileIfExists(filepath.Join(oldRunDir, "NOTES.md"), filepath.Join(newRunDir, "NOTES.md"))
+	copyFileIfExists(filepath.Join(oldRunDir, "PROGRESS.md"), filepath.Join(newRunDir, "PROGRESS.md"))
+
+	// Verify copied content matches source.
+	gotNotes, err := os.ReadFile(filepath.Join(newRunDir, "NOTES.md"))
+	if err != nil {
+		t.Fatalf("NOTES.md not copied: %v", err)
+	}
+	if string(gotNotes) != oldNotes {
+		t.Errorf("NOTES.md content = %q, want %q", string(gotNotes), oldNotes)
+	}
+	gotProgress, err := os.ReadFile(filepath.Join(newRunDir, "PROGRESS.md"))
+	if err != nil {
+		t.Fatalf("PROGRESS.md not copied: %v", err)
+	}
+	if string(gotProgress) != oldProgress {
+		t.Errorf("PROGRESS.md content = %q, want %q", string(gotProgress), oldProgress)
+	}
+}
+
+func TestResumeMemoryCopyMissingFiles(t *testing.T) {
+	runsDir := t.TempDir()
+
+	// Old run directory exists but has no memory files (old runs).
+	oldRunDir := filepath.Join(runsDir, "old-run")
+	if err := os.MkdirAll(oldRunDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	newRunDir := filepath.Join(runsDir, "new-run")
+	if err := os.MkdirAll(newRunDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	copyFileIfExists(filepath.Join(oldRunDir, "NOTES.md"), filepath.Join(newRunDir, "NOTES.md"))
+	copyFileIfExists(filepath.Join(oldRunDir, "PROGRESS.md"), filepath.Join(newRunDir, "PROGRESS.md"))
+
+	// No files should have been created in the new run dir.
+	if _, err := os.Stat(filepath.Join(newRunDir, "NOTES.md")); !os.IsNotExist(err) {
+		t.Error("NOTES.md should not exist when source is missing")
+	}
+	if _, err := os.Stat(filepath.Join(newRunDir, "PROGRESS.md")); !os.IsNotExist(err) {
+		t.Error("PROGRESS.md should not exist when source is missing")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// isSubdir
+// ---------------------------------------------------------------------------
+
 func TestIsSubdir(t *testing.T) {
 	tests := []struct {
 		name   string

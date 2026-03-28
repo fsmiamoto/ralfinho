@@ -415,8 +415,17 @@ func formatMetaDate(s string) string {
 // user quits early) and then returns so the browser loop can reopen.
 func resumeRunFromBrowser(cfg *cli.Config, result tui.BrowserResult) error {
 	runID := runner.NewRunID()
-	notesPath := filepath.Join(cfg.RunsDir, runID, "NOTES.md")
-	progressPath := filepath.Join(cfg.RunsDir, runID, "PROGRESS.md")
+	newRunDir := filepath.Join(cfg.RunsDir, runID)
+	notesPath := filepath.Join(newRunDir, "NOTES.md")
+	progressPath := filepath.Join(newRunDir, "PROGRESS.md")
+
+	// Copy memory files from the old run so the agent resumes with prior context.
+	if err := os.MkdirAll(newRunDir, 0755); err != nil {
+		return fmt.Errorf("creating run directory: %w", err)
+	}
+	oldRunDir := filepath.Join(cfg.RunsDir, result.RunID)
+	copyFileIfExists(filepath.Join(oldRunDir, "NOTES.md"), notesPath)
+	copyFileIfExists(filepath.Join(oldRunDir, "PROGRESS.md"), progressPath)
 
 	promptText, err := resolveResumePrompt(result.ResumeSource, result.ResumePath, notesPath, progressPath)
 	if err != nil {
@@ -588,4 +597,15 @@ func isTerminal() bool {
 // an interactive browser instead of printing plain text.
 func isViewInteractiveTerminal() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// copyFileIfExists copies src to dst if src exists. Missing source files are
+// silently ignored (old runs may not have memory files). Any other error is
+// also silently ignored — the runner will create empty files as a fallback.
+func copyFileIfExists(src, dst string) {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(dst, data, 0644)
 }
