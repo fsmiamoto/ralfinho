@@ -120,22 +120,24 @@ func (a *ClaudeAgent) RunIteration(ctx context.Context, prompt string, onEvent f
 	// Ensure proper lifecycle closure after scan loop.
 	mapper.finalize()
 
-	// Surface context cancellation. Check before waitErr because
-	// CommandContext SIGKILLs the process, making cmd.Wait() return
-	// "signal: killed" — that's expected, not an agent error.
+	// If the process exited successfully, return nil regardless of context
+	// state. The context may have been cancelled concurrently (e.g. SIGINT
+	// from child process group cleanup), but a clean exit means the
+	// iteration completed normally.
+	if waitErr == nil {
+		return mapper.assistantText(), nil
+	}
+
+	// The process failed. Surface context cancellation over raw exit error.
 	if ctx.Err() != nil {
 		return mapper.assistantText(), ctx.Err()
 	}
 
-	if waitErr != nil {
-		stderr := strings.TrimSpace(stderrBuf.String())
-		if stderr != "" {
-			return mapper.assistantText(), fmt.Errorf("claude: agent exited with error: %w\nstderr: %s", waitErr, stderr)
-		}
-		return mapper.assistantText(), fmt.Errorf("claude: agent exited with error: %w", waitErr)
+	stderr := strings.TrimSpace(stderrBuf.String())
+	if stderr != "" {
+		return mapper.assistantText(), fmt.Errorf("claude: agent exited with error: %w\nstderr: %s", waitErr, stderr)
 	}
-
-	return mapper.assistantText(), nil
+	return mapper.assistantText(), fmt.Errorf("claude: agent exited with error: %w", waitErr)
 }
 
 // ---------------------------------------------------------------------------

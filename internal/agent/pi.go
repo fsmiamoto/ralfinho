@@ -117,21 +117,26 @@ func (a *PiAgent) RunIteration(ctx context.Context, prompt string, onEvent func(
 		return assistantText.String(), fmt.Errorf("reading agent output: %w", err)
 	}
 
-	// Surface context cancellation so the runner knows the iteration was
-	// interrupted rather than completed normally. Check before waitErr
-	// because CommandContext SIGKILLs the process, making cmd.Wait()
-	// return "signal: killed" — that's expected, not an agent error.
+	// If the process exited successfully, return nil regardless of context
+	// state. The context may have been cancelled concurrently (e.g. SIGINT
+	// from child process group cleanup arriving after the subprocess already
+	// exited), but a clean exit means the iteration completed normally.
+	if waitErr == nil {
+		return assistantText.String(), nil
+	}
+
+	// The process failed. Surface context cancellation so the runner knows
+	// the iteration was interrupted rather than erroring. Check before
+	// waitErr because CommandContext SIGKILLs the process, making
+	// cmd.Wait() return "signal: killed" — that's expected, not an agent
+	// error.
 	if ctx.Err() != nil {
 		return assistantText.String(), ctx.Err()
 	}
 
-	if waitErr != nil {
-		stderr := strings.TrimSpace(stderrBuf.String())
-		if stderr != "" {
-			return assistantText.String(), fmt.Errorf("agent exited with error: %w\nstderr: %s", waitErr, stderr)
-		}
-		return assistantText.String(), fmt.Errorf("agent exited with error: %w", waitErr)
+	stderr := strings.TrimSpace(stderrBuf.String())
+	if stderr != "" {
+		return assistantText.String(), fmt.Errorf("agent exited with error: %w\nstderr: %s", waitErr, stderr)
 	}
-
-	return assistantText.String(), nil
+	return assistantText.String(), fmt.Errorf("agent exited with error: %w", waitErr)
 }

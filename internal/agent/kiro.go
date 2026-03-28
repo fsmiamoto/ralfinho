@@ -78,16 +78,19 @@ func (a *KiroAgent) RunIteration(ctx context.Context, prompt string, onEvent fun
 	// Ensure proper event lifecycle closure even on error/cancel.
 	mapper.finalize()
 
-	// Surface context cancellation so the runner knows the iteration was
-	// interrupted rather than completed normally.
+	// If the prompt completed successfully, return nil regardless of
+	// context state. A concurrent context cancellation that arrived after
+	// the prompt finished is spurious.
+	if err == nil {
+		return mapper.assistantText(), nil
+	}
+
+	// The prompt failed. Surface context cancellation so the runner knows
+	// the iteration was interrupted rather than erroring.
 	if ctx.Err() != nil {
 		return mapper.assistantText(), ctx.Err()
 	}
-	if err != nil {
-		return mapper.assistantText(), fmt.Errorf("kiro: %w", err)
-	}
-
-	return mapper.assistantText(), nil
+	return mapper.assistantText(), fmt.Errorf("kiro: %w", err)
 }
 
 // ---------------------------------------------------------------------------

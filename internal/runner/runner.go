@@ -313,7 +313,18 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 		r.handleEvent(&ev)
 	})
 
-	// Check if we were interrupted (takes priority over other outcomes).
+	// If the agent completed successfully, process the result normally.
+	// Concurrent signals (SIGINT from child process group cleanup,
+	// watchdog firing while the process was already exiting) are spurious
+	// and must not override a successful iteration.
+	if err == nil {
+		if strings.Contains(assistantText, completionMarker) {
+			return iterComplete, nil
+		}
+		return iterContinue, nil
+	}
+
+	// The iteration failed. Determine the cause.
 	mu.Lock()
 	wasInterrupted := interrupted
 	wasTimedOut := timedOut
@@ -333,22 +344,12 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 
 	// If the parent context was cancelled (e.g. user quit the TUI),
 	// treat it as an interruption rather than a failure.
-	if err != nil && ctx.Err() != nil {
+	if ctx.Err() != nil {
 		return iterInterrupted, nil
 	}
 
-	// Surface agent errors. The status value is ignored by the caller when
-	// err != nil, so we return the zero value (iterContinue).
-	if err != nil {
-		return iterContinue, err
-	}
-
-	// Check if the assistant text contains the completion marker.
-	if strings.Contains(assistantText, completionMarker) {
-		return iterComplete, nil
-	}
-
-	return iterContinue, nil
+	// Surface agent errors.
+	return iterContinue, err
 }
 
 // sendEvent sends an event to the TUI channel if configured (non-blocking).

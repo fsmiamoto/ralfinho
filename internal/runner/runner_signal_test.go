@@ -14,6 +14,26 @@ import (
 	"github.com/fsmiamoto/ralfinho/internal/events"
 )
 
+// sigintThenSuccessAgent sends SIGINT to the current process (simulating
+// child process group cleanup) and then returns success. Used to test that
+// a successful agent result is not overridden by a concurrent SIGINT.
+type sigintThenSuccessAgent struct {
+	text string
+}
+
+func (a *sigintThenSuccessAgent) RunIteration(_ context.Context, _ string, onEvent func(events.Event)) (string, error) {
+	onEvent(events.Event{Type: events.EventTurnEnd})
+
+	// Simulate child process group cleanup sending SIGINT.
+	proc, _ := os.FindProcess(os.Getpid())
+	_ = proc.Signal(os.Interrupt)
+
+	// Give the signal handler goroutine time to consume the signal.
+	time.Sleep(50 * time.Millisecond)
+
+	return a.text, nil
+}
+
 type cancelOnContextAgent struct {
 	started chan struct{}
 }
@@ -305,6 +325,39 @@ func TestRunner_RunIteration_TUIMode_IgnoresSIGINT(t *testing.T) {
 		t.Fatal("runIteration returned early — SIGINT should have been ignored in TUI mode")
 	case <-time.After(100 * time.Millisecond):
 		// Good — the runner is still running, SIGINT was ignored.
+	}
+}
+
+func TestRunner_RunIteration_SuccessNotOverriddenByConcurrentSIGINT(t *testing.T) {
+	// Regression test: when the agent subprocess exits and its process
+	// group cleanup sends a spurious SIGINT, the runner must still treat
+	// the iteration as successful. Before the fix, the SIGINT set
+	// wasInterrupted=true which took priority over the nil-error result,
+	// causing the run to end as "interrupted" and blocking on askContinue.
+	//
+	// Strategy: the fake agent sends SIGINT to our own process (simulating
+	// child process group cleanup), waits for the signal handler goroutine
+	// to consume it, then returns success. With the fix, err==nil is
+	// checked first and the signal flags are never consulted.
+	guardCh := make(chan os.Signal, 1)
+	signal.Notify(guardCh, os.Interrupt)
+	defer signal.Stop(guardCh)
+
+	agent := &sigintThenSuccessAgent{text: "working fine"}
+	r := newTestRunnerWithIterAgent(t, agent, RunConfig{
+		Agent:  "test",
+		Prompt: "sigint race",
+	})
+	// Provide "n" on stdin so the test doesn't hang if the fix regresses
+	// and askContinue is reached.
+	r.stdin = strings.NewReader("n\n")
+
+	status, err := r.runIteration(context.Background())
+	if err != nil {
+		t.Fatalf("runIteration() error = %v, want nil", err)
+	}
+	if status != iterContinue {
+		t.Fatalf("runIteration() status = %v, want %v (success must override concurrent SIGINT)", status, iterContinue)
 	}
 }
 
