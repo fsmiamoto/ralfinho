@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"time"
 )
 
 // Config holds the parsed CLI configuration.
@@ -17,10 +18,11 @@ type Config struct {
 	PlanFile   string // resolved path to plan file
 	InputMode  string // "prompt", "plan", or "default"
 
-	Agent         string // agent executable name (default: "pi")
-	MaxIterations int    // 0 = unlimited
-	NoTUI         bool   // disable TUI / browser TUI when viewing runs
-	RunsDir       string // directory for run storage
+	Agent             string         // agent executable name (default: "pi")
+	MaxIterations     int            // 0 = unlimited
+	InactivityTimeout *time.Duration // nil = not provided on CLI; 0 = disabled; >0 = custom
+	NoTUI             bool           // disable TUI / browser TUI when viewing runs
+	RunsDir           string         // directory for run storage
 
 	// Subcommand
 	ViewRunID   string // non-empty means "view <run-id>" replay mode
@@ -48,6 +50,10 @@ Flags:
   --plan <file>           Plan file for template-based prompt (conflicts with --prompt)
   -a, --agent <name>      Agent executable (default: "pi")
   -m, --max-iterations <n> Max iterations, 0=unlimited (default: 0)
+  --inactivity-timeout <d> Duration with no agent activity before the stuck-detection
+                          watchdog fires (e.g. "10m", "1h"). Pass "0" to disable the
+                          watchdog entirely — useful when an agent step is expected
+                          to be slow. Omit the flag to use the default (5m).
   --no-tui                Disable TUI, use plain stderr output
   --runs-dir <path>       Runs directory (default: ".ralfinho/runs")
   -v, --version           Show version
@@ -102,18 +108,19 @@ func Parse(args []string) (*Config, error) {
 	fs.SetOutput(io.Discard) // we handle output ourselves
 
 	var (
-		promptFlag   string
-		planFlag     string
-		agentFlag    string
-		agentShort   string
-		maxIter      string
-		maxShort     string
-		noTUI        bool
-		runsDir      string
-		help         bool
-		helpShort    bool
-		version      bool
-		versionShort bool
+		promptFlag     string
+		planFlag       string
+		agentFlag      string
+		agentShort     string
+		maxIter        string
+		maxShort       string
+		inactivityFlag string
+		noTUI          bool
+		runsDir        string
+		help           bool
+		helpShort      bool
+		version        bool
+		versionShort   bool
 	)
 
 	fs.StringVar(&promptFlag, "prompt", "", "")
@@ -122,6 +129,7 @@ func Parse(args []string) (*Config, error) {
 	fs.StringVar(&agentShort, "a", "", "")
 	fs.StringVar(&maxIter, "max-iterations", "", "")
 	fs.StringVar(&maxShort, "m", "", "")
+	fs.StringVar(&inactivityFlag, "inactivity-timeout", "", "")
 	fs.BoolVar(&noTUI, "no-tui", false, "")
 	fs.StringVar(&runsDir, "runs-dir", ".ralfinho/runs", "")
 	fs.BoolVar(&help, "help", false, "")
@@ -166,6 +174,21 @@ func Parse(args []string) (*Config, error) {
 		maxIterations = n
 	}
 
+	// Resolve inactivity timeout. Empty = flag omitted (caller falls back to
+	// config/default). Otherwise parse as a Go duration; "0" explicitly
+	// disables the watchdog.
+	var inactivityTimeout *time.Duration
+	if inactivityFlag != "" {
+		d, err := time.ParseDuration(inactivityFlag)
+		if err != nil {
+			return nil, fmt.Errorf("--inactivity-timeout %q: %w", inactivityFlag, err)
+		}
+		if d < 0 {
+			return nil, fmt.Errorf("--inactivity-timeout must be zero or positive, got %q", inactivityFlag)
+		}
+		inactivityTimeout = &d
+	}
+
 	// Conflict check.
 	if promptFlag != "" && planFlag != "" {
 		return nil, fmt.Errorf("--prompt and --plan are mutually exclusive")
@@ -184,10 +207,11 @@ func Parse(args []string) (*Config, error) {
 
 	// Determine input mode and file.
 	cfg := &Config{
-		Agent:         agent,
-		MaxIterations: maxIterations,
-		NoTUI:         noTUI,
-		RunsDir:       runsDir,
+		Agent:             agent,
+		MaxIterations:     maxIterations,
+		InactivityTimeout: inactivityTimeout,
+		NoTUI:             noTUI,
+		RunsDir:           runsDir,
 	}
 
 	switch {

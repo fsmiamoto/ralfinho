@@ -32,9 +32,11 @@ var fileCfg *config.FileConfig
 // the run starts so prompt-building helpers can use stable template content.
 var configuredTemplates config.ResolvedTemplates
 
-// inactivityTimeout holds the parsed inactivity timeout from the config file.
-// Zero means "not set" (the runner applies a default of 5 minutes).
-var inactivityTimeout time.Duration
+// inactivityTimeout holds the resolved inactivity timeout passed to the
+// runner. nil means "not set" (the runner applies a default of 5 minutes);
+// a non-nil zero disables the watchdog; a positive value sets a custom
+// timeout. CLI flag overrides config file overrides nil.
+var inactivityTimeout *time.Duration
 
 // teaProgram captures the Bubble Tea methods command flows need. Keeping
 // program construction behind a tiny interface makes the interactive command
@@ -71,10 +73,16 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ralfinho: config: %v\n", err)
 		os.Exit(1)
 	}
-	inactivityTimeout, err = config.ParseInactivityTimeout(fileCfg)
+	tomlInactivityTimeout, err := config.ParseInactivityTimeout(fileCfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ralfinho: config: %v\n", err)
 		os.Exit(1)
+	}
+
+	// CLI flag wins; config file fills in when the flag was omitted.
+	inactivityTimeout = cfg.InactivityTimeout
+	if inactivityTimeout == nil {
+		inactivityTimeout = tomlInactivityTimeout
 	}
 
 	// Apply file-based defaults for fields not explicitly set via CLI flags.

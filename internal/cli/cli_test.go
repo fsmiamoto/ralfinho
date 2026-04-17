@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestParseNoArgs_Default(t *testing.T) {
@@ -452,5 +453,55 @@ func TestResolveViewModePreservesConfig(t *testing.T) {
 	}
 	if cfg.Agent != before.Agent {
 		t.Errorf("Agent changed: got %q, want %q", cfg.Agent, before.Agent)
+	}
+}
+
+func TestParseInactivityTimeout_Omitted(t *testing.T) {
+	cfg, err := Parse([]string{"todo.md"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.InactivityTimeout != nil {
+		t.Errorf("InactivityTimeout = %v, want nil when flag omitted", cfg.InactivityTimeout)
+	}
+}
+
+func TestParseInactivityTimeout_Duration(t *testing.T) {
+	cfg, err := Parse([]string{"--inactivity-timeout", "10m", "todo.md"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.InactivityTimeout == nil {
+		t.Fatal("InactivityTimeout = nil, want *10m")
+	}
+	if *cfg.InactivityTimeout != 10*time.Minute {
+		t.Errorf("InactivityTimeout = %v, want %v", *cfg.InactivityTimeout, 10*time.Minute)
+	}
+}
+
+func TestParseInactivityTimeout_ZeroDisables(t *testing.T) {
+	cfg, err := Parse([]string{"--inactivity-timeout", "0", "todo.md"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.InactivityTimeout == nil {
+		t.Fatal("InactivityTimeout = nil, want *0 (watchdog disabled)")
+	}
+	if *cfg.InactivityTimeout != 0 {
+		t.Errorf("InactivityTimeout = %v, want 0", *cfg.InactivityTimeout)
+	}
+}
+
+func TestParseInactivityTimeout_Negative(t *testing.T) {
+	_, err := Parse([]string{"--inactivity-timeout", "-1m", "todo.md"})
+	if err == nil {
+		t.Fatal("expected error for negative duration")
+	}
+}
+
+func TestParseInactivityTimeout_Invalid(t *testing.T) {
+	_, err := Parse([]string{"--inactivity-timeout", "not-a-duration", "todo.md"})
+	if err == nil {
+		t.Fatal("expected error for invalid duration string")
 	}
 }

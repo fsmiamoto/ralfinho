@@ -35,9 +35,9 @@ const completionMarker = "<promise>COMPLETE</promise>"
 // RunConfig holds the parameters for a single run.
 type RunConfig struct {
 	Agent             string
-	Prompt            string        // the full prompt text to send each iteration
-	MaxIterations     int           // 0 = unlimited
-	InactivityTimeout time.Duration // 0 = use default (5m)
+	Prompt            string         // the full prompt text to send each iteration
+	MaxIterations     int            // 0 = unlimited
+	InactivityTimeout *time.Duration // nil = default (5m); 0 = disabled; >0 = custom
 	RunsDir           string
 	PromptSource      string       // "prompt", "plan", or "default"
 	PromptFile        string       // path when PromptSource is "prompt"
@@ -188,10 +188,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 			result.Status = StatusInterrupted
 			done = true
 		case iterTimedOut:
-			timeout := r.cfg.InactivityTimeout
-			if timeout == 0 {
-				timeout = defaultInactivityTimeout
-			}
+			timeout := resolveInactivityTimeout(r.cfg.InactivityTimeout)
 			r.consecutiveTimeouts++
 			if r.consecutiveTimeouts < 2 {
 				r.logf("inactivity timeout — retrying iteration\n")
@@ -232,6 +229,16 @@ const (
 // defaultInactivityTimeout is the default duration before the watchdog fires.
 const defaultInactivityTimeout = 5 * time.Minute
 
+// resolveInactivityTimeout returns the watchdog duration for a non-disabled
+// run. nil means "use default"; a positive pointer is used as-is. Callers are
+// expected to handle the non-nil zero "disabled" case before calling this.
+func resolveInactivityTimeout(cfg *time.Duration) time.Duration {
+	if cfg == nil {
+		return defaultInactivityTimeout
+	}
+	return *cfg
+}
+
 // runIteration runs one invocation of the agent and processes its output.
 func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 	iterCtx, cancel := context.WithCancel(ctx)
@@ -242,12 +249,20 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 	var mu sync.Mutex
 
 	// --- Inactivity watchdog ---
-	timeout := r.cfg.InactivityTimeout
-	if timeout == 0 {
-		timeout = defaultInactivityTimeout
+	// A non-nil zero pointer disables the watchdog entirely. Otherwise nil
+	// means "use default" and a positive value means "use that duration".
+	watchdogDisabled := r.cfg.InactivityTimeout != nil && *r.cfg.InactivityTimeout == 0
+	var (
+		watchdog   *time.Timer
+		watchdogCh <-chan time.Time
+		timeout    time.Duration
+	)
+	if !watchdogDisabled {
+		timeout = resolveInactivityTimeout(r.cfg.InactivityTimeout)
+		watchdog = time.NewTimer(timeout)
+		defer watchdog.Stop()
+		watchdogCh = watchdog.C
 	}
-	watchdog := time.NewTimer(timeout)
-	defer watchdog.Stop()
 
 	// Monitor for SIGINT and watchdog in the background.
 	// The done channel ensures this goroutine exits when runIteration returns,
@@ -280,7 +295,7 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 				interrupted = true
 				mu.Unlock()
 				cancel()
-			case <-watchdog.C:
+			case <-watchdogCh:
 				mu.Lock()
 				timedOut = true
 				mu.Unlock()
@@ -295,7 +310,9 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 	// processes each event as it arrives.
 	assistantText, err := r.iterAgent.RunIteration(iterCtx, r.cfg.Prompt, func(ev Event) {
 		// Reset the inactivity watchdog on every event.
-		watchdog.Reset(timeout)
+		if watchdog != nil {
+			watchdog.Reset(timeout)
+		}
 
 		// Persist to events.jsonl.
 		if r.eventsFile != nil {

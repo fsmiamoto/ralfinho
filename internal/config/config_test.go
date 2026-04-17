@@ -628,8 +628,28 @@ func TestParseInactivityTimeout_ValidDuration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if d != 3*time.Minute {
-		t.Errorf("got %v, want %v", d, 3*time.Minute)
+	if d == nil {
+		t.Fatal("expected non-nil duration")
+	}
+	if *d != 3*time.Minute {
+		t.Errorf("got %v, want %v", *d, 3*time.Minute)
+	}
+}
+
+func TestParseInactivityTimeout_ZeroDisables(t *testing.T) {
+	t.Parallel()
+
+	s := "0"
+	cfg := &FileConfig{InactivityTimeout: &s}
+	d, err := ParseInactivityTimeout(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if d == nil {
+		t.Fatal("expected non-nil duration for explicit zero (watchdog disabled)")
+	}
+	if *d != 0 {
+		t.Errorf("got %v, want 0", *d)
 	}
 }
 
@@ -640,8 +660,8 @@ func TestParseInactivityTimeout_NilConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if d != 0 {
-		t.Errorf("got %v, want 0", d)
+	if d != nil {
+		t.Errorf("got %v, want nil", *d)
 	}
 }
 
@@ -653,8 +673,8 @@ func TestParseInactivityTimeout_NilField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if d != 0 {
-		t.Errorf("got %v, want 0", d)
+	if d != nil {
+		t.Errorf("got %v, want nil", *d)
 	}
 }
 

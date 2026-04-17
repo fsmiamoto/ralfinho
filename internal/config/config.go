@@ -259,16 +259,18 @@ func ResolveTemplates(cfg *FileConfig) (ResolvedTemplates, error) {
 }
 
 // ParseInactivityTimeout parses the InactivityTimeout field from a merged
-// FileConfig into a time.Duration. Returns 0 when the field is nil (not set),
-// which the runner interprets as "use default". Returns an error if the value
-// is present but cannot be parsed as a Go duration string (e.g. "5m", "30s").
-func ParseInactivityTimeout(cfg *FileConfig) (time.Duration, error) {
+// FileConfig into a *time.Duration. Returns nil when the field is omitted
+// (the runner interprets nil as "use default"). A parsed zero value means
+// the watchdog is disabled; a positive value sets a custom timeout.
+// Returns an error if the value is present but cannot be parsed as a Go
+// duration string (e.g. "5m", "30s", "0").
+func ParseInactivityTimeout(cfg *FileConfig) (*time.Duration, error) {
 	if cfg == nil || cfg.InactivityTimeout == nil {
-		return 0, nil
+		return nil, nil
 	}
 	d, err := time.ParseDuration(*cfg.InactivityTimeout)
 	if err != nil {
-		return 0, fmt.Errorf("parsing inactivity-timeout %q: %w", *cfg.InactivityTimeout, err)
+		return nil, fmt.Errorf("parsing inactivity-timeout %q: %w", *cfg.InactivityTimeout, err)
 	}
-	return d, nil
+	return &d, nil
 }

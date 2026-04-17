@@ -29,6 +29,7 @@ agent.
 ```toml
 agent = "claude"
 max-iterations = 5
+inactivity-timeout = "10m"  # "0" disables the stuck-detection watchdog
 runs-dir = ".ralfinho/runs"
 no-tui = false
 
@@ -47,6 +48,10 @@ Supported top-level keys:
 
 - `agent` — default agent name (`pi`, `kiro`, or `claude`)
 - `max-iterations` — default iteration limit (`0` means unlimited)
+- `inactivity-timeout` — duration with no agent activity before the stuck-detection
+  watchdog fires (e.g. `"10m"`, `"1h"`). `"0"` disables the watchdog entirely —
+  useful when an agent step is expected to be slow. Omit the key to use the
+  built-in default (5m). Also available as a CLI flag: `--inactivity-timeout`.
 - `runs-dir` — default runs directory
 - `no-tui` — disable the TUI by default
 - `[templates]` — optional prompt template overrides

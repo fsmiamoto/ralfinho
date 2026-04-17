@@ -1245,10 +1245,11 @@ func TestRun_InactivityTimeout_RetriesOnce(t *testing.T) {
 	ch := make(chan Event, 100)
 	fa := &flexAgent{behaviors: []agentBehavior{hang, hang}}
 
+	timeout := 100 * time.Millisecond
 	r := New(RunConfig{
 		Agent:             "test",
 		Prompt:            "test",
-		InactivityTimeout: 100 * time.Millisecond,
+		InactivityTimeout: &timeout,
 		RunsDir:           t.TempDir(),
 		EventChan:         ch,
 	})
@@ -1308,10 +1309,11 @@ func TestRun_InactivityTimeout_ResetsOnEvent(t *testing.T) {
 	}
 	fa := &flexAgent{behaviors: []agentBehavior{slowComplete}}
 
+	timeout := 200 * time.Millisecond
 	r := New(RunConfig{
 		Agent:             "test",
 		Prompt:            "test",
-		InactivityTimeout: 200 * time.Millisecond,
+		InactivityTimeout: &timeout,
 		RunsDir:           t.TempDir(),
 	})
 	r.iterAgent = fa
@@ -1347,10 +1349,11 @@ func TestRun_InactivityTimeout_ResetsAfterSuccess(t *testing.T) {
 	// final call completes.
 	fa := &flexAgent{behaviors: []agentBehavior{hang, continueIter, hang, complete}}
 
+	timeout := 100 * time.Millisecond
 	r := New(RunConfig{
 		Agent:             "test",
 		Prompt:            "test",
-		InactivityTimeout: 100 * time.Millisecond,
+		InactivityTimeout: &timeout,
 		RunsDir:           t.TempDir(),
 	})
 	r.iterAgent = fa
@@ -1367,6 +1370,44 @@ func TestRun_InactivityTimeout_ResetsAfterSuccess(t *testing.T) {
 	// Two successful iterations (timed-out ones are not counted).
 	if result.Iterations != 2 {
 		t.Errorf("iterations = %d, want 2", result.Iterations)
+	}
+}
+
+func TestRun_InactivityTimeout_ZeroDisablesWatchdog(t *testing.T) {
+	// Agent stays silent longer than the default 5m would normally allow,
+	// then completes. With the watchdog disabled (zero pointer) the run
+	// should complete normally — no timeout, no retry.
+	silentThenComplete := func(ctx context.Context, onEvent func(events.Event)) (string, error) {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(150 * time.Millisecond):
+		}
+		onEvent(events.Event{Type: events.EventTurnEnd})
+		return completionMarker, nil
+	}
+	fa := &flexAgent{behaviors: []agentBehavior{silentThenComplete}}
+
+	disabled := time.Duration(0)
+	r := New(RunConfig{
+		Agent:             "test",
+		Prompt:            "test",
+		InactivityTimeout: &disabled,
+		RunsDir:           t.TempDir(),
+	})
+	r.iterAgent = fa
+	r.stderr = io.Discard
+
+	// Use a safety-net context so a regression doesn't hang CI forever.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := r.Run(ctx)
+
+	if result.Status != StatusCompleted {
+		t.Errorf("status = %s, want %s", result.Status, StatusCompleted)
+	}
+	if fa.callCount != 1 {
+		t.Errorf("agent called %d times, want 1 (no retry)", fa.callCount)
 	}
 }
 
