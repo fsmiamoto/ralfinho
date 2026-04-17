@@ -1108,31 +1108,38 @@ func (m Model) renderHelpOverlay() string {
 	)
 }
 
-// renderPromptOverlay renders the effective prompt text as a centered modal
-// card with j/k scrolling. It is dismissed by pressing p, Esc, or any
-// non-scroll key.
-func (m Model) renderPromptOverlay() string {
+// overlayContent holds the varying parts of a scrollable overlay card.
+type overlayContent struct {
+	body          string         // raw text (will be word-wrapped)
+	scroll        int            // current scroll offset
+	reservedLines int            // lines reserved for chrome (title, hint, borders, etc.)
+	title         string         // title label
+	titleStyle    lipgloss.Style // style for the title
+	hint          string         // hint text at the bottom
+	cardBorder    lipgloss.Style // card border style
+	extraHeader   string         // optional content between title and body (e.g., tab bar)
+}
+
+// renderOverlayCard renders a scrollable overlay card centered on screen.
+func (m Model) renderOverlayCard(oc overlayContent) string {
 	maxWidth := min(m.width*7/10, 80)
 	maxHeight := m.height * 6 / 10
 
-	// Word-wrap the prompt text to fit inside the card (accounting for border+padding).
 	innerWidth := maxWidth - 4 // 2 border + 2 padding
 	if innerWidth < 20 {
 		innerWidth = 20
 	}
-	body := WrapText(m.promptText, innerWidth)
+	body := WrapText(oc.body, innerWidth)
 
-	// Split into lines and apply scroll.
 	lines := strings.Split(body, "\n")
 	totalLines := len(lines)
 
-	// Reserve space for title, blank line, hint, borders.
-	visibleLines := maxHeight - 6
+	visibleLines := maxHeight - oc.reservedLines
 	if visibleLines < 3 {
 		visibleLines = 3
 	}
 
-	scroll := m.promptOverlayScroll
+	scroll := oc.scroll
 	maxScroll := totalLines - visibleLines
 	if maxScroll < 0 {
 		maxScroll = 0
@@ -1147,35 +1154,42 @@ func (m Model) renderPromptOverlay() string {
 	}
 	body = strings.Join(lines[scroll:end], "\n")
 
-	// Build title with scroll indicator when content is scrollable.
-	titleText := "Effective Prompt"
+	titleText := oc.title
 	if ind := scrollIndicator(scroll, visibleLines, totalLines); ind != "" {
-		titleText = fmt.Sprintf("Effective Prompt %s", ind)
+		titleText = fmt.Sprintf("%s %s", oc.title, ind)
 	}
-	title := browserCardTitle.Render(titleText)
+	title := oc.titleStyle.Render(titleText)
+	hint := dismissHintStyle.Render(oc.hint)
 
-	hint := dismissHintStyle.Render("p/Esc:close  j/k:scroll")
-
-	content := title + "\n\n" + body + "\n\n" + hint
-	card := browserCardBorder.Width(maxWidth).Render(content)
+	content := title + "\n\n"
+	if oc.extraHeader != "" {
+		content += oc.extraHeader + "\n\n"
+	}
+	content += body + "\n\n" + hint
+	card := oc.cardBorder.Width(maxWidth).Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, card,
 		lipgloss.WithWhitespaceChars(" "),
 	)
 }
 
+// renderPromptOverlay renders the effective prompt text as a centered modal
+// card with j/k scrolling.
+func (m Model) renderPromptOverlay() string {
+	return m.renderOverlayCard(overlayContent{
+		body:          m.promptText,
+		scroll:        m.promptOverlayScroll,
+		reservedLines: 6,
+		title:         "Effective Prompt",
+		titleStyle:    browserCardTitle,
+		hint:          "p/Esc:close  j/k:scroll",
+		cardBorder:    browserCardBorder,
+	})
+}
+
 // renderMemoryOverlay renders the NOTES/PROGRESS memory files as a centered
 // modal card with tab switching and j/k scrolling.
 func (m Model) renderMemoryOverlay() string {
-	maxWidth := min(m.width*7/10, 80)
-	maxHeight := m.height * 6 / 10
-
-	innerWidth := maxWidth - 4 // 2 border + 2 padding
-	if innerWidth < 20 {
-		innerWidth = 20
-	}
-
-	// Read the file for the active tab.
 	tabNames := [2]string{"NOTES", "PROGRESS"}
 	paths := [2]string{m.notesPath, m.progressPath}
 	filePath := paths[m.memoryOverlayTab]
@@ -1188,34 +1202,9 @@ func (m Model) renderMemoryOverlay() string {
 	} else if len(data) == 0 {
 		body = lipgloss.NewStyle().Faint(true).Render("(empty)")
 	} else {
-		body = WrapText(string(data), innerWidth)
+		body = string(data)
 	}
 
-	// Split into lines and apply scroll.
-	lines := strings.Split(body, "\n")
-	totalLines := len(lines)
-
-	visibleLines := maxHeight - 8 // title + tab bar + blank lines + hint + borders
-	if visibleLines < 3 {
-		visibleLines = 3
-	}
-
-	scroll := m.memoryOverlayScroll
-	maxScroll := totalLines - visibleLines
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if scroll > maxScroll {
-		scroll = maxScroll
-	}
-
-	end := scroll + visibleLines
-	if end > totalLines {
-		end = totalLines
-	}
-	body = strings.Join(lines[scroll:end], "\n")
-
-	// Build tab bar.
 	var tabs []string
 	for i, name := range tabNames {
 		if i == m.memoryOverlayTab {
@@ -1224,75 +1213,29 @@ func (m Model) renderMemoryOverlay() string {
 			tabs = append(tabs, lipgloss.NewStyle().Faint(true).Render(" "+name+" "))
 		}
 	}
-	tabBar := strings.Join(tabs, "  ")
 
-	// Build title with scroll indicator.
-	titleText := "Memory Files"
-	if ind := scrollIndicator(scroll, visibleLines, totalLines); ind != "" {
-		titleText = fmt.Sprintf("Memory Files %s", ind)
-	}
-	title := browserCardTitle.Render(titleText)
-
-	hint := dismissHintStyle.Render("n/Esc:close  Tab:switch  j/k:scroll")
-
-	content := title + "\n\n" + tabBar + "\n\n" + body + "\n\n" + hint
-	card := browserCardBorder.Width(maxWidth).Render(content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, card,
-		lipgloss.WithWhitespaceChars(" "),
-	)
+	return m.renderOverlayCard(overlayContent{
+		body:          body,
+		scroll:        m.memoryOverlayScroll,
+		reservedLines: 8,
+		title:         "Memory Files",
+		titleStyle:    browserCardTitle,
+		hint:          "n/Esc:close  Tab:switch  j/k:scroll",
+		cardBorder:    browserCardBorder,
+		extraHeader:   strings.Join(tabs, "  "),
+	})
 }
 
 // renderErrorOverlay renders the error text as a centered modal card.
 // Supports j/k scrolling; any other key dismisses.
 func (m Model) renderErrorOverlay() string {
-	maxWidth := min(m.width*7/10, 80)
-	maxHeight := m.height * 6 / 10
-
-	// Word-wrap the error text to fit inside the card (accounting for border+padding).
-	innerWidth := maxWidth - 4 // 2 border + 2 padding
-	if innerWidth < 20 {
-		innerWidth = 20
-	}
-	body := WrapText(m.errorOverlay, innerWidth)
-
-	// Scroll through body lines instead of truncating.
-	lines := strings.Split(body, "\n")
-	totalLines := len(lines)
-
-	visibleLines := maxHeight - 6 // title + blank + hint + borders
-	if visibleLines < 3 {
-		visibleLines = 3
-	}
-
-	scroll := m.errorOverlayScroll
-	maxScroll := totalLines - visibleLines
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if scroll > maxScroll {
-		scroll = maxScroll
-	}
-
-	end := scroll + visibleLines
-	if end > totalLines {
-		end = totalLines
-	}
-	body = strings.Join(lines[scroll:end], "\n")
-
-	// Build title with scroll indicator when content is scrollable.
-	titleText := "Error"
-	if ind := scrollIndicator(scroll, visibleLines, totalLines); ind != "" {
-		titleText = fmt.Sprintf("Error %s", ind)
-	}
-	title := browserCardTitleWarning.Render(titleText)
-
-	hint := dismissHintStyle.Render("j/k:scroll  any key:dismiss")
-
-	content := title + "\n\n" + body + "\n\n" + hint
-	card := browserCardBorderWarning.Width(maxWidth).Render(content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, card,
-		lipgloss.WithWhitespaceChars(" "),
-	)
+	return m.renderOverlayCard(overlayContent{
+		body:          m.errorOverlay,
+		scroll:        m.errorOverlayScroll,
+		reservedLines: 6,
+		title:         "Error",
+		titleStyle:    browserCardTitleWarning,
+		hint:          "j/k:scroll  any key:dismiss",
+		cardBorder:    browserCardBorderWarning,
+	})
 }
