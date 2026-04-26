@@ -30,6 +30,11 @@ const (
 	// and the runner retries the iteration.
 	EventInactivityTimeout EventType = "inactivity_timeout"
 
+	// EventIterationRestart is emitted when the user requests a restart of
+	// the current iteration. The iteration counter is not incremented; the
+	// iteration is redone with the latest prompt and reminders.
+	EventIterationRestart EventType = "iteration_restart"
+
 	// EventRateLimit is emitted when the agent backend reports rate limiting.
 	EventRateLimit EventType = "rate_limit"
 )

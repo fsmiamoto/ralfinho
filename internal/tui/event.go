@@ -309,6 +309,19 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			Iteration: c.iteration,
 		}}
 
+	case runner.EventIterationRestart:
+		// ID format is "restart-<iteration>-<attempt>".
+		iter, attempt := 0, 0
+		_, _ = fmt.Sscanf(ev.ID, "restart-%d-%d", &iter, &attempt)
+		text := fmt.Sprintf("Iteration %d restarted (attempt %d)", iter, attempt)
+		return []DisplayEvent{{
+			Type:      DisplayInfo,
+			Summary:   text,
+			Detail:    text,
+			Timestamp: now,
+			Iteration: c.iteration,
+		}}
+
 	case runner.EventRateLimit:
 		summary := "Rate limit event"
 		if ev.RateLimit != nil {

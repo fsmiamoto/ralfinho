@@ -664,6 +664,40 @@ func TestEventConverter_InactivityTimeout(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Iteration restart event conversion
+// ---------------------------------------------------------------------------
+
+func TestEventConverter_IterationRestart(t *testing.T) {
+	c := NewEventConverter()
+	// Set iteration context first.
+	c.Convert(&runner.Event{Type: runner.EventIteration, ID: "iteration-3"})
+
+	ev := &runner.Event{
+		Type:      runner.EventIterationRestart,
+		ID:        "restart-3-2",
+		Timestamp: "2026-03-21T12:00:00Z",
+	}
+	result := c.Convert(ev)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 display event, got %d", len(result))
+	}
+	de := result[0]
+	if de.Type != DisplayInfo {
+		t.Errorf("type = %q, want %q", de.Type, DisplayInfo)
+	}
+	wantSummary := "Iteration 3 restarted (attempt 2)"
+	if de.Summary != wantSummary {
+		t.Errorf("summary = %q, want %q", de.Summary, wantSummary)
+	}
+	if de.Detail != wantSummary {
+		t.Errorf("detail = %q, want %q", de.Detail, wantSummary)
+	}
+	if de.Iteration != 3 {
+		t.Errorf("iteration = %d, want 3", de.Iteration)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Rate limit event conversion
 // ---------------------------------------------------------------------------
 

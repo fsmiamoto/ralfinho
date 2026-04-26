@@ -1726,3 +1726,163 @@ func TestRun_ControlChan_SetTimeoutUpdatesState(t *testing.T) {
 		t.Errorf("status = %s, want %s", result.Status, StatusCompleted)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Iteration restart (Task 2)
+// ---------------------------------------------------------------------------
+
+// TestRun_ControlChan_RequestRestart_RedoesIteration verifies that sending
+// ControlRequestRestart cancels the in-flight iteration, the runner reruns
+// the same iteration, and an EventIterationRestart is emitted.
+func TestRun_ControlChan_RequestRestart_RedoesIteration(t *testing.T) {
+	started := make(chan int, 4)
+	hangThenCancel := func(ctx context.Context, _ func(events.Event)) (string, error) {
+		started <- 1
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	complete := func(_ context.Context, _ func(events.Event)) (string, error) {
+		started <- 2
+		return completionMarker, nil
+	}
+	fa := &flexAgent{behaviors: []agentBehavior{hangThenCancel, complete}}
+
+	eventCh := make(chan Event, 64)
+	controlCh := make(chan ControlMsg, 4)
+	r := New(RunConfig{
+		Agent:       "test",
+		Prompt:      "test",
+		RunsDir:     t.TempDir(),
+		EventChan:   eventCh,
+		ControlChan: controlCh,
+	})
+	r.iterAgent = fa
+	r.stderr = io.Discard
+
+	runDone := make(chan RunResult, 1)
+	go func() {
+		runDone <- r.Run(context.Background())
+	}()
+
+	// Wait for the first agent call to reach its blocking point, then ask
+	// for a restart.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first agent call did not start in time")
+	}
+	controlCh <- ControlMsg{Kind: ControlRequestRestart}
+
+	result := <-runDone
+
+	if result.Status != StatusCompleted {
+		t.Errorf("status = %s, want %s", result.Status, StatusCompleted)
+	}
+	if result.Iterations != 1 {
+		t.Errorf("iterations = %d, want 1 (restart should not increment)", result.Iterations)
+	}
+	if fa.callCount != 2 {
+		t.Errorf("agent called %d times, want 2 (one cancelled + one completing)", fa.callCount)
+	}
+
+	// Drain events and look for the restart event.
+	var gotRestart bool
+	for {
+		select {
+		case ev := <-eventCh:
+			if ev.Type == EventIterationRestart {
+				gotRestart = true
+				if !strings.HasPrefix(ev.ID, "restart-1-") {
+					t.Errorf("restart event ID = %q, want prefix %q", ev.ID, "restart-1-")
+				}
+			}
+		default:
+			goto drainDone
+		}
+	}
+drainDone:
+	if !gotRestart {
+		t.Error("expected EventIterationRestart on event channel")
+	}
+}
+
+// TestRun_ControlChan_RequestRestart_RespectsMaxIterations verifies that
+// restarts neither bypass nor exhaust the MaxIterations budget. Two real
+// iterations complete after restarts; the third would-be iteration is
+// stopped by MaxIterations.
+func TestRun_ControlChan_RequestRestart_RespectsMaxIterations(t *testing.T) {
+	type signal struct{}
+	started := make(chan signal, 16)
+	hangThenCancel := func(ctx context.Context, _ func(events.Event)) (string, error) {
+		started <- signal{}
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	continueIter := func(_ context.Context, onEvent func(events.Event)) (string, error) {
+		started <- signal{}
+		onEvent(events.Event{Type: events.EventTurnEnd})
+		return "still working", nil
+	}
+	fa := &flexAgent{behaviors: []agentBehavior{
+		hangThenCancel, continueIter,
+		hangThenCancel, continueIter,
+	}}
+
+	controlCh := make(chan ControlMsg, 4)
+	r := New(RunConfig{
+		Agent:         "test",
+		Prompt:        "test",
+		RunsDir:       t.TempDir(),
+		MaxIterations: 2,
+		ControlChan:   controlCh,
+	})
+	r.iterAgent = fa
+	r.stderr = io.Discard
+
+	runDone := make(chan RunResult, 1)
+	go func() {
+		runDone <- r.Run(context.Background())
+	}()
+
+	// Wait for the first hang, send restart.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first agent call did not start in time")
+	}
+	controlCh <- ControlMsg{Kind: ControlRequestRestart}
+
+	// Wait for the continue call (iteration 1's real attempt).
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("continue agent call did not start in time")
+	}
+
+	// Wait for iteration 2's first hang, send restart again.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("iteration 2 hang did not start in time")
+	}
+	controlCh <- ControlMsg{Kind: ControlRequestRestart}
+
+	// Wait for iteration 2's real continue.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("iteration 2 continue did not start in time")
+	}
+
+	result := <-runDone
+
+	if result.Status != StatusMaxIterationsReached {
+		t.Errorf("status = %s, want %s", result.Status, StatusMaxIterationsReached)
+	}
+	if result.Iterations != 2 {
+		t.Errorf("iterations = %d, want 2", result.Iterations)
+	}
+	if fa.callCount != 4 {
+		t.Errorf("agent called %d times, want 4 (two hangs + two continues)", fa.callCount)
+	}
+}

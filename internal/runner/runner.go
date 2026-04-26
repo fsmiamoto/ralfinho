@@ -76,6 +76,7 @@ type Runner struct {
 	iterAgent           agent.Agent     // agent implementation for running iterations
 	consecutiveTimeouts int             // reset to 0 on any successful iteration
 	control             *controlState   // live, mutex-guarded mutable parameters
+	restartCount        map[int]int     // attempts logged for each iteration that was restarted
 }
 
 // NewRunID generates a new UUID suitable for use as a run ID.
@@ -89,11 +90,12 @@ func New(cfg RunConfig) *Runner {
 		runID = newUUID()
 	}
 	return &Runner{
-		cfg:     cfg,
-		runID:   runID,
-		stdin:   os.Stdin,
-		stderr:  os.Stderr,
-		control: newControlState(cfg.InactivityTimeout),
+		cfg:          cfg,
+		runID:        runID,
+		stdin:        os.Stdin,
+		stderr:       os.Stderr,
+		control:      newControlState(cfg.InactivityTimeout),
+		restartCount: make(map[int]int),
 	}
 }
 
@@ -187,6 +189,16 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 		case iterContinue:
 			r.consecutiveTimeouts = 0
 			// next iteration
+		case iterRestart:
+			r.consecutiveTimeouts = 0
+			result.Iterations--
+			r.restartCount[r.iteration]++
+			r.sendEvent(Event{
+				Type:      EventIterationRestart,
+				ID:        fmt.Sprintf("restart-%d-%d", r.iteration, r.restartCount[r.iteration]),
+				Timestamp: time.Now().Format(time.RFC3339),
+			})
+			r.logf("restart requested — redoing iteration %d (attempt %d)\n", r.iteration, r.restartCount[r.iteration]+1)
 		case iterInterrupted:
 			result.Status = StatusInterrupted
 			done = true
@@ -227,6 +239,7 @@ const (
 	iterComplete
 	iterInterrupted
 	iterTimedOut
+	iterRestart
 )
 
 // defaultInactivityTimeout is the default duration before the watchdog fires.
@@ -249,6 +262,7 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 
 	interrupted := false
 	timedOut := false
+	restartRequested := false
 	var mu sync.Mutex
 
 	// --- Inactivity watchdog ---
@@ -312,6 +326,12 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 					continue
 				}
 				r.handleControlMsg(msg)
+				if msg.Kind == ControlRequestRestart {
+					mu.Lock()
+					restartRequested = true
+					mu.Unlock()
+					cancel()
+				}
 			case <-done:
 				return
 			}
@@ -345,6 +365,7 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 	// Check if we were interrupted (takes priority over other outcomes).
 	mu.Lock()
 	wasInterrupted := interrupted
+	wasRestartRequested := restartRequested
 	wasTimedOut := timedOut
 	mu.Unlock()
 
@@ -353,6 +374,14 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 			return iterContinue, nil
 		}
 		return iterInterrupted, nil
+	}
+
+	// Restart takes precedence over timeout: if the user asked to restart,
+	// the cancel() call will have unblocked the agent (often surfacing as a
+	// timeout-like ctx.Err()), but we should redo the iteration rather than
+	// counting it as a stuck-agent retry.
+	if wasRestartRequested {
+		return iterRestart, nil
 	}
 
 	// Check if the inactivity watchdog fired.
