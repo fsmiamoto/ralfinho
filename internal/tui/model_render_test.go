@@ -1776,6 +1776,65 @@ func TestReminderOverlayRendersBufferAndPersistentState(t *testing.T) {
 	}
 }
 
+// TestReminderOverlayEnterChannelFullKeepsOverlayOpen pins the recovery
+// behavior when the runner is stalled and the control channel is full:
+// the overlay must stay open with an error and the buffer must be
+// preserved so the user can retry without retyping. Mirrors the
+// timeout and pending-overlay channel-full tests.
+func TestReminderOverlayEnterChannelFullKeepsOverlayOpen(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 1)
+	// Pre-fill the channel so the next send hits the default branch.
+	ctrl <- runner.ControlMsg{Kind: runner.ControlSetTimeout}
+	m := Model{
+		// height=40 so the long reminder-overlay body (input + state +
+		// 2-line hint + error) fits without scrolling under reservedLines=6.
+		width:           80,
+		height:          40,
+		controlSend:     ctrl,
+		reminderOverlay: true,
+		reminderBuffer:  "fix auth",
+	}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+
+	if !m.reminderOverlay {
+		t.Fatal("channel full: reminder overlay closed, want still open")
+	}
+	if m.reminderError == "" {
+		t.Fatal("channel full: reminderError empty, want populated")
+	}
+	if m.reminderBuffer != "fix auth" {
+		t.Fatalf("channel full: reminderBuffer = %q, want preserved as %q", m.reminderBuffer, "fix auth")
+	}
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "control channel full") {
+		t.Fatalf("channel full: view missing error text, got %q", view)
+	}
+}
+
+// TestReminderOverlayErrorClearsOnInput verifies that the channel-full
+// error is cleared when the user types, matching the timeoutError UX
+// (errors don't linger forever).
+func TestReminderOverlayErrorClearsOnInput(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{
+		width:           80,
+		height:          24,
+		controlSend:     ctrl,
+		reminderOverlay: true,
+		reminderBuffer:  "fix auth",
+		reminderError:   "control channel full; try again",
+	}
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'!'}}))
+	if m.reminderError != "" {
+		t.Fatalf("after typing: reminderError = %q, want cleared", m.reminderError)
+	}
+	if m.reminderBuffer != "fix auth!" {
+		t.Fatalf("after typing: reminderBuffer = %q, want %q", m.reminderBuffer, "fix auth!")
+	}
+}
+
 func TestReminderStateUpdatesPendingReminders(t *testing.T) {
 	m := NewModel(nil, "", "", "", "", nil, nil)
 	m.width = 80

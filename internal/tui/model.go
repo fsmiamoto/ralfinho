@@ -70,6 +70,7 @@ type Model struct {
 	reminderOverlay    bool   // whether the reminder editor overlay is shown
 	reminderBuffer     string // text buffer; preserved across Esc, cleared only on successful queue
 	reminderPersistent bool   // toggled with Ctrl+P; controls Kind on the next queued reminder
+	reminderError      string // populated when a queue send hits a full control channel; cleared on next interaction
 
 	pendingReminders []runner.Reminder // mirror of runner reminders, refreshed on EventReminderState
 
@@ -686,6 +687,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.reminderOverlay = true
+		m.reminderError = ""
 
 	case "M":
 		// Open the pending-reminders removal overlay. No-op if there is
@@ -806,28 +808,34 @@ func (m Model) handleReminderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEsc:
 		// Close, but keep the buffer for the next open.
 		m.reminderOverlay = false
+		m.reminderError = ""
 		return m, nil
 	case tea.KeyEnter:
 		return m.queueReminder(false)
 	case tea.KeyCtrlP:
 		m.reminderPersistent = !m.reminderPersistent
+		m.reminderError = ""
 		return m, nil
 	case tea.KeyBackspace, tea.KeyCtrlH:
 		runes := []rune(m.reminderBuffer)
 		if len(runes) > 0 {
 			m.reminderBuffer = string(runes[:len(runes)-1])
 		}
+		m.reminderError = ""
 		return m, nil
 	case tea.KeyCtrlU:
 		m.reminderBuffer = ""
+		m.reminderError = ""
 		return m, nil
 	case tea.KeyRunes:
 		if len(msg.Runes) > 0 {
 			m.reminderBuffer += string(msg.Runes)
+			m.reminderError = ""
 		}
 		return m, nil
 	case tea.KeySpace:
 		m.reminderBuffer += " "
+		m.reminderError = ""
 		return m, nil
 	}
 	return m, nil
@@ -858,7 +866,10 @@ func (m Model) queueReminder(applyNow bool) (tea.Model, tea.Cmd) {
 	select {
 	case m.controlSend <- add:
 	default:
-		// Channel full / runner stalled. Leave the buffer so the user can retry.
+		// Channel full / runner stalled. Surface the error and leave the
+		// buffer so the user can retry. Mirrors submitTimeoutInput and the
+		// pending-overlay 'x' case.
+		m.reminderError = "control channel full; try again"
 		return m, nil
 	}
 	if applyNow {
@@ -870,6 +881,7 @@ func (m Model) queueReminder(applyNow bool) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.reminderBuffer = ""
+	m.reminderError = ""
 	m.reminderOverlay = false
 	return m, nil
 }
@@ -1619,6 +1631,9 @@ func (m Model) renderReminderOverlay() string {
 		"> %s_\n\npersistent: %s\n\n[Enter] queue   [Ctrl+Enter] apply now (restart)\n[Ctrl+P] toggle persistent   [Esc] close (keeps buffer)",
 		m.reminderBuffer, persistText,
 	)
+	if m.reminderError != "" {
+		body += "\n\nError: " + m.reminderError
+	}
 	return m.renderOverlayCard(overlayContent{
 		body:          body,
 		scroll:        0,
