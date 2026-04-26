@@ -98,11 +98,15 @@ func (c *controlState) watchdogState() (disabled bool, timeout time.Duration) {
 	return false, resolveInactivityTimeout(c.timeout)
 }
 
-// setTimeout replaces the live timeout pointer.
-func (c *controlState) setTimeout(d *time.Duration) {
+// setTimeout replaces the live timeout pointer and returns the previous value
+// in a single critical section, so callers can record the transition without
+// racing other writers.
+func (c *controlState) setTimeout(d *time.Duration) (prev *time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	prev = c.timeout
 	c.timeout = d
+	return prev
 }
 
 // snapshotReminders returns a copy of the current reminders; mutating the

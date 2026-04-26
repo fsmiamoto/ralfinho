@@ -77,6 +77,8 @@ type Runner struct {
 	consecutiveTimeouts int             // reset to 0 on any successful iteration
 	control             *controlState   // live, mutex-guarded mutable parameters
 	restartCount        map[int]int     // attempts logged for each iteration that was restarted
+	operatorLog         *operatorLogger // operator-log.jsonl; nil if file failed to open
+	operatorLogFile     *os.File        // backing file for operatorLog (closed in closeRunFiles)
 }
 
 // NewRunID generates a new UUID suitable for use as a run ID.
@@ -177,7 +179,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 			r.sessionLogf("[%s] error: %v\n", r.timestamp(), err)
 			result.Status = StatusFailed
 			result.Error = err.Error()
-			r.control.consumeOneOffs()
+			r.operatorLog.logOneOffConsumed(r.control.consumeOneOffs(), r.iteration)
 			break
 		}
 
@@ -186,11 +188,11 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 			r.consecutiveTimeouts = 0
 			result.Status = StatusCompleted
 			r.logf("agent signalled COMPLETE\n")
-			r.control.consumeOneOffs()
+			r.operatorLog.logOneOffConsumed(r.control.consumeOneOffs(), r.iteration)
 			done = true
 		case iterContinue:
 			r.consecutiveTimeouts = 0
-			r.control.consumeOneOffs()
+			r.operatorLog.logOneOffConsumed(r.control.consumeOneOffs(), r.iteration)
 		case iterRestart:
 			r.consecutiveTimeouts = 0
 			result.Iterations--
@@ -203,7 +205,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 			r.logf("restart requested — redoing iteration %d (attempt %d)\n", r.iteration, r.restartCount[r.iteration]+1)
 		case iterInterrupted:
 			result.Status = StatusInterrupted
-			r.control.consumeOneOffs()
+			r.operatorLog.logOneOffConsumed(r.control.consumeOneOffs(), r.iteration)
 			done = true
 		case iterTimedOut:
 			_, timeout := r.control.watchdogState()
@@ -434,20 +436,38 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 }
 
 // handleControlMsg dispatches a single control message to the appropriate
-// controlState accessor. Side-effects beyond state mutation (cancelling the
-// iteration on restart, resetting the watchdog timer on timeout change,
-// writing audit log entries) are added by later tasks.
+// controlState accessor and writes a corresponding audit entry. Cancelling the
+// iteration on restart and stopping the watchdog timer on timeout-disable are
+// handled by the caller goroutine in runIteration.
 func (r *Runner) handleControlMsg(msg ControlMsg) {
 	switch msg.Kind {
 	case ControlSetTimeout:
-		r.control.setTimeout(msg.Timeout)
+		prev := r.control.setTimeout(msg.Timeout)
+		r.operatorLog.logTimeoutSet(prev, msg.Timeout)
 	case ControlAddReminder:
-		r.control.addReminder(msg.Reminder)
+		stored := r.control.addReminder(msg.Reminder)
+		r.operatorLog.logReminderAdd(stored)
 	case ControlRemoveReminder:
-		r.control.removeReminder(msg.ID)
+		if r.control.removeReminder(msg.ID) {
+			r.operatorLog.logReminderRemove(msg.ID)
+		}
 	case ControlRequestRestart:
 		r.control.requestRestart()
+		ids := reminderIDs(r.control.snapshotReminders())
+		r.operatorLog.logRestartRequested(r.iteration, r.restartCount[r.iteration]+1, ids)
 	}
+}
+
+// reminderIDs extracts the IDs from a reminder slice.
+func reminderIDs(rs []Reminder) []string {
+	if len(rs) == 0 {
+		return nil
+	}
+	ids := make([]string, len(rs))
+	for i, r := range rs {
+		ids[i] = r.ID
+	}
+	return ids
 }
 
 // sendEvent sends an event to the TUI channel if configured (non-blocking).
@@ -631,6 +651,17 @@ func (r *Runner) openRunFiles() {
 		r.logf("warning: could not create session.log: %v\n", err)
 		r.sessionFile = nil
 	}
+
+	r.operatorLogFile, err = os.OpenFile(
+		filepath.Join(dir, "operator-log.jsonl"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		r.logf("warning: could not open operator-log.jsonl: %v\n", err)
+		r.operatorLogFile = nil
+		r.operatorLog = nil
+	} else {
+		r.operatorLog = newOperatorLogger(r.operatorLogFile, r.logf)
+	}
 }
 
 // initMemoryFiles creates empty NOTES.md and PROGRESS.md in the run directory
@@ -664,6 +695,11 @@ func (r *Runner) closeRunFiles() {
 	if r.sessionFile != nil {
 		if err := r.sessionFile.Close(); err != nil {
 			r.logf("warning: closing session.log: %v\n", err)
+		}
+	}
+	if r.operatorLogFile != nil {
+		if err := r.operatorLogFile.Close(); err != nil {
+			r.logf("warning: closing operator-log.jsonl: %v\n", err)
 		}
 	}
 }
