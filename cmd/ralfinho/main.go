@@ -193,6 +193,9 @@ func runAgentWithTUI(runCfg runner.RunConfig) (runner.RunResult, error) {
 	eventCh := make(chan runner.Event, 256)
 	runCfg.EventChan = eventCh
 
+	controlCh := make(chan runner.ControlMsg, 16)
+	runCfg.ControlChan = controlCh
+
 	r := runner.New(runCfg)
 
 	// Start the runner in a goroutine. Use a close-signal pattern instead
@@ -208,7 +211,7 @@ func runAgentWithTUI(runCfg runner.RunConfig) (runner.RunResult, error) {
 
 	notesPath := filepath.Join(runCfg.RunsDir, runCfg.RunID, "NOTES.md")
 	progressPath := filepath.Join(runCfg.RunsDir, runCfg.RunID, "PROGRESS.md")
-	model := tui.NewModel(eventCh, runCfg.Agent, runCfg.Prompt, notesPath, progressPath, runCfg.InactivityTimeout, nil)
+	model := tui.NewModel(eventCh, runCfg.Agent, runCfg.Prompt, notesPath, progressPath, runCfg.InactivityTimeout, controlCh)
 	p := newTeaProgram(model, tea.WithAltScreen())
 
 	// Feed DoneMsg to the program when the runner finishes.
