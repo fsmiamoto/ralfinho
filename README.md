@@ -101,7 +101,7 @@ During a live run or when viewing a past session:
 | `m` | Add a reminder for the next iteration (`Ctrl+P` toggles persistent, `Ctrl+Enter` applies now via restart) |
 | `M` | Remove a pending reminder |
 | `?` | Show keybinding help |
-| `q` | Quit (press twice to confirm) |
+| `q` / `Ctrl+C` | Quit (press twice to confirm) |
 
 The memory overlay (`n`) reads files from disk on each open, so it always
 shows the latest content written by the agent. Use `Tab` inside the overlay
