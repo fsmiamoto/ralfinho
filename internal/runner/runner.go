@@ -177,6 +177,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 			r.sessionLogf("[%s] error: %v\n", r.timestamp(), err)
 			result.Status = StatusFailed
 			result.Error = err.Error()
+			r.control.consumeOneOffs()
 			break
 		}
 
@@ -185,10 +186,11 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 			r.consecutiveTimeouts = 0
 			result.Status = StatusCompleted
 			r.logf("agent signalled COMPLETE\n")
+			r.control.consumeOneOffs()
 			done = true
 		case iterContinue:
 			r.consecutiveTimeouts = 0
-			// next iteration
+			r.control.consumeOneOffs()
 		case iterRestart:
 			r.consecutiveTimeouts = 0
 			result.Iterations--
@@ -201,6 +203,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 			r.logf("restart requested — redoing iteration %d (attempt %d)\n", r.iteration, r.restartCount[r.iteration]+1)
 		case iterInterrupted:
 			result.Status = StatusInterrupted
+			r.control.consumeOneOffs()
 			done = true
 		case iterTimedOut:
 			_, timeout := r.control.watchdogState()
@@ -350,9 +353,14 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 		}
 	}()
 
+	// Build the prompt for this iteration, appending any reminders. Persistent
+	// reminders survive across iterations; one-offs are consumed by the outer
+	// loop after a non-restart, non-timeout outcome (see Run).
+	prompt := buildIterationPrompt(r.cfg.Prompt, r.control.snapshotReminders())
+
 	// Delegate to the agent. The onEvent callback persists, stores, and
 	// processes each event as it arrives.
-	assistantText, err := r.iterAgent.RunIteration(iterCtx, r.cfg.Prompt, func(ev Event) {
+	assistantText, err := r.iterAgent.RunIteration(iterCtx, prompt, func(ev Event) {
 		// Reset the inactivity watchdog on every event, picking up live
 		// timeout changes from controlState. If the watchdog was disabled
 		// mid-iteration, skip the Reset.

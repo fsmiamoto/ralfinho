@@ -1222,15 +1222,19 @@ func TestRun_StoresEventsInMemory(t *testing.T) {
 type agentBehavior = func(ctx context.Context, onEvent func(events.Event)) (string, error)
 
 // flexAgent allows per-call behavior specification for testing the watchdog.
+// Each call's prompt is recorded in prompts so tests can assert what the
+// runner actually sent the agent.
 type flexAgent struct {
 	behaviors []agentBehavior
 	callCount int
+	prompts   []string
 }
 
-func (f *flexAgent) RunIteration(ctx context.Context, _ string, onEvent func(events.Event)) (string, error) {
+func (f *flexAgent) RunIteration(ctx context.Context, prompt string, onEvent func(events.Event)) (string, error) {
 	if f.callCount >= len(f.behaviors) {
 		return "", fmt.Errorf("flexAgent: no more behaviors (call %d)", f.callCount)
 	}
+	f.prompts = append(f.prompts, prompt)
 	fn := f.behaviors[f.callCount]
 	f.callCount++
 	return fn(ctx, onEvent)
@@ -2057,5 +2061,171 @@ func TestRun_ControlChan_RequestRestart_RespectsMaxIterations(t *testing.T) {
 	}
 	if fa.callCount != 4 {
 		t.Errorf("agent called %d times, want 4 (two hangs + two continues)", fa.callCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Reminder injection and consumption (Task 4)
+// ---------------------------------------------------------------------------
+
+// TestRun_OneOff_ConsumedAfterIteration verifies that a one-off reminder is
+// included in the prompt for the iteration in which it was active and removed
+// afterwards, so the next iteration's prompt does not contain it.
+func TestRun_OneOff_ConsumedAfterIteration(t *testing.T) {
+	const reminderText = "REMEMBER-THIS-ONE-OFF"
+
+	cont := func(_ context.Context, onEvent func(events.Event)) (string, error) {
+		onEvent(events.Event{Type: events.EventTurnEnd})
+		return "still working", nil
+	}
+	complete := func(_ context.Context, onEvent func(events.Event)) (string, error) {
+		onEvent(events.Event{Type: events.EventTurnEnd})
+		return completionMarker, nil
+	}
+	fa := &flexAgent{behaviors: []agentBehavior{cont, complete}}
+
+	r := New(RunConfig{
+		Agent:   "test",
+		Prompt:  "base prompt",
+		RunsDir: t.TempDir(),
+	})
+	r.iterAgent = fa
+	r.stderr = io.Discard
+
+	// Seed a one-off reminder before Run starts so it is present when the
+	// first iteration builds its prompt.
+	r.control.addReminder(Reminder{Kind: ReminderOneOff, Text: reminderText})
+
+	result := r.Run(context.Background())
+
+	if result.Status != StatusCompleted {
+		t.Fatalf("status = %s, want %s", result.Status, StatusCompleted)
+	}
+	if len(fa.prompts) != 2 {
+		t.Fatalf("agent called with %d prompts, want 2", len(fa.prompts))
+	}
+	if !strings.Contains(fa.prompts[0], reminderText) {
+		t.Errorf("iteration 1 prompt missing reminder %q: %q", reminderText, fa.prompts[0])
+	}
+	if strings.Contains(fa.prompts[1], reminderText) {
+		t.Errorf("iteration 2 prompt should NOT contain consumed one-off %q: %q", reminderText, fa.prompts[1])
+	}
+	if got := r.control.snapshotReminders(); len(got) != 0 {
+		t.Errorf("after run, reminders = %+v, want empty", got)
+	}
+}
+
+// TestRun_OneOff_NotConsumedOnRestart verifies that iterRestart does not
+// consume one-off reminders: the first (cancelled) call and the second
+// (completing) call both see the same reminder in their prompts. Consumption
+// happens only after the completing call.
+func TestRun_OneOff_NotConsumedOnRestart(t *testing.T) {
+	const reminderText = "REMINDER-SURVIVES-RESTART"
+
+	started := make(chan struct{}, 4)
+	hangThenCancel := func(ctx context.Context, _ func(events.Event)) (string, error) {
+		started <- struct{}{}
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	complete := func(_ context.Context, _ func(events.Event)) (string, error) {
+		started <- struct{}{}
+		return completionMarker, nil
+	}
+	fa := &flexAgent{behaviors: []agentBehavior{hangThenCancel, complete}}
+
+	controlCh := make(chan ControlMsg, 4)
+	r := New(RunConfig{
+		Agent:       "test",
+		Prompt:      "base prompt",
+		RunsDir:     t.TempDir(),
+		ControlChan: controlCh,
+	})
+	r.iterAgent = fa
+	r.stderr = io.Discard
+
+	r.control.addReminder(Reminder{Kind: ReminderOneOff, Text: reminderText})
+
+	runDone := make(chan RunResult, 1)
+	go func() {
+		runDone <- r.Run(context.Background())
+	}()
+
+	// Wait for the first agent call to block, then send a restart.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first agent call did not start in time")
+	}
+	controlCh <- ControlMsg{Kind: ControlRequestRestart}
+
+	// Wait for the completing call.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second agent call did not start in time")
+	}
+
+	result := <-runDone
+
+	if result.Status != StatusCompleted {
+		t.Fatalf("status = %s, want %s", result.Status, StatusCompleted)
+	}
+	if len(fa.prompts) != 2 {
+		t.Fatalf("agent called with %d prompts, want 2", len(fa.prompts))
+	}
+	if !strings.Contains(fa.prompts[0], reminderText) {
+		t.Errorf("first (cancelled) prompt missing reminder %q: %q", reminderText, fa.prompts[0])
+	}
+	if !strings.Contains(fa.prompts[1], reminderText) {
+		t.Errorf("second (completing) prompt missing reminder %q — restart wrongly consumed it: %q", reminderText, fa.prompts[1])
+	}
+	if got := r.control.snapshotReminders(); len(got) != 0 {
+		t.Errorf("after completing run, reminders = %+v, want empty", got)
+	}
+}
+
+// TestRun_Persistent_SurvivesIterations verifies that a persistent reminder
+// is included in every iteration's prompt and is not consumed when an
+// iteration completes or continues.
+func TestRun_Persistent_SurvivesIterations(t *testing.T) {
+	const reminderText = "STICKY-REMINDER"
+
+	cont := func(_ context.Context, onEvent func(events.Event)) (string, error) {
+		onEvent(events.Event{Type: events.EventTurnEnd})
+		return "still working", nil
+	}
+	complete := func(_ context.Context, onEvent func(events.Event)) (string, error) {
+		onEvent(events.Event{Type: events.EventTurnEnd})
+		return completionMarker, nil
+	}
+	fa := &flexAgent{behaviors: []agentBehavior{cont, complete}}
+
+	r := New(RunConfig{
+		Agent:   "test",
+		Prompt:  "base prompt",
+		RunsDir: t.TempDir(),
+	})
+	r.iterAgent = fa
+	r.stderr = io.Discard
+
+	r.control.addReminder(Reminder{Kind: ReminderPersistent, Text: reminderText})
+
+	result := r.Run(context.Background())
+
+	if result.Status != StatusCompleted {
+		t.Fatalf("status = %s, want %s", result.Status, StatusCompleted)
+	}
+	if len(fa.prompts) != 2 {
+		t.Fatalf("agent called with %d prompts, want 2", len(fa.prompts))
+	}
+	for i, p := range fa.prompts {
+		if !strings.Contains(p, reminderText) {
+			t.Errorf("iteration %d prompt missing persistent reminder %q: %q", i+1, reminderText, p)
+		}
+	}
+	snap := r.control.snapshotReminders()
+	if len(snap) != 1 || snap[0].Text != reminderText {
+		t.Errorf("after run, reminders = %+v; persistent should remain", snap)
 	}
 }
