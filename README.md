@@ -54,6 +54,7 @@ on useful improvements, a nice way to try out ralfinho for the first time.
 --plan <file>             Plan file (generates prompt from template)
 -a, --agent <name>        Agent backend: "pi", "kiro", or "claude" (default: pi)
 -m, --max-iterations <n>  Max iterations, 0=unlimited (default: 0)
+--inactivity-timeout <d>  Stuck-detection watchdog duration; 0 disables (default: 5m)
 --no-tui                  Disable TUI, plain stderr output
 --runs-dir <path>         Runs directory (default: .ralfinho/runs)
 ```
