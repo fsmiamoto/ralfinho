@@ -26,6 +26,7 @@ const (
 	EventIteration           = events.EventIteration
 	EventInactivityTimeout   = events.EventInactivityTimeout
 	EventIterationRestart    = events.EventIterationRestart
+	EventReminderState       = events.EventReminderState
 	EventRateLimit           = events.EventRateLimit
 )
 

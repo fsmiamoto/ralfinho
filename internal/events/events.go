@@ -35,9 +35,32 @@ const (
 	// iteration is redone with the latest prompt and reminders.
 	EventIterationRestart EventType = "iteration_restart"
 
+	// EventReminderState is emitted whenever the live reminder list changes
+	// (add, remove, or one-off consumption). The TUI uses it to refresh its
+	// pending-reminders mirror; the runner does not persist it to events.jsonl.
+	EventReminderState EventType = "reminder_state"
+
 	// EventRateLimit is emitted when the agent backend reports rate limiting.
 	EventRateLimit EventType = "rate_limit"
 )
+
+// ReminderKind distinguishes one-off vs persistent reminders.
+type ReminderKind int
+
+const (
+	// ReminderOneOff is consumed when an iteration runs to completion or
+	// continues normally. Restart and watchdog timeout do not consume it.
+	ReminderOneOff ReminderKind = iota
+	// ReminderPersistent stays until explicitly removed.
+	ReminderPersistent
+)
+
+// Reminder is a single steering note appended to the prompt.
+type Reminder struct {
+	ID   string       `json:"id"`
+	Kind ReminderKind `json:"kind"`
+	Text string       `json:"text"`
+}
 
 // Event is the top-level envelope for every JSONL line emitted by an agent.
 type Event struct {
@@ -66,6 +89,9 @@ type Event struct {
 
 	// agent_end
 	Messages json.RawMessage `json:"messages,omitempty"`
+
+	// reminder_state
+	Reminders []Reminder `json:"reminders,omitempty"`
 
 	// rate_limit
 	RateLimit *RateLimitInfo `json:"rateLimit,omitempty"`

@@ -13,17 +13,19 @@ import (
 type DisplayEventType = string
 
 const (
-	DisplaySession       DisplayEventType = "session"
-	DisplayUserMsg       DisplayEventType = "user_msg"
-	DisplayAssistantText DisplayEventType = "assistant_text"
-	DisplayThinking      DisplayEventType = "thinking"
-	DisplayToolStart     DisplayEventType = "tool_start"
-	DisplayToolUpdate    DisplayEventType = "tool_update"
-	DisplayToolEnd       DisplayEventType = "tool_end"
-	DisplayTurnEnd       DisplayEventType = "turn_end"
-	DisplayAgentEnd      DisplayEventType = "agent_end"
-	DisplayIteration     DisplayEventType = "iteration"
-	DisplayInfo          DisplayEventType = "info"
+	DisplaySession        DisplayEventType = "session"
+	DisplayUserMsg        DisplayEventType = "user_msg"
+	DisplayAssistantText  DisplayEventType = "assistant_text"
+	DisplayThinking       DisplayEventType = "thinking"
+	DisplayToolStart      DisplayEventType = "tool_start"
+	DisplayToolUpdate     DisplayEventType = "tool_update"
+	DisplayToolEnd        DisplayEventType = "tool_end"
+	DisplayTurnEnd        DisplayEventType = "turn_end"
+	DisplayAgentEnd       DisplayEventType = "agent_end"
+	DisplayIteration      DisplayEventType = "iteration"
+	DisplayInfo           DisplayEventType = "info"
+	DisplayRestart        DisplayEventType = "restart"
+	DisplayReminderState  DisplayEventType = "reminder_state"
 )
 
 
@@ -48,6 +50,14 @@ type DisplayEvent struct {
 	ToolDisplayArgs string          // pre-formatted display string; when set, preferred over formatToolArgs()
 	ToolResultText  string          // plain result text for tool_end events
 	ToolIsError     bool            // true if tool execution had an error
+
+	// RestartIter is the iteration that was restarted; populated only on
+	// DisplayRestart events. Used by the model to bump its restart counter.
+	RestartIter int
+
+	// Reminders is the current reminder snapshot; populated only on
+	// DisplayReminderState events. The TUI overwrites its mirror with this.
+	Reminders []runner.Reminder
 }
 
 // EventConverter accumulates runner events and produces DisplayEvents.
@@ -315,11 +325,22 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 		_, _ = fmt.Sscanf(ev.ID, "restart-%d-%d", &iter, &attempt)
 		text := fmt.Sprintf("Iteration %d restarted (attempt %d)", iter, attempt)
 		return []DisplayEvent{{
-			Type:      DisplayInfo,
-			Summary:   text,
-			Detail:    text,
+			Type:        DisplayRestart,
+			Summary:     text,
+			Detail:      text,
+			Timestamp:   now,
+			Iteration:   c.iteration,
+			RestartIter: iter,
+		}}
+
+	case runner.EventReminderState:
+		return []DisplayEvent{{
+			Type:      DisplayReminderState,
+			Summary:   "reminder state update",
+			Detail:    "",
 			Timestamp: now,
 			Iteration: c.iteration,
+			Reminders: ev.Reminders,
 		}}
 
 	case runner.EventRateLimit:

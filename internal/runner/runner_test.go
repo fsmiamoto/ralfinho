@@ -2229,3 +2229,97 @@ func TestRun_Persistent_SurvivesIterations(t *testing.T) {
 		t.Errorf("after run, reminders = %+v; persistent should remain", snap)
 	}
 }
+
+// TestRun_EmitsReminderState_OnAddRemoveConsume verifies that the runner
+// pushes EventReminderState snapshots to EventChan when reminders mutate,
+// so the TUI can keep its pending-list mirror up to date.
+func TestRun_EmitsReminderState_OnAddRemoveConsume(t *testing.T) {
+	started := make(chan struct{}, 4)
+	hangUntilSignal := make(chan struct{})
+	hangThenComplete := func(ctx context.Context, _ func(events.Event)) (string, error) {
+		started <- struct{}{}
+		select {
+		case <-hangUntilSignal:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+		return completionMarker, nil
+	}
+	fa := &flexAgent{behaviors: []agentBehavior{hangThenComplete}}
+
+	eventCh := make(chan Event, 64)
+	controlCh := make(chan ControlMsg, 8)
+	r := New(RunConfig{
+		Agent:       "test",
+		Prompt:      "base prompt",
+		RunsDir:     t.TempDir(),
+		EventChan:   eventCh,
+		ControlChan: controlCh,
+	})
+	r.iterAgent = fa
+	r.stderr = io.Discard
+
+	runDone := make(chan RunResult, 1)
+	go func() { runDone <- r.Run(context.Background()) }()
+
+	// Wait for the agent to be running before sending control msgs.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent did not start in time")
+	}
+
+	controlCh <- ControlMsg{Kind: ControlAddReminder, Reminder: Reminder{Kind: ReminderPersistent, Text: "p1"}}
+	controlCh <- ControlMsg{Kind: ControlAddReminder, Reminder: Reminder{Kind: ReminderOneOff, Text: "o1"}}
+	if !waitFor(func() bool { return len(r.control.snapshotReminders()) == 2 }, 2*time.Second) {
+		t.Fatal("reminders not added in time")
+	}
+	snap := r.control.snapshotReminders()
+	var oneOffID string
+	for _, rem := range snap {
+		if rem.Kind == ReminderOneOff {
+			oneOffID = rem.ID
+		}
+	}
+	controlCh <- ControlMsg{Kind: ControlRemoveReminder, ID: oneOffID}
+	if !waitFor(func() bool { return len(r.control.snapshotReminders()) == 1 }, 2*time.Second) {
+		t.Fatal("reminder not removed in time")
+	}
+
+	// Let the agent complete; consumeOneOffs at iterComplete will fire one
+	// more emission only if there were still one-offs (in this case none —
+	// we already removed the only one — so we expect no extra emission).
+	close(hangUntilSignal)
+
+	result := <-runDone
+	if result.Status != StatusCompleted {
+		t.Fatalf("status = %s, want %s", result.Status, StatusCompleted)
+	}
+
+	// Drain events. We expect at least: 2 add emissions, 1 remove emission.
+	var snapshots [][]Reminder
+	for done := false; !done; {
+		select {
+		case ev := <-eventCh:
+			if ev.Type == EventReminderState {
+				snapshots = append(snapshots, ev.Reminders)
+			}
+		default:
+			done = true
+		}
+	}
+	if len(snapshots) < 3 {
+		t.Fatalf("got %d EventReminderState snapshots, want at least 3 (add, add, remove): %+v", len(snapshots), snapshots)
+	}
+	if n := len(snapshots[0]); n != 1 {
+		t.Errorf("snapshot[0] len = %d, want 1 (after first add)", n)
+	}
+	if n := len(snapshots[1]); n != 2 {
+		t.Errorf("snapshot[1] len = %d, want 2 (after second add)", n)
+	}
+	// After remove, only the persistent stays.
+	last := snapshots[2]
+	if len(last) != 1 || last[0].Kind != ReminderPersistent {
+		t.Errorf("snapshot after remove = %+v, want [persistent]", last)
+	}
+}

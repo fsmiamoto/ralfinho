@@ -343,7 +343,7 @@ func TestRenderHeaderHandlesVeryNarrowWidths(t *testing.T) {
 
 func TestRenderStatusCoversRunningRawAndTruncationBranches(t *testing.T) {
 	t.Run("running raw mode", func(t *testing.T) {
-		m := Model{width: 100, status: "Iteration #4", running: true, rawMode: true}
+		m := Model{width: 110, status: "Iteration #4", running: true, rawMode: true}
 		status := stripANSI(m.renderStatus())
 		for _, want := range []string{"Running │ Iteration #4", "r:raw", "n:memory", "q:quit"} {
 			if !strings.Contains(status, want) {
@@ -1561,3 +1561,428 @@ func TestCompactDuration(t *testing.T) {
 }
 
 func durPtr(d time.Duration) *time.Duration { return &d }
+
+// --- Task 7: reminder editor & pending list overlays ---
+
+func TestReminderOverlayOpenedByM(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{width: 80, height: 24, controlSend: ctrl}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'m'}}))
+	if !m.reminderOverlay {
+		t.Fatal("after m: reminderOverlay = false, want true")
+	}
+	if m.reminderBuffer != "" {
+		t.Fatalf("after m: reminderBuffer = %q, want empty", m.reminderBuffer)
+	}
+}
+
+func TestReminderOverlayIgnoredInViewerMode(t *testing.T) {
+	m := Model{width: 80, height: 24}
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'m'}}))
+	if m.reminderOverlay {
+		t.Fatal("viewer mode: m opened reminderOverlay, want no-op")
+	}
+}
+
+func TestReminderOverlayBufferPreservedAcrossEsc(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{width: 80, height: 24, controlSend: ctrl, reminderOverlay: true}
+
+	for _, r := range "lint code" {
+		m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{r}}))
+	}
+	if m.reminderBuffer != "lint code" {
+		t.Fatalf("after typing: reminderBuffer = %q, want %q", m.reminderBuffer, "lint code")
+	}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEscape}))
+	if m.reminderOverlay {
+		t.Fatal("after Esc: reminderOverlay = true, want false")
+	}
+	if m.reminderBuffer != "lint code" {
+		t.Fatalf("after Esc: reminderBuffer = %q, want preserved %q", m.reminderBuffer, "lint code")
+	}
+
+	// Reopen — buffer should still be there.
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'m'}}))
+	if !m.reminderOverlay {
+		t.Fatal("reopen with m: reminderOverlay = false, want true")
+	}
+	if m.reminderBuffer != "lint code" {
+		t.Fatalf("reopen: reminderBuffer = %q, want preserved %q", m.reminderBuffer, "lint code")
+	}
+}
+
+func TestReminderOverlayEnterQueuesAndClearsBuffer(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{width: 80, height: 24, controlSend: ctrl, reminderOverlay: true, reminderBuffer: "fix auth"}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+	if m.reminderOverlay {
+		t.Fatal("after Enter: reminderOverlay = true, want closed")
+	}
+	if m.reminderBuffer != "" {
+		t.Fatalf("after Enter: reminderBuffer = %q, want cleared", m.reminderBuffer)
+	}
+	select {
+	case msg := <-ctrl:
+		if msg.Kind != runner.ControlAddReminder {
+			t.Fatalf("Kind = %v, want ControlAddReminder", msg.Kind)
+		}
+		if msg.Reminder.Text != "fix auth" {
+			t.Fatalf("Reminder.Text = %q, want %q", msg.Reminder.Text, "fix auth")
+		}
+		if msg.Reminder.Kind != runner.ReminderOneOff {
+			t.Fatalf("Reminder.Kind = %v, want ReminderOneOff", msg.Reminder.Kind)
+		}
+	default:
+		t.Fatal("no ControlAddReminder sent")
+	}
+	select {
+	case msg := <-ctrl:
+		t.Fatalf("unexpected extra message: %+v", msg)
+	default:
+	}
+}
+
+func TestReminderOverlayEnterEmptyIsNoOp(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{width: 80, height: 24, controlSend: ctrl, reminderOverlay: true, reminderBuffer: "   "}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+	if !m.reminderOverlay {
+		t.Fatal("Enter on whitespace-only: overlay closed, want still open")
+	}
+	select {
+	case msg := <-ctrl:
+		t.Fatalf("Enter on empty: got %+v, want no message", msg)
+	default:
+	}
+}
+
+func TestReminderOverlayCtrlPTogglesPersistent(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{width: 80, height: 24, controlSend: ctrl, reminderOverlay: true, reminderBuffer: "always lint"}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlP}))
+	if !m.reminderPersistent {
+		t.Fatal("after Ctrl+P: reminderPersistent = false, want true")
+	}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+	select {
+	case msg := <-ctrl:
+		if msg.Reminder.Kind != runner.ReminderPersistent {
+			t.Fatalf("Reminder.Kind = %v, want ReminderPersistent", msg.Reminder.Kind)
+		}
+	default:
+		t.Fatal("no ControlAddReminder sent")
+	}
+}
+
+func TestReminderOverlayCtrlEnterSendsAddAndRestart(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{width: 80, height: 24, controlSend: ctrl, reminderOverlay: true, reminderBuffer: "stop and rethink"}
+
+	// tea.KeyCtrlJ = LF, the canonical "ctrl+enter" surrogate in most terminals.
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlJ}))
+	if m.reminderOverlay {
+		t.Fatal("Ctrl+Enter: overlay still open, want closed")
+	}
+	if m.reminderBuffer != "" {
+		t.Fatalf("Ctrl+Enter: reminderBuffer = %q, want cleared", m.reminderBuffer)
+	}
+
+	first, ok := <-ctrl
+	if !ok || first.Kind != runner.ControlAddReminder {
+		t.Fatalf("first message = %+v, want ControlAddReminder", first)
+	}
+	if first.Reminder.Text != "stop and rethink" {
+		t.Fatalf("Reminder.Text = %q, want %q", first.Reminder.Text, "stop and rethink")
+	}
+	second, ok := <-ctrl
+	if !ok || second.Kind != runner.ControlRequestRestart {
+		t.Fatalf("second message = %+v, want ControlRequestRestart", second)
+	}
+}
+
+func TestReminderOverlayBackspaceAndCtrlU(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{width: 80, height: 24, controlSend: ctrl, reminderOverlay: true, reminderBuffer: "abc"}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyBackspace}))
+	if m.reminderBuffer != "ab" {
+		t.Fatalf("after Backspace: reminderBuffer = %q, want %q", m.reminderBuffer, "ab")
+	}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlU}))
+	if m.reminderBuffer != "" {
+		t.Fatalf("after Ctrl+U: reminderBuffer = %q, want empty", m.reminderBuffer)
+	}
+}
+
+func TestReminderOverlayRendersBufferAndPersistentState(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{
+		width:              80,
+		height:             24,
+		controlSend:        ctrl,
+		reminderOverlay:    true,
+		reminderBuffer:     "be more careful",
+		reminderPersistent: true,
+	}
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Add Reminder", "be more careful", "persistent: on"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("reminder overlay view = %q, want substring %q", view, want)
+		}
+	}
+}
+
+func TestReminderStateUpdatesPendingReminders(t *testing.T) {
+	m := NewModel(nil, "", "", "", "", nil, nil)
+	m.width = 80
+	m.height = 24
+
+	rs := []runner.Reminder{
+		{ID: "rmd-1", Kind: runner.ReminderPersistent, Text: "always lint"},
+		{ID: "rmd-2", Kind: runner.ReminderOneOff, Text: "fix auth"},
+	}
+	updated, _ := m.addDisplayEvent(DisplayEvent{Type: DisplayReminderState, Reminders: rs})
+	m = updated.(Model)
+
+	if len(m.pendingReminders) != 2 {
+		t.Fatalf("len(pendingReminders) = %d, want 2", len(m.pendingReminders))
+	}
+	if m.pendingReminders[0].ID != "rmd-1" || m.pendingReminders[1].ID != "rmd-2" {
+		t.Fatalf("pendingReminders mismatch: %+v", m.pendingReminders)
+	}
+}
+
+func TestStatusBarIncludesRemindersStrip(t *testing.T) {
+	m := Model{
+		width:  200,
+		status: "Idle",
+		pendingReminders: []runner.Reminder{
+			{ID: "a", Kind: runner.ReminderOneOff, Text: "x"},
+			{ID: "b", Kind: runner.ReminderPersistent, Text: "y"},
+			{ID: "c", Kind: runner.ReminderPersistent, Text: "z"},
+		},
+	}
+	status := stripANSI(m.renderStatus())
+	if !strings.Contains(status, "Reminders: 1 one-off, 2 persistent") {
+		t.Fatalf("renderStatus() = %q, want reminders strip", status)
+	}
+}
+
+func TestStatusBarOmitsRemindersStripWhenEmpty(t *testing.T) {
+	m := Model{width: 200, status: "Idle"}
+	status := stripANSI(m.renderStatus())
+	if strings.Contains(status, "Reminders:") {
+		t.Fatalf("renderStatus() = %q, should not show reminders strip when empty", status)
+	}
+}
+
+func TestRemindersStripFormatting(t *testing.T) {
+	tests := []struct {
+		name string
+		rs   []runner.Reminder
+		want string
+	}{
+		{"empty", nil, ""},
+		{"one-off only", []runner.Reminder{{Kind: runner.ReminderOneOff}}, "Reminders: 1 one-off"},
+		{"persistent only", []runner.Reminder{{Kind: runner.ReminderPersistent}}, "Reminders: 1 persistent"},
+		{
+			"both",
+			[]runner.Reminder{
+				{Kind: runner.ReminderOneOff},
+				{Kind: runner.ReminderPersistent},
+			},
+			"Reminders: 1 one-off, 1 persistent",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := remindersStrip(tt.rs); got != tt.want {
+				t.Errorf("remindersStrip(%v) = %q, want %q", tt.rs, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPendingOverlayOpenedByCapitalM(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{
+		width:       80,
+		height:      24,
+		controlSend: ctrl,
+		pendingReminders: []runner.Reminder{
+			{ID: "rmd-1", Kind: runner.ReminderOneOff, Text: "fix"},
+		},
+	}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'M'}}))
+	if !m.pendingOverlay {
+		t.Fatal("after M: pendingOverlay = false, want true")
+	}
+}
+
+func TestPendingOverlayCapitalMNoOpWhenEmpty(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{width: 80, height: 24, controlSend: ctrl}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'M'}}))
+	if m.pendingOverlay {
+		t.Fatal("M with no pending: opened overlay, want no-op")
+	}
+}
+
+func TestPendingOverlayXSendsRemove(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{
+		width:          80,
+		height:         24,
+		controlSend:    ctrl,
+		pendingOverlay: true,
+		pendingCursor:  1,
+		pendingReminders: []runner.Reminder{
+			{ID: "rmd-1", Kind: runner.ReminderOneOff, Text: "a"},
+			{ID: "rmd-2", Kind: runner.ReminderPersistent, Text: "b"},
+		},
+	}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+	select {
+	case msg := <-ctrl:
+		if msg.Kind != runner.ControlRemoveReminder {
+			t.Fatalf("Kind = %v, want ControlRemoveReminder", msg.Kind)
+		}
+		if msg.ID != "rmd-2" {
+			t.Fatalf("ID = %q, want rmd-2", msg.ID)
+		}
+	default:
+		t.Fatal("no ControlRemoveReminder sent")
+	}
+	if len(m.pendingReminders) != 1 || m.pendingReminders[0].ID != "rmd-1" {
+		t.Fatalf("pendingReminders after remove = %+v, want only rmd-1", m.pendingReminders)
+	}
+}
+
+func TestPendingOverlayJKMovement(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{
+		width:          80,
+		height:         24,
+		controlSend:    ctrl,
+		pendingOverlay: true,
+		pendingReminders: []runner.Reminder{
+			{ID: "rmd-1"},
+			{ID: "rmd-2"},
+			{ID: "rmd-3"},
+		},
+	}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'j'}}))
+	if m.pendingCursor != 1 {
+		t.Fatalf("after j: pendingCursor = %d, want 1", m.pendingCursor)
+	}
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'j'}}))
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'j'}}))
+	if m.pendingCursor != 2 {
+		t.Fatalf("j past end: pendingCursor = %d, want 2 (clamped)", m.pendingCursor)
+	}
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'k'}}))
+	if m.pendingCursor != 1 {
+		t.Fatalf("after k: pendingCursor = %d, want 1", m.pendingCursor)
+	}
+}
+
+func TestPendingOverlayRendersEntries(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{
+		width:          80,
+		height:         24,
+		controlSend:    ctrl,
+		pendingOverlay: true,
+		pendingReminders: []runner.Reminder{
+			{ID: "rmd-1", Kind: runner.ReminderPersistent, Text: "always lint"},
+			{ID: "rmd-2", Kind: runner.ReminderOneOff, Text: "fix auth"},
+		},
+	}
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Pending Reminders", "always lint", "fix auth", "[P]"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("pending overlay view = %q, want substring %q", view, want)
+		}
+	}
+}
+
+func TestHeaderShowsRestartCounter(t *testing.T) {
+	m := NewModel(nil, "", "", "", "", nil, nil)
+	m.width = 80
+	m.iteration = 4
+
+	// First, an iteration event sets up the iteration.
+	updated, _ := m.addDisplayEvent(MakeIterationEvent(4))
+	m = updated.(Model)
+
+	// Then a restart bumps the counter.
+	updated, _ = m.addDisplayEvent(DisplayEvent{Type: DisplayRestart, RestartIter: 4, Iteration: 4, Detail: "Iteration 4 restarted (attempt 1)"})
+	m = updated.(Model)
+
+	header := stripANSI(m.renderHeader())
+	if !strings.Contains(header, "Iteration #4 (restart 1)") {
+		t.Fatalf("renderHeader() = %q, want substring 'Iteration #4 (restart 1)'", header)
+	}
+}
+
+func TestHeaderRestartCounterResetsOnNextIteration(t *testing.T) {
+	m := NewModel(nil, "", "", "", "", nil, nil)
+	m.width = 80
+
+	updated, _ := m.addDisplayEvent(MakeIterationEvent(2))
+	m = updated.(Model)
+	updated, _ = m.addDisplayEvent(DisplayEvent{Type: DisplayRestart, RestartIter: 2, Iteration: 2})
+	m = updated.(Model)
+
+	if m.restartCount[2] != 1 {
+		t.Fatalf("restartCount[2] = %d, want 1", m.restartCount[2])
+	}
+
+	// A fresh iteration boundary clears the entry for that iteration.
+	updated, _ = m.addDisplayEvent(MakeIterationEvent(3))
+	m = updated.(Model)
+
+	header := stripANSI(m.renderHeader())
+	if strings.Contains(header, "(restart") {
+		t.Fatalf("renderHeader() after new iteration = %q, want no restart counter", header)
+	}
+}
+
+func TestPendingOverlayClosesOnEsc(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{
+		width:            80,
+		height:           24,
+		controlSend:      ctrl,
+		pendingOverlay:   true,
+		pendingReminders: []runner.Reminder{{ID: "rmd-1", Text: "x"}},
+	}
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEscape}))
+	if m.pendingOverlay {
+		t.Fatal("Esc on pending overlay: still open, want closed")
+	}
+}
+
+func TestHelpOverlayIncludesReminderKeys(t *testing.T) {
+	m := Model{width: 80, height: 40, helpOverlay: true}
+	view := stripANSI(m.renderHelpOverlay())
+	for _, want := range []string{"m", "Add reminder", "M", "Remove pending"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("renderHelpOverlay() missing %q, got:\n%s", want, view)
+		}
+	}
+}

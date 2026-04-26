@@ -179,7 +179,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 			r.sessionLogf("[%s] error: %v\n", r.timestamp(), err)
 			result.Status = StatusFailed
 			result.Error = err.Error()
-			r.operatorLog.logOneOffConsumed(r.control.consumeOneOffs(), r.iteration)
+			r.consumeOneOffsAndEmit()
 			break
 		}
 
@@ -188,11 +188,11 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 			r.consecutiveTimeouts = 0
 			result.Status = StatusCompleted
 			r.logf("agent signalled COMPLETE\n")
-			r.operatorLog.logOneOffConsumed(r.control.consumeOneOffs(), r.iteration)
+			r.consumeOneOffsAndEmit()
 			done = true
 		case iterContinue:
 			r.consecutiveTimeouts = 0
-			r.operatorLog.logOneOffConsumed(r.control.consumeOneOffs(), r.iteration)
+			r.consumeOneOffsAndEmit()
 		case iterRestart:
 			r.consecutiveTimeouts = 0
 			result.Iterations--
@@ -205,7 +205,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 			r.logf("restart requested — redoing iteration %d (attempt %d)\n", r.iteration, r.restartCount[r.iteration]+1)
 		case iterInterrupted:
 			result.Status = StatusInterrupted
-			r.operatorLog.logOneOffConsumed(r.control.consumeOneOffs(), r.iteration)
+			r.consumeOneOffsAndEmit()
 			done = true
 		case iterTimedOut:
 			_, timeout := r.control.watchdogState()
@@ -447,14 +447,38 @@ func (r *Runner) handleControlMsg(msg ControlMsg) {
 	case ControlAddReminder:
 		stored := r.control.addReminder(msg.Reminder)
 		r.operatorLog.logReminderAdd(stored)
+		r.emitReminderState()
 	case ControlRemoveReminder:
 		if r.control.removeReminder(msg.ID) {
 			r.operatorLog.logReminderRemove(msg.ID)
+			r.emitReminderState()
 		}
 	case ControlRequestRestart:
 		r.control.requestRestart()
 		ids := reminderIDs(r.control.snapshotReminders())
 		r.operatorLog.logRestartRequested(r.iteration, r.restartCount[r.iteration]+1, ids)
+	}
+}
+
+// emitReminderState sends the current reminder snapshot to the TUI so its
+// pending-list mirror stays in sync. It is a synthetic event — not written to
+// events.jsonl, just delivered via the EventChan.
+func (r *Runner) emitReminderState() {
+	r.sendEvent(Event{
+		Type:      EventReminderState,
+		Timestamp: time.Now().Format(time.RFC3339),
+		Reminders: r.control.snapshotReminders(),
+	})
+}
+
+// consumeOneOffsAndEmit consumes one-off reminders, logs the consumption to
+// the operator audit, and emits a fresh reminder-state snapshot if anything
+// was consumed so the TUI mirror reflects the new state.
+func (r *Runner) consumeOneOffsAndEmit() {
+	consumed := r.control.consumeOneOffs()
+	r.operatorLog.logOneOffConsumed(consumed, r.iteration)
+	if len(consumed) > 0 {
+		r.emitReminderState()
 	}
 }
 

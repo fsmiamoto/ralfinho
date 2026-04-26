@@ -67,6 +67,20 @@ type Model struct {
 	currentTimeout  *time.Duration         // local mirror of runner timeout: nil = default; pointer-to-0 = disabled; positive = custom
 	controlSend     chan<- runner.ControlMsg // write end of the control channel; nil in viewer mode
 
+	reminderOverlay    bool   // whether the reminder editor overlay is shown
+	reminderBuffer     string // text buffer; preserved across Esc, cleared only on successful queue
+	reminderPersistent bool   // toggled with Ctrl+P; controls Kind on the next queued reminder
+
+	pendingReminders []runner.Reminder // mirror of runner reminders, refreshed on EventReminderState
+
+	pendingOverlay bool // whether the pending-reminders removal overlay is shown
+	pendingCursor  int  // selected index in pendingReminders for removal overlay
+
+	// restartCount tracks restart attempts per iteration. Reset for an
+	// iteration when a fresh DisplayIteration arrives; incremented on
+	// DisplayRestart. Used by renderHeader.
+	restartCount map[int]int
+
 	// Main view (top pane) state.
 	blocks         []MainBlock // ordered content blocks for the main view
 	mainScroll     int         // scroll offset in main view (line-based)
@@ -258,6 +272,35 @@ func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
 	if de.Type == DisplayIteration && m.running {
 		m.iteration = de.Iteration
 		m.status = fmt.Sprintf("Iteration #%d", de.Iteration)
+		if m.restartCount != nil {
+			delete(m.restartCount, de.Iteration)
+		}
+	}
+
+	// Reminder-state updates are pure model mutations — no block, no stream entry.
+	if de.Type == DisplayReminderState {
+		m.pendingReminders = de.Reminders
+		// Keep the removal-overlay cursor inside bounds when entries vanish.
+		if m.pendingCursor >= len(m.pendingReminders) {
+			m.pendingCursor = len(m.pendingReminders) - 1
+			if m.pendingCursor < 0 {
+				m.pendingCursor = 0
+			}
+		}
+		return m, nil
+	}
+
+	// Iteration restarts bump a per-iteration counter for the header display.
+	if de.Type == DisplayRestart {
+		if m.restartCount == nil {
+			m.restartCount = make(map[int]int)
+		}
+		iter := de.RestartIter
+		if iter == 0 {
+			iter = m.iteration
+		}
+		m.restartCount[iter]++
+		// Fall through so the restart still appears in the stream/main view as info.
 	}
 
 	// Extract model name from assistant_text summaries like "← Assistant (claude-xxx)".
@@ -380,13 +423,13 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			}
 		}
 		m.activeToolIdx = -1
-	case DisplayInfo:
+	case DisplayInfo, DisplayRestart:
 		m.blocks = append(m.blocks, MainBlock{
 			Kind:     BlockInfo,
 			InfoText: de.Detail,
 		})
 		m.invalidateMainLayoutFrom(len(m.blocks) - 1)
-		// user_msg, turn_end, agent_end, session — skip (don't clutter main view)
+		// user_msg, turn_end, agent_end, session, reminder_state — skip (don't clutter main view)
 	}
 }
 
@@ -419,6 +462,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle timeout overlay keys.
 	if m.timeoutOverlay {
 		return m.handleTimeoutKey(msg)
+	}
+
+	// Handle reminder editor overlay keys (must come before main switch to
+	// capture printable runes as buffer input).
+	if m.reminderOverlay {
+		return m.handleReminderKey(msg)
+	}
+
+	// Handle pending reminder list overlay keys.
+	if m.pendingOverlay {
+		return m.handlePendingKey(msg)
 	}
 
 	// Handle prompt overlay keys.
@@ -624,6 +678,25 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.timeoutInput = ""
 		m.timeoutError = ""
 
+	case "m":
+		// Open the reminder editor. Buffer is preserved across Esc, so the
+		// user never loses what they typed.
+		if m.controlSend == nil {
+			break
+		}
+		m.reminderOverlay = true
+
+	case "M":
+		// Open the pending-reminders removal overlay. No-op if there is
+		// nothing to remove.
+		if m.controlSend == nil || len(m.pendingReminders) == 0 {
+			break
+		}
+		m.pendingOverlay = true
+		if m.pendingCursor >= len(m.pendingReminders) {
+			m.pendingCursor = 0
+		}
+
 	case "?":
 		m.helpOverlay = true
 	}
@@ -714,6 +787,130 @@ func (m Model) submitTimeoutInput() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleReminderKey handles raw key input while the reminder editor overlay
+// is open. The buffer survives Esc, so the user never loses typed text.
+func (m Model) handleReminderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Detect ctrl+enter ahead of plain Enter — most terminals don't send a
+	// distinct sequence, but those that do report tea.KeyCtrlJ (LF) or the
+	// string "ctrl+enter".
+	if msg.Type == tea.KeyCtrlJ || msg.String() == "ctrl+enter" {
+		return m.queueReminder(true)
+	}
+	switch msg.Type {
+	case tea.KeyEsc:
+		// Close, but keep the buffer for the next open.
+		m.reminderOverlay = false
+		return m, nil
+	case tea.KeyEnter:
+		return m.queueReminder(false)
+	case tea.KeyCtrlP:
+		m.reminderPersistent = !m.reminderPersistent
+		return m, nil
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		runes := []rune(m.reminderBuffer)
+		if len(runes) > 0 {
+			m.reminderBuffer = string(runes[:len(runes)-1])
+		}
+		return m, nil
+	case tea.KeyCtrlU:
+		m.reminderBuffer = ""
+		return m, nil
+	case tea.KeyRunes:
+		if len(msg.Runes) > 0 {
+			m.reminderBuffer += string(msg.Runes)
+		}
+		return m, nil
+	case tea.KeySpace:
+		m.reminderBuffer += " "
+		return m, nil
+	}
+	return m, nil
+}
+
+// queueReminder packages reminderBuffer into a ControlAddReminder, sends it
+// non-blocking, optionally also requests a restart (apply-now), and clears
+// the buffer + closes the overlay on success. Empty buffer is a no-op (stays
+// open so the user can keep typing).
+func (m Model) queueReminder(applyNow bool) (tea.Model, tea.Cmd) {
+	text := strings.TrimSpace(m.reminderBuffer)
+	if text == "" {
+		return m, nil
+	}
+	if m.controlSend == nil {
+		// Should not be reachable — overlay is gated on controlSend — but keep
+		// the input intact in case it ever is.
+		return m, nil
+	}
+	kind := runner.ReminderOneOff
+	if m.reminderPersistent {
+		kind = runner.ReminderPersistent
+	}
+	add := runner.ControlMsg{
+		Kind:     runner.ControlAddReminder,
+		Reminder: runner.Reminder{Kind: kind, Text: text},
+	}
+	select {
+	case m.controlSend <- add:
+	default:
+		// Channel full / runner stalled. Leave the buffer so the user can retry.
+		return m, nil
+	}
+	if applyNow {
+		select {
+		case m.controlSend <- runner.ControlMsg{Kind: runner.ControlRequestRestart}:
+		default:
+			// Best-effort: the reminder was queued; restart will land on the
+			// next iteration if the channel was momentarily full.
+		}
+	}
+	m.reminderBuffer = ""
+	m.reminderOverlay = false
+	return m, nil
+}
+
+// handlePendingKey handles the pending-reminders removal overlay.
+func (m Model) handlePendingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q", "M":
+		m.pendingOverlay = false
+		return m, nil
+	case "j", "down":
+		if m.pendingCursor < len(m.pendingReminders)-1 {
+			m.pendingCursor++
+		}
+		return m, nil
+	case "k", "up":
+		if m.pendingCursor > 0 {
+			m.pendingCursor--
+		}
+		return m, nil
+	case "x":
+		if m.controlSend == nil ||
+			m.pendingCursor < 0 ||
+			m.pendingCursor >= len(m.pendingReminders) {
+			return m, nil
+		}
+		id := m.pendingReminders[m.pendingCursor].ID
+		select {
+		case m.controlSend <- runner.ControlMsg{Kind: runner.ControlRemoveReminder, ID: id}:
+		default:
+		}
+		// Optimistic local removal; the runner will also emit EventReminderState.
+		m.pendingReminders = append(m.pendingReminders[:m.pendingCursor], m.pendingReminders[m.pendingCursor+1:]...)
+		if m.pendingCursor >= len(m.pendingReminders) {
+			m.pendingCursor = len(m.pendingReminders) - 1
+			if m.pendingCursor < 0 {
+				m.pendingCursor = 0
+			}
+		}
+		if len(m.pendingReminders) == 0 {
+			m.pendingOverlay = false
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
 func (m *Model) ensureStreamCursorVisible() {
 	streamH := m.paneHeight() - 1
 	if streamH <= 0 {
@@ -793,6 +990,14 @@ func (m Model) View() string {
 
 	if m.timeoutOverlay {
 		return m.renderTimeoutOverlay()
+	}
+
+	if m.reminderOverlay {
+		return m.renderReminderOverlay()
+	}
+
+	if m.pendingOverlay {
+		return m.renderPendingOverlay()
 	}
 
 	if m.errorOverlay != "" {
@@ -912,7 +1117,11 @@ func (m Model) renderHeader() string {
 		optional = append(optional, m.agentName)
 	}
 	if m.iteration > 0 {
-		optional = append(optional, fmt.Sprintf("Iteration #%d", m.iteration))
+		iterSeg := fmt.Sprintf("Iteration #%d", m.iteration)
+		if c := m.restartCount[m.iteration]; c > 0 {
+			iterSeg = fmt.Sprintf("%s (restart %d)", iterSeg, c)
+		}
+		optional = append(optional, iterSeg)
 	}
 	if m.modelName != "" {
 		optional = append(optional, m.modelName)
@@ -1109,6 +1318,9 @@ func (m Model) renderStatus() string {
 			}
 		}
 	}
+	if strip := remindersStrip(m.pendingReminders); strip != "" {
+		left += " │ " + strip
+	}
 
 	modeStr := "rendered"
 	if m.rawMode {
@@ -1120,6 +1332,7 @@ func (m Model) renderStatus() string {
 		sep + statusKeyStyle.Render("Tab") + ":pane" +
 		sep + statusKeyStyle.Render("r") + ":" + modeStr +
 		sep + statusKeyStyle.Render("t") + ":" + timeoutSegmentValue(m.currentTimeout) +
+		sep + statusKeyStyle.Render("m") + ":rmd" +
 		sep + statusKeyStyle.Render("p") + ":prompt" +
 		sep + statusKeyStyle.Render("n") + ":memory" +
 		sep + statusKeyStyle.Render("?") + ":help" +
@@ -1208,6 +1421,8 @@ func (m Model) renderHelpOverlay() string {
 		"\n" +
 		"Control\n" +
 		"  t             Set inactivity timeout\n" +
+		"  m             Add reminder (Ctrl+P toggles persistent)\n" +
+		"  M             Remove pending reminder\n" +
 		"\n" +
 		"Other\n" +
 		"  q             Quit (press again to confirm)\n" +
@@ -1374,6 +1589,94 @@ func (m Model) renderTimeoutOverlay() string {
 		hint:          "Enter:apply  Esc:cancel",
 		cardBorder:    browserCardBorder,
 	})
+}
+
+// renderReminderOverlay renders the reminder editor as a centered modal card
+// with a single-line input field, persistence state, and key hints.
+func (m Model) renderReminderOverlay() string {
+	persistText := "off"
+	if m.reminderPersistent {
+		persistText = "on"
+	}
+	body := fmt.Sprintf(
+		"> %s_\n\npersistent: %s\n\n[Enter] queue   [Ctrl+Enter] apply now (restart)\n[Ctrl+P] toggle persistent   [Esc] close (keeps buffer)",
+		m.reminderBuffer, persistText,
+	)
+	return m.renderOverlayCard(overlayContent{
+		body:          body,
+		scroll:        0,
+		reservedLines: 6,
+		title:         "Add Reminder",
+		titleStyle:    browserCardTitle,
+		hint:          "Esc:close  Enter:queue  Ctrl+Enter:apply now  Ctrl+P:persistent",
+		cardBorder:    browserCardBorder,
+	})
+}
+
+// renderPendingOverlay renders the pending-reminders removal list as a
+// centered modal card. The cursor row is highlighted; `x` removes the entry,
+// `q`/`Esc`/`M` close. Persistent entries are marked `[P]`.
+func (m Model) renderPendingOverlay() string {
+	if len(m.pendingReminders) == 0 {
+		return m.renderOverlayCard(overlayContent{
+			body:          "(no pending reminders)",
+			scroll:        0,
+			reservedLines: 6,
+			title:         "Pending Reminders",
+			titleStyle:    browserCardTitle,
+			hint:          "M/Esc/q:close",
+			cardBorder:    browserCardBorder,
+		})
+	}
+	var lines []string
+	for i, r := range m.pendingReminders {
+		marker := "  "
+		if r.Kind == runner.ReminderPersistent {
+			marker = "[P]"
+		}
+		row := fmt.Sprintf("%s %s", marker, r.Text)
+		if i == m.pendingCursor {
+			row = "▌ " + row
+		} else {
+			row = "  " + row
+		}
+		lines = append(lines, row)
+	}
+	body := strings.Join(lines, "\n")
+	return m.renderOverlayCard(overlayContent{
+		body:          body,
+		scroll:        0,
+		reservedLines: 6,
+		title:         "Pending Reminders",
+		titleStyle:    browserCardTitle,
+		hint:          "j/k:move  x:remove  M/Esc/q:close",
+		cardBorder:    browserCardBorder,
+	})
+}
+
+// remindersStrip returns a compact summary of pending reminders for the
+// status bar (e.g. "Reminders: 1 one-off, 2 persistent"). Empty list returns
+// the empty string so the caller can decide whether to render anything.
+func remindersStrip(rs []runner.Reminder) string {
+	if len(rs) == 0 {
+		return ""
+	}
+	var oneOff, persistent int
+	for _, r := range rs {
+		if r.Kind == runner.ReminderPersistent {
+			persistent++
+		} else {
+			oneOff++
+		}
+	}
+	switch {
+	case oneOff > 0 && persistent > 0:
+		return fmt.Sprintf("Reminders: %d one-off, %d persistent", oneOff, persistent)
+	case persistent > 0:
+		return fmt.Sprintf("Reminders: %d persistent", persistent)
+	default:
+		return fmt.Sprintf("Reminders: %d one-off", oneOff)
+	}
 }
 
 // formatTimeoutValue renders a timeout pointer for display in the overlay:

@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"sync"
 	"time"
+
+	"github.com/fsmiamoto/ralfinho/internal/events"
 )
 
 // ControlKind identifies the kind of a ControlMsg.
@@ -23,23 +25,17 @@ const (
 	ControlRequestRestart
 )
 
-// ReminderKind distinguishes one-off vs persistent reminders.
-type ReminderKind int
+// ReminderKind, Reminder, and the ReminderOneOff/ReminderPersistent constants
+// live in internal/events so the Event struct can reference them without a
+// circular import. They are re-exported here as aliases.
+type ReminderKind = events.ReminderKind
 
 const (
-	// ReminderOneOff is consumed when an iteration runs to completion or
-	// continues normally. Restart and watchdog timeout do not consume it.
-	ReminderOneOff ReminderKind = iota
-	// ReminderPersistent stays until explicitly removed.
-	ReminderPersistent
+	ReminderOneOff     = events.ReminderOneOff
+	ReminderPersistent = events.ReminderPersistent
 )
 
-// Reminder is a single steering note appended to the prompt.
-type Reminder struct {
-	ID   string // assigned by runner on Add
-	Kind ReminderKind
-	Text string
-}
+type Reminder = events.Reminder
 
 // ControlMsg is the typed message sent from the TUI to the runner.
 // Exactly one of the per-kind fields is meaningful for each Kind.

@@ -88,6 +88,7 @@ var eventStyles = map[DisplayEventType]lipgloss.Style{
 	DisplayIteration:     lipgloss.NewStyle().Foreground(colorIteration).Bold(true),
 	DisplaySession:       lipgloss.NewStyle().Foreground(colorInfo),
 	DisplayInfo:          lipgloss.NewStyle().Foreground(colorInfo),
+	DisplayRestart:       lipgloss.NewStyle().Foreground(colorIteration).Bold(true),
 }
 
 var defaultEventStyle = lipgloss.NewStyle().Foreground(colorBright)

@@ -682,8 +682,8 @@ func TestEventConverter_IterationRestart(t *testing.T) {
 		t.Fatalf("expected 1 display event, got %d", len(result))
 	}
 	de := result[0]
-	if de.Type != DisplayInfo {
-		t.Errorf("type = %q, want %q", de.Type, DisplayInfo)
+	if de.Type != DisplayRestart {
+		t.Errorf("type = %q, want %q", de.Type, DisplayRestart)
 	}
 	wantSummary := "Iteration 3 restarted (attempt 2)"
 	if de.Summary != wantSummary {
@@ -694,6 +694,9 @@ func TestEventConverter_IterationRestart(t *testing.T) {
 	}
 	if de.Iteration != 3 {
 		t.Errorf("iteration = %d, want 3", de.Iteration)
+	}
+	if de.RestartIter != 3 {
+		t.Errorf("RestartIter = %d, want 3", de.RestartIter)
 	}
 }
 
