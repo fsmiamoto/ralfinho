@@ -39,11 +39,12 @@ type RunConfig struct {
 	MaxIterations     int            // 0 = unlimited
 	InactivityTimeout *time.Duration // nil = default (5m); 0 = disabled; >0 = custom
 	RunsDir           string
-	PromptSource      string       // "prompt", "plan", or "default"
-	PromptFile        string       // path when PromptSource is "prompt"
-	PlanFile          string       // path when PromptSource is "plan"
-	EventChan         chan<- Event // optional: send events to TUI
-	RunID             string       // optional: pre-generated run ID; if empty, a UUID is generated
+	PromptSource      string            // "prompt", "plan", or "default"
+	PromptFile        string            // path when PromptSource is "prompt"
+	PlanFile          string            // path when PromptSource is "plan"
+	EventChan         chan<- Event      // optional: send events to TUI
+	ControlChan       <-chan ControlMsg // optional: TUI → runner control messages
+	RunID             string            // optional: pre-generated run ID; if empty, a UUID is generated
 
 	// AgentExtraArgs holds extra arguments to append to the agent subprocess
 	// command line. Sourced from per-agent config file settings.
@@ -74,6 +75,7 @@ type Runner struct {
 	sessionText         strings.Builder // accumulates assistant text for session.log
 	iterAgent           agent.Agent     // agent implementation for running iterations
 	consecutiveTimeouts int             // reset to 0 on any successful iteration
+	control             *controlState   // live, mutex-guarded mutable parameters
 }
 
 // NewRunID generates a new UUID suitable for use as a run ID.
@@ -87,10 +89,11 @@ func New(cfg RunConfig) *Runner {
 		runID = newUUID()
 	}
 	return &Runner{
-		cfg:    cfg,
-		runID:  runID,
-		stdin:  os.Stdin,
-		stderr: os.Stderr,
+		cfg:     cfg,
+		runID:   runID,
+		stdin:   os.Stdin,
+		stderr:  os.Stderr,
+		control: newControlState(cfg.InactivityTimeout),
 	}
 }
 
@@ -287,6 +290,9 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 		defer signal.Stop(sigCh)
 	}
 
+	// Local copy so we can nil it out if the channel is closed without
+	// reassigning the cfg field.
+	controlCh := r.cfg.ControlChan
 	go func() {
 		for {
 			select {
@@ -300,6 +306,12 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 				timedOut = true
 				mu.Unlock()
 				cancel()
+			case msg, ok := <-controlCh:
+				if !ok {
+					controlCh = nil
+					continue
+				}
+				r.handleControlMsg(msg)
 			case <-done:
 				return
 			}
@@ -366,6 +378,23 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 	}
 
 	return iterContinue, nil
+}
+
+// handleControlMsg dispatches a single control message to the appropriate
+// controlState accessor. Side-effects beyond state mutation (cancelling the
+// iteration on restart, resetting the watchdog timer on timeout change,
+// writing audit log entries) are added by later tasks.
+func (r *Runner) handleControlMsg(msg ControlMsg) {
+	switch msg.Kind {
+	case ControlSetTimeout:
+		r.control.setTimeout(msg.Timeout)
+	case ControlAddReminder:
+		r.control.addReminder(msg.Reminder)
+	case ControlRemoveReminder:
+		r.control.removeReminder(msg.ID)
+	case ControlRequestRestart:
+		r.control.requestRestart()
+	}
 }
 
 // sendEvent sends an event to the TUI channel if configured (non-blocking).

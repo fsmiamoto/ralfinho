@@ -34,9 +34,9 @@ func TestTruncate(t *testing.T) {
 		{"hello", 10, "hello"},
 		{"hello world", 5, "hell…"},
 		{"", 5, ""},
-		{"こんにちは世界", 5, "こんにち…"},  // multi-byte: truncates by rune, not byte
-		{"abc", 0, "…"},                     // n=0 edge case
-		{"a", 1, "a"},                       // exactly at limit
+		{"こんにちは世界", 5, "こんにち…"}, // multi-byte: truncates by rune, not byte
+		{"abc", 0, "…"},         // n=0 edge case
+		{"a", 1, "a"},           // exactly at limit
 	}
 	for _, tt := range tests {
 		got := truncate(tt.s, tt.n)
@@ -1534,5 +1534,195 @@ func TestInitMemoryFiles_SkipsExistingFiles(t *testing.T) {
 	}
 	if len(data) != 0 {
 		t.Errorf("PROGRESS.md should be empty, got %q", string(data))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// controlState accessors (Task 1)
+// ---------------------------------------------------------------------------
+
+func TestControlState_AddRemoveReminder(t *testing.T) {
+	c := newControlState(nil)
+
+	r1 := c.addReminder(Reminder{Kind: ReminderOneOff, Text: "first"})
+	r2 := c.addReminder(Reminder{Kind: ReminderPersistent, Text: "second"})
+
+	if r1.ID == "" || r2.ID == "" {
+		t.Fatalf("addReminder should assign IDs, got %q and %q", r1.ID, r2.ID)
+	}
+	if r1.ID == r2.ID {
+		t.Fatalf("addReminder should assign unique IDs, got duplicate %q", r1.ID)
+	}
+
+	snap := c.snapshotReminders()
+	if len(snap) != 2 {
+		t.Fatalf("snapshotReminders len = %d, want 2", len(snap))
+	}
+	if snap[0].Text != "first" || snap[1].Text != "second" {
+		t.Errorf("snapshot order wrong: %+v", snap)
+	}
+
+	if !c.removeReminder(r1.ID) {
+		t.Errorf("removeReminder(%q) returned false; want true", r1.ID)
+	}
+	if c.removeReminder(r1.ID) {
+		t.Errorf("second removeReminder(%q) returned true; want false", r1.ID)
+	}
+
+	snap = c.snapshotReminders()
+	if len(snap) != 1 || snap[0].ID != r2.ID {
+		t.Errorf("after remove, snapshot = %+v", snap)
+	}
+}
+
+func TestControlState_SnapshotReturnsCopy(t *testing.T) {
+	c := newControlState(nil)
+	c.addReminder(Reminder{Kind: ReminderPersistent, Text: "keep"})
+
+	snap := c.snapshotReminders()
+	if len(snap) != 1 {
+		t.Fatalf("snapshot len = %d, want 1", len(snap))
+	}
+	snap[0].Text = "mutated"
+
+	snap2 := c.snapshotReminders()
+	if snap2[0].Text != "keep" {
+		t.Errorf("mutating snapshot affected internal state: got %q, want %q", snap2[0].Text, "keep")
+	}
+}
+
+func TestControlState_ConsumeOneOffsLeavesPersistent(t *testing.T) {
+	c := newControlState(nil)
+	o1 := c.addReminder(Reminder{Kind: ReminderOneOff, Text: "one"})
+	p := c.addReminder(Reminder{Kind: ReminderPersistent, Text: "persist"})
+	o2 := c.addReminder(Reminder{Kind: ReminderOneOff, Text: "two"})
+
+	consumed := c.consumeOneOffs()
+	if len(consumed) != 2 {
+		t.Fatalf("consumeOneOffs returned %d IDs, want 2", len(consumed))
+	}
+	got := map[string]bool{consumed[0]: true, consumed[1]: true}
+	if !got[o1.ID] || !got[o2.ID] {
+		t.Errorf("consumed IDs = %v, want both %q and %q", consumed, o1.ID, o2.ID)
+	}
+
+	snap := c.snapshotReminders()
+	if len(snap) != 1 || snap[0].ID != p.ID {
+		t.Errorf("after consume, snapshot = %+v; expected only persistent %q", snap, p.ID)
+	}
+}
+
+func TestControlState_RestartFlag(t *testing.T) {
+	c := newControlState(nil)
+
+	if c.takeRestartRequested() {
+		t.Error("takeRestartRequested should be false initially")
+	}
+
+	c.requestRestart()
+	if !c.takeRestartRequested() {
+		t.Error("takeRestartRequested should return true after requestRestart()")
+	}
+	if c.takeRestartRequested() {
+		t.Error("takeRestartRequested should clear the flag after returning true")
+	}
+}
+
+func TestControlState_TimeoutSemantics(t *testing.T) {
+	// Default (nil) → not disabled, default duration.
+	c := newControlState(nil)
+	if c.watchdogDisabled() {
+		t.Error("nil timeout should not be disabled")
+	}
+	if got := c.effectiveTimeout(); got != defaultInactivityTimeout {
+		t.Errorf("default effectiveTimeout = %s, want %s", got, defaultInactivityTimeout)
+	}
+
+	// Disabled (pointer to 0).
+	zero := time.Duration(0)
+	c.setTimeout(&zero)
+	if !c.watchdogDisabled() {
+		t.Error("pointer to 0 should be disabled")
+	}
+
+	// Custom value.
+	custom := 250 * time.Millisecond
+	c.setTimeout(&custom)
+	if c.watchdogDisabled() {
+		t.Error("positive timeout should not be disabled")
+	}
+	if got := c.effectiveTimeout(); got != custom {
+		t.Errorf("effectiveTimeout = %s, want %s", got, custom)
+	}
+}
+
+func TestNewReminderID_Format(t *testing.T) {
+	re := regexp.MustCompile(`^rmd-[0-9a-f]{8}$`)
+	seen := map[string]bool{}
+	for i := 0; i < 50; i++ {
+		id := newReminderID()
+		if !re.MatchString(id) {
+			t.Errorf("newReminderID() = %q, want pattern rmd-<8 hex>", id)
+		}
+		if seen[id] {
+			t.Errorf("newReminderID() returned duplicate %q", id)
+		}
+		seen[id] = true
+	}
+}
+
+// TestRun_ControlChan_SetTimeoutUpdatesState verifies the integration: a
+// Runner constructed with a ControlChan dispatches ControlSetTimeout messages
+// to controlState. Behavioural watchdog updates land in Task 3; here we only
+// check that the state mutates.
+func TestRun_ControlChan_SetTimeoutUpdatesState(t *testing.T) {
+	timeoutApplied := make(chan struct{})
+	hang := func(ctx context.Context, _ func(events.Event)) (string, error) {
+		// Wait until the test sees the timeout update, then return.
+		select {
+		case <-timeoutApplied:
+			return completionMarker, nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	fa := &flexAgent{behaviors: []agentBehavior{hang}}
+
+	controlCh := make(chan ControlMsg, 4)
+	r := New(RunConfig{
+		Agent:       "test",
+		Prompt:      "test",
+		RunsDir:     t.TempDir(),
+		ControlChan: controlCh,
+	})
+	r.iterAgent = fa
+	r.stderr = io.Discard
+
+	runDone := make(chan RunResult, 1)
+	go func() {
+		runDone <- r.Run(context.Background())
+	}()
+
+	// Send a custom timeout via the control channel.
+	custom := 750 * time.Millisecond
+	controlCh <- ControlMsg{Kind: ControlSetTimeout, Timeout: &custom}
+
+	// Wait until the runner has dispatched the message into controlState.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := r.control.effectiveTimeout(); got == custom {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := r.control.effectiveTimeout(); got != custom {
+		t.Fatalf("effectiveTimeout after ControlSetTimeout = %s, want %s", got, custom)
+	}
+
+	// Let the agent finish so Run returns.
+	close(timeoutApplied)
+	result := <-runDone
+	if result.Status != StatusCompleted {
+		t.Errorf("status = %s, want %s", result.Status, StatusCompleted)
 	}
 }
