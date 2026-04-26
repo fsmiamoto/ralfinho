@@ -73,8 +73,9 @@ type Model struct {
 
 	pendingReminders []runner.Reminder // mirror of runner reminders, refreshed on EventReminderState
 
-	pendingOverlay bool // whether the pending-reminders removal overlay is shown
-	pendingCursor  int  // selected index in pendingReminders for removal overlay
+	pendingOverlay bool   // whether the pending-reminders removal overlay is shown
+	pendingCursor  int    // selected index in pendingReminders for removal overlay
+	pendingError   string // populated when a remove send hits a full control channel; cleared on next interaction
 
 	// restartCount tracks restart attempts per iteration. Reset for an
 	// iteration when a fresh DisplayIteration arrives; incremented on
@@ -693,6 +694,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.pendingOverlay = true
+		m.pendingError = ""
 		if m.pendingCursor >= len(m.pendingReminders) {
 			m.pendingCursor = 0
 		}
@@ -877,16 +879,19 @@ func (m Model) handlePendingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "q", "M":
 		m.pendingOverlay = false
+		m.pendingError = ""
 		return m, nil
 	case "j", "down":
 		if m.pendingCursor < len(m.pendingReminders)-1 {
 			m.pendingCursor++
 		}
+		m.pendingError = ""
 		return m, nil
 	case "k", "up":
 		if m.pendingCursor > 0 {
 			m.pendingCursor--
 		}
+		m.pendingError = ""
 		return m, nil
 	case "x":
 		if m.controlSend == nil ||
@@ -895,10 +900,16 @@ func (m Model) handlePendingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		id := m.pendingReminders[m.pendingCursor].ID
+		// Mirror submitTimeoutInput's recovery shape: don't update the local
+		// mirror unless the runner actually heard the removal. Otherwise the
+		// UI lies until the next EventReminderState reconciles.
 		select {
 		case m.controlSend <- runner.ControlMsg{Kind: runner.ControlRemoveReminder, ID: id}:
 		default:
+			m.pendingError = "control channel full; try again"
+			return m, nil
 		}
+		m.pendingError = ""
 		// Optimistic local removal; the runner will also emit EventReminderState.
 		m.pendingReminders = append(m.pendingReminders[:m.pendingCursor], m.pendingReminders[m.pendingCursor+1:]...)
 		if m.pendingCursor >= len(m.pendingReminders) {
@@ -1649,6 +1660,9 @@ func (m Model) renderPendingOverlay() string {
 		lines = append(lines, row)
 	}
 	body := strings.Join(lines, "\n")
+	if m.pendingError != "" {
+		body += "\n\nError: " + m.pendingError
+	}
 	return m.renderOverlayCard(overlayContent{
 		body:          body,
 		scroll:        0,

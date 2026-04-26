@@ -2012,6 +2012,79 @@ func TestPendingOverlayClosesOnEsc(t *testing.T) {
 	}
 }
 
+// TestPendingOverlayXChannelFullKeepsOverlayOpen pins the recovery
+// behavior when the runner is stalled and the control channel is full:
+// the overlay must stay open with an error and the local pendingReminders
+// mirror must NOT be optimistically modified, since the runner never
+// received the removal.
+func TestPendingOverlayXChannelFullKeepsOverlayOpen(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 1)
+	// Pre-fill the channel so the next send hits the default branch.
+	ctrl <- runner.ControlMsg{Kind: runner.ControlSetTimeout}
+	original := []runner.Reminder{
+		{ID: "rmd-1", Kind: runner.ReminderOneOff, Text: "a"},
+		{ID: "rmd-2", Kind: runner.ReminderPersistent, Text: "b"},
+	}
+	m := Model{
+		width:            80,
+		height:           24,
+		controlSend:      ctrl,
+		pendingOverlay:   true,
+		pendingCursor:    1,
+		pendingReminders: append([]runner.Reminder(nil), original...),
+	}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+
+	if !m.pendingOverlay {
+		t.Fatal("channel full: pending overlay closed, want still open")
+	}
+	if m.pendingError == "" {
+		t.Fatal("channel full: pendingError empty, want populated")
+	}
+	if len(m.pendingReminders) != len(original) {
+		t.Fatalf("channel full: pendingReminders len = %d, want unchanged at %d",
+			len(m.pendingReminders), len(original))
+	}
+	for i, r := range original {
+		if m.pendingReminders[i].ID != r.ID {
+			t.Fatalf("channel full: pendingReminders[%d].ID = %q, want unchanged %q",
+				i, m.pendingReminders[i].ID, r.ID)
+		}
+	}
+	if m.pendingCursor != 1 {
+		t.Fatalf("channel full: pendingCursor = %d, want unchanged at 1", m.pendingCursor)
+	}
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "control channel full") {
+		t.Fatalf("channel full: view missing error text, got %q", view)
+	}
+}
+
+// TestPendingOverlayErrorClearsOnMovement verifies that the channel-full
+// error is cleared when the user moves the cursor or closes the overlay,
+// matching the timeoutError UX (errors don't linger forever).
+func TestPendingOverlayErrorClearsOnMovement(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{
+		width:          80,
+		height:         24,
+		controlSend:    ctrl,
+		pendingOverlay: true,
+		pendingCursor:  0,
+		pendingReminders: []runner.Reminder{
+			{ID: "rmd-1", Text: "a"},
+			{ID: "rmd-2", Text: "b"},
+		},
+		pendingError: "control channel full; try again",
+	}
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'j'}}))
+	if m.pendingError != "" {
+		t.Fatalf("after j: pendingError = %q, want cleared", m.pendingError)
+	}
+}
+
 func TestHelpOverlayIncludesReminderKeys(t *testing.T) {
 	m := Model{width: 80, height: 40, helpOverlay: true}
 	view := stripANSI(m.renderHelpOverlay())
