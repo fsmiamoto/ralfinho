@@ -86,6 +86,18 @@ func (c *controlState) watchdogDisabled() bool {
 	return c.timeout != nil && *c.timeout == 0
 }
 
+// watchdogState returns whether the watchdog is currently disabled and the
+// effective timeout duration in a single atomic snapshot. When disabled is
+// true, the timeout value is meaningless.
+func (c *controlState) watchdogState() (disabled bool, timeout time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.timeout != nil && *c.timeout == 0 {
+		return true, 0
+	}
+	return false, resolveInactivityTimeout(c.timeout)
+}
+
 // setTimeout replaces the live timeout pointer.
 func (c *controlState) setTimeout(d *time.Duration) {
 	c.mu.Lock()

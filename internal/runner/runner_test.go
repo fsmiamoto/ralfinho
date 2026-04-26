@@ -1411,6 +1411,179 @@ func TestRun_InactivityTimeout_ZeroDisablesWatchdog(t *testing.T) {
 	}
 }
 
+// TestRun_InactivityTimeout_LiveUpdate_Extends verifies that ControlSetTimeout
+// sent mid-iteration is picked up by the next watchdog.Reset, extending the
+// timer so that the iteration does not time out at the original (shorter)
+// duration.
+func TestRun_InactivityTimeout_LiveUpdate_Extends(t *testing.T) {
+	initial := 100 * time.Millisecond
+	extended := 2 * time.Second
+
+	firstEventEmitted := make(chan struct{})
+	secondEventCanFire := make(chan struct{})
+
+	behavior := func(ctx context.Context, onEvent func(events.Event)) (string, error) {
+		// First event: at this point the watchdog is set to the initial 100ms.
+		// Reset here also reads the initial value (test hasn't pushed yet).
+		onEvent(events.Event{Type: events.EventTurnEnd})
+		close(firstEventEmitted)
+
+		// Wait for the test to push the extended timeout into controlState.
+		select {
+		case <-secondEventCanFire:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+
+		// Second event: Reset reads the live (now 2s) value, extending the
+		// watchdog so the upcoming hang doesn't trigger a timeout.
+		onEvent(events.Event{Type: events.EventTurnEnd})
+
+		// Hang for longer than the original 100ms but well within 2s.
+		select {
+		case <-time.After(250 * time.Millisecond):
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+		return completionMarker, nil
+	}
+	fa := &flexAgent{behaviors: []agentBehavior{behavior}}
+
+	controlCh := make(chan ControlMsg, 4)
+	r := New(RunConfig{
+		Agent:             "test",
+		Prompt:            "test",
+		InactivityTimeout: &initial,
+		RunsDir:           t.TempDir(),
+		ControlChan:       controlCh,
+	})
+	r.iterAgent = fa
+	r.stderr = io.Discard
+
+	runDone := make(chan RunResult, 1)
+	go func() {
+		runDone <- r.Run(context.Background())
+	}()
+
+	// Wait for the first event so we know the watchdog is armed with 100ms.
+	select {
+	case <-firstEventEmitted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first event not emitted in time")
+	}
+
+	// Push the extended timeout. The runner's goroutine processes this in
+	// its select loop almost immediately.
+	controlCh <- ControlMsg{Kind: ControlSetTimeout, Timeout: &extended}
+
+	// Wait for controlState to reflect the change. This must complete well
+	// before the 100ms initial timer fires.
+	deadline := time.Now().Add(80 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if _, got := r.control.watchdogState(); got == extended {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, got := r.control.watchdogState(); got != extended {
+		t.Fatal("controlState not updated to extended timeout in time")
+	}
+
+	// Signal the agent to emit its second event, picking up the new timeout.
+	close(secondEventCanFire)
+
+	select {
+	case result := <-runDone:
+		if result.Status != StatusCompleted {
+			t.Errorf("status = %s, want %s (timed out before live update could take effect)", result.Status, StatusCompleted)
+		}
+		if fa.callCount != 1 {
+			t.Errorf("agent called %d times, want 1 (no retry)", fa.callCount)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("run did not complete in time")
+	}
+}
+
+// TestRun_InactivityTimeout_LiveUpdate_Disables verifies that sending
+// ControlSetTimeout with a zero pointer mid-iteration stops the live
+// watchdog timer, allowing the iteration to run uninterrupted.
+func TestRun_InactivityTimeout_LiveUpdate_Disables(t *testing.T) {
+	initial := 100 * time.Millisecond
+	disabled := time.Duration(0)
+
+	canComplete := make(chan struct{})
+
+	behavior := func(ctx context.Context, _ func(events.Event)) (string, error) {
+		// Hang until either the test signals completion or the context is
+		// cancelled (would happen if the watchdog fired).
+		select {
+		case <-canComplete:
+			return completionMarker, nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	fa := &flexAgent{behaviors: []agentBehavior{behavior}}
+
+	controlCh := make(chan ControlMsg, 4)
+	r := New(RunConfig{
+		Agent:             "test",
+		Prompt:            "test",
+		InactivityTimeout: &initial,
+		RunsDir:           t.TempDir(),
+		ControlChan:       controlCh,
+	})
+	r.iterAgent = fa
+	r.stderr = io.Discard
+
+	runDone := make(chan RunResult, 1)
+	go func() {
+		runDone <- r.Run(context.Background())
+	}()
+
+	// Disable the watchdog quickly, before the initial 100ms can fire.
+	controlCh <- ControlMsg{Kind: ControlSetTimeout, Timeout: &disabled}
+
+	// Wait for controlState to reflect the disable.
+	deadline := time.Now().Add(80 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if d, _ := r.control.watchdogState(); d {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if d, _ := r.control.watchdogState(); !d {
+		t.Fatal("controlState not updated to disabled in time")
+	}
+
+	// Sleep well past 2× the original timeout (which would otherwise have
+	// produced StatusStuck via two consecutive timeouts).
+	time.Sleep(300 * time.Millisecond)
+
+	// The run should still be in progress.
+	select {
+	case result := <-runDone:
+		t.Fatalf("run completed unexpectedly: status=%s iterations=%d", result.Status, result.Iterations)
+	default:
+	}
+
+	// Let the agent finish.
+	close(canComplete)
+
+	select {
+	case result := <-runDone:
+		if result.Status != StatusCompleted {
+			t.Errorf("status = %s, want %s", result.Status, StatusCompleted)
+		}
+		if fa.callCount != 1 {
+			t.Errorf("agent called %d times, want 1 (no retry)", fa.callCount)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not complete in time")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // NewRunID and RunConfig.RunID
 // ---------------------------------------------------------------------------

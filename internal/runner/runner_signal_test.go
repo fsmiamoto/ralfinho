@@ -226,6 +226,7 @@ func TestRunner_RunIteration_LogsWarningWhenEventsJSONLWriteFails(t *testing.T) 
 		},
 		eventsFile: eventsFile,
 		stderr:     &stderr,
+		control:    newControlState(nil),
 	}
 
 	status, err := r.runIteration(context.Background())

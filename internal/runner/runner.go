@@ -203,7 +203,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 			result.Status = StatusInterrupted
 			done = true
 		case iterTimedOut:
-			timeout := resolveInactivityTimeout(r.cfg.InactivityTimeout)
+			_, timeout := r.control.watchdogState()
 			r.consecutiveTimeouts++
 			if r.consecutiveTimeouts < 2 {
 				r.logf("inactivity timeout — retrying iteration\n")
@@ -266,16 +266,17 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 	var mu sync.Mutex
 
 	// --- Inactivity watchdog ---
-	// A non-nil zero pointer disables the watchdog entirely. Otherwise nil
-	// means "use default" and a positive value means "use that duration".
-	watchdogDisabled := r.cfg.InactivityTimeout != nil && *r.cfg.InactivityTimeout == 0
+	// A non-nil zero pointer disables the watchdog entirely. Live changes via
+	// ControlSetTimeout are read here at iteration start and again on every
+	// onEvent (which calls Reset). Going from disabled → enabled mid-iteration
+	// does not retroactively start the watchdog (no existing timer to Reset);
+	// the new value takes effect at the next iteration.
+	disabled, timeout := r.control.watchdogState()
 	var (
 		watchdog   *time.Timer
 		watchdogCh <-chan time.Time
-		timeout    time.Duration
 	)
-	if !watchdogDisabled {
-		timeout = resolveInactivityTimeout(r.cfg.InactivityTimeout)
+	if !disabled {
 		watchdog = time.NewTimer(timeout)
 		defer watchdog.Stop()
 		watchdogCh = watchdog.C
@@ -326,7 +327,18 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 					continue
 				}
 				r.handleControlMsg(msg)
-				if msg.Kind == ControlRequestRestart {
+				switch msg.Kind {
+				case ControlSetTimeout:
+					// Enabled → disabled: stop the live timer so it cannot
+					// fire. Other transitions take effect on the next
+					// onEvent's Reset (positive → positive) or next iteration
+					// (disabled → positive, since we cannot retroactively
+					// create a timer here).
+					if d, _ := r.control.watchdogState(); d && watchdog != nil {
+						watchdog.Stop()
+						watchdogCh = nil
+					}
+				case ControlRequestRestart:
 					mu.Lock()
 					restartRequested = true
 					mu.Unlock()
@@ -341,9 +353,13 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 	// Delegate to the agent. The onEvent callback persists, stores, and
 	// processes each event as it arrives.
 	assistantText, err := r.iterAgent.RunIteration(iterCtx, r.cfg.Prompt, func(ev Event) {
-		// Reset the inactivity watchdog on every event.
+		// Reset the inactivity watchdog on every event, picking up live
+		// timeout changes from controlState. If the watchdog was disabled
+		// mid-iteration, skip the Reset.
 		if watchdog != nil {
-			watchdog.Reset(timeout)
+			if d, t := r.control.watchdogState(); !d {
+				watchdog.Reset(t)
+			}
 		}
 
 		// Persist to events.jsonl.
