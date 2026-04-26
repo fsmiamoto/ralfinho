@@ -1421,7 +1421,9 @@ func (m Model) renderHelpOverlay() string {
 		"\n" +
 		"Control\n" +
 		"  t             Set inactivity timeout\n" +
-		"  m             Add reminder (Ctrl+P toggles persistent)\n" +
+		"  m             Add reminder for next iteration\n" +
+		"                  Ctrl+P     toggle persistent\n" +
+		"                  Ctrl+Enter apply now (restart)\n" +
 		"  M             Remove pending reminder\n" +
 		"\n" +
 		"Other\n" +

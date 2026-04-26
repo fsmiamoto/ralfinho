@@ -1980,7 +1980,7 @@ func TestPendingOverlayClosesOnEsc(t *testing.T) {
 func TestHelpOverlayIncludesReminderKeys(t *testing.T) {
 	m := Model{width: 80, height: 40, helpOverlay: true}
 	view := stripANSI(m.renderHelpOverlay())
-	for _, want := range []string{"m", "Add reminder", "M", "Remove pending"} {
+	for _, want := range []string{"m", "Add reminder", "Ctrl+P", "Ctrl+Enter", "M", "Remove pending"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("renderHelpOverlay() missing %q, got:\n%s", want, view)
 		}
