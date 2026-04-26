@@ -773,10 +773,14 @@ func (m Model) submitTimeoutInput() (tea.Model, tea.Cmd) {
 	}
 
 	// Send to runner non-blocking so a stalled runner cannot lock the TUI.
+	// On channel-full, leave the overlay open with an error so the user can
+	// retry — don't lie about currentTimeout when the runner never heard us.
 	if m.controlSend != nil {
 		select {
 		case m.controlSend <- runner.ControlMsg{Kind: runner.ControlSetTimeout, Timeout: newTimeout}:
 		default:
+			m.timeoutError = "control channel full; try again"
+			return m, nil
 		}
 	}
 

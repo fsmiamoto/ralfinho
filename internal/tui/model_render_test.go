@@ -1474,6 +1474,41 @@ func TestTimeoutOverlayEnterInvalidStaysOpenWithError(t *testing.T) {
 	}
 }
 
+// TestTimeoutOverlayEnterChannelFullKeepsOverlayOpen pins the recovery
+// behavior when the runner is stalled and the control channel is full:
+// the overlay must stay open with an error, the input must be preserved
+// for retry, and currentTimeout must NOT be updated (since the runner
+// never received the message).
+func TestTimeoutOverlayEnterChannelFullKeepsOverlayOpen(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 1)
+	// Pre-fill the channel so the next send hits the default branch.
+	ctrl <- runner.ControlMsg{Kind: runner.ControlSetTimeout}
+	initial := 5 * time.Minute
+	m := Model{
+		width:          80,
+		height:         24,
+		controlSend:    ctrl,
+		timeoutOverlay: true,
+		timeoutInput:   "30s",
+		currentTimeout: &initial,
+	}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+
+	if !m.timeoutOverlay {
+		t.Fatal("channel full: overlay closed, want still open")
+	}
+	if m.timeoutError == "" {
+		t.Fatal("channel full: timeoutError empty, want populated")
+	}
+	if m.timeoutInput != "30s" {
+		t.Fatalf("channel full: timeoutInput = %q, want preserved as %q", m.timeoutInput, "30s")
+	}
+	if m.currentTimeout == nil || *m.currentTimeout != initial {
+		t.Fatalf("channel full: currentTimeout = %v, want unchanged at %v", m.currentTimeout, initial)
+	}
+}
+
 func TestTimeoutOverlayRendersInputAndCurrent(t *testing.T) {
 	ctrl := make(chan runner.ControlMsg, 1)
 	current := 5 * time.Minute
