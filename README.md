@@ -97,6 +97,9 @@ During a live run or when viewing a past session:
 | `r` | Toggle raw / rendered detail view |
 | `p` | Show effective prompt |
 | `n` | Show memory files (NOTES.md / PROGRESS.md) |
+| `t` | Set inactivity timeout (e.g. `30s`, `0` to disable, `default`) |
+| `m` | Add a reminder for the next iteration (`Ctrl+P` toggles persistent, `Ctrl+Enter` applies now via restart) |
+| `M` | Remove a pending reminder |
 | `?` | Show keybinding help |
 | `q` | Quit (press twice to confirm) |
 
@@ -104,13 +107,25 @@ The memory overlay (`n`) reads files from disk on each open, so it always
 shows the latest content written by the agent. Use `Tab` inside the overlay
 to switch between NOTES and PROGRESS.
 
+### Session controls
+
+While a run is live, `t` adjusts the inactivity timeout without restarting
+ralfinho, and `m` opens an editor to append a steering note to the prompt
+the agent sees on its next iteration. One-off reminders are consumed when
+the iteration completes; persistent reminders (toggled with `Ctrl+P`)
+survive until you remove them with `M`. `Ctrl+Enter` queues the reminder
+and immediately restarts the current iteration so the agent picks it up
+without waiting for the next turn. Every control action is appended to
+`operator-log.jsonl` in the run directory.
+
 ## Run Artifacts
 
 Each run is saved to `.ralfinho/runs/<uuid>/`:
 
 - `meta.json` — run metadata (status, agent, iterations, timing)
 - `events.jsonl` — raw event stream from the agent
-- `effective-prompt.md` — the prompt that was sent
+- `effective-prompt.md` — the prompt that was sent at startup
+- `operator-log.jsonl` — append-only audit of in-session control actions (timeout changes, reminders, restarts)
 - `session.log` — human-readable timestamped log
 - `raw-output.log` — raw agent stdout
 - `NOTES.md` — agent's cross-iteration notes and decisions
