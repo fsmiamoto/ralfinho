@@ -61,6 +61,12 @@ type Model struct {
 	notesPath           string // path to NOTES.md in the run directory
 	progressPath        string // path to PROGRESS.md in the run directory
 
+	timeoutOverlay  bool                   // whether the timeout input overlay is shown
+	timeoutInput    string                 // current text buffer in the timeout overlay
+	timeoutError    string                 // populated when parse fails; cleared on next keystroke
+	currentTimeout  *time.Duration         // local mirror of runner timeout: nil = default; pointer-to-0 = disabled; positive = custom
+	controlSend     chan<- runner.ControlMsg // write end of the control channel; nil in viewer mode
+
 	// Main view (top pane) state.
 	blocks         []MainBlock // ordered content blocks for the main view
 	mainScroll     int         // scroll offset in main view (line-based)
@@ -76,7 +82,11 @@ type Model struct {
 }
 
 // NewModel creates a TUI model that reads runner events from ch.
-func NewModel(ch <-chan runner.Event, agentName, promptText, notesPath, progressPath string) Model {
+//
+// currentTimeout mirrors RunConfig.InactivityTimeout (nil = default, pointer
+// to 0 = disabled, positive = custom). controlSend is the write end of the
+// runner control channel; nil disables the in-session control overlays.
+func NewModel(ch <-chan runner.Event, agentName, promptText, notesPath, progressPath string, currentTimeout *time.Duration, controlSend chan<- runner.ControlMsg) Model {
 	return Model{
 		paneRatio:      0.3,
 		running:        true,
@@ -91,6 +101,8 @@ func NewModel(ch <-chan runner.Event, agentName, promptText, notesPath, progress
 		promptText:     promptText,
 		notesPath:      notesPath,
 		progressPath:   progressPath,
+		currentTimeout: currentTimeout,
+		controlSend:    controlSend,
 	}
 }
 
@@ -404,6 +416,11 @@ func (m *Model) autoScrollMain() {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle timeout overlay keys.
+	if m.timeoutOverlay {
+		return m.handleTimeoutKey(msg)
+	}
+
 	// Handle prompt overlay keys.
 	if m.promptOverlay {
 		switch msg.String() {
@@ -598,10 +615,102 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.memoryOverlayTab = 0
 		m.memoryOverlayScroll = 0
 
+	case "t":
+		// In viewer mode (no controlSend), the timeout overlay is disabled.
+		if m.controlSend == nil {
+			break
+		}
+		m.timeoutOverlay = true
+		m.timeoutInput = ""
+		m.timeoutError = ""
+
 	case "?":
 		m.helpOverlay = true
 	}
 
+	return m, nil
+}
+
+// handleTimeoutKey handles raw key input while the timeout overlay is open.
+// Mirrors browser.handleSearchKey for the input pattern.
+func (m Model) handleTimeoutKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.timeoutOverlay = false
+		m.timeoutInput = ""
+		m.timeoutError = ""
+		return m, nil
+	case tea.KeyEnter:
+		return m.submitTimeoutInput()
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		runes := []rune(m.timeoutInput)
+		if len(runes) > 0 {
+			m.timeoutInput = string(runes[:len(runes)-1])
+		}
+		m.timeoutError = ""
+		return m, nil
+	case tea.KeyCtrlU:
+		m.timeoutInput = ""
+		m.timeoutError = ""
+		return m, nil
+	case tea.KeyRunes:
+		if len(msg.Runes) > 0 {
+			m.timeoutInput += string(msg.Runes)
+			m.timeoutError = ""
+		}
+		return m, nil
+	case tea.KeySpace:
+		m.timeoutInput += " "
+		m.timeoutError = ""
+		return m, nil
+	}
+	return m, nil
+}
+
+// submitTimeoutInput parses the timeout input and, on success, sends a
+// ControlSetTimeout message to the runner. On parse failure the overlay
+// stays open with an error message.
+func (m Model) submitTimeoutInput() (tea.Model, tea.Cmd) {
+	input := strings.TrimSpace(m.timeoutInput)
+	// Empty input = no change; close overlay.
+	if input == "" {
+		m.timeoutOverlay = false
+		m.timeoutError = ""
+		return m, nil
+	}
+
+	var newTimeout *time.Duration
+	switch input {
+	case "default":
+		newTimeout = nil
+	case "0":
+		zero := time.Duration(0)
+		newTimeout = &zero
+	default:
+		d, err := time.ParseDuration(input)
+		if err != nil {
+			m.timeoutError = err.Error()
+			return m, nil
+		}
+		if d < 0 {
+			m.timeoutError = "duration must be non-negative"
+			return m, nil
+		}
+		newTimeout = &d
+	}
+
+	// Send to runner non-blocking so a stalled runner cannot lock the TUI.
+	if m.controlSend != nil {
+		select {
+		case m.controlSend <- runner.ControlMsg{Kind: runner.ControlSetTimeout, Timeout: newTimeout}:
+		default:
+		}
+	}
+
+	m.currentTimeout = newTimeout
+	m.timeoutOverlay = false
+	m.timeoutInput = ""
+	m.timeoutError = ""
 	return m, nil
 }
 
@@ -680,6 +789,10 @@ func (m Model) View() string {
 
 	if m.promptOverlay {
 		return m.renderPromptOverlay()
+	}
+
+	if m.timeoutOverlay {
+		return m.renderTimeoutOverlay()
 	}
 
 	if m.errorOverlay != "" {
@@ -1006,6 +1119,7 @@ func (m Model) renderStatus() string {
 	right := statusKeyStyle.Render("↑↓") + ":nav" +
 		sep + statusKeyStyle.Render("Tab") + ":pane" +
 		sep + statusKeyStyle.Render("r") + ":" + modeStr +
+		sep + statusKeyStyle.Render("t") + ":" + timeoutSegmentValue(m.currentTimeout) +
 		sep + statusKeyStyle.Render("p") + ":prompt" +
 		sep + statusKeyStyle.Render("n") + ":memory" +
 		sep + statusKeyStyle.Render("?") + ":help" +
@@ -1091,6 +1205,9 @@ func (m Model) renderHelpOverlay() string {
 		"  r             Toggle raw / rendered\n" +
 		"  p             Show effective prompt\n" +
 		"  n             Show memory files (NOTES / PROGRESS)\n" +
+		"\n" +
+		"Control\n" +
+		"  t             Set inactivity timeout\n" +
 		"\n" +
 		"Other\n" +
 		"  q             Quit (press again to confirm)\n" +
@@ -1238,4 +1355,80 @@ func (m Model) renderErrorOverlay() string {
 		hint:          "j/k:scroll  any key:dismiss",
 		cardBorder:    browserCardBorderWarning,
 	})
+}
+
+// renderTimeoutOverlay renders the inactivity timeout input overlay as a
+// centered modal card with a single-line input field and hint text.
+func (m Model) renderTimeoutOverlay() string {
+	current := formatTimeoutValue(m.currentTimeout)
+	body := fmt.Sprintf("Current: %s\n\n> %s_\n\n(e.g. 10m, 1h, 0=disable, default=reset)", current, m.timeoutInput)
+	if m.timeoutError != "" {
+		body += "\n\nError: " + m.timeoutError
+	}
+	return m.renderOverlayCard(overlayContent{
+		body:          body,
+		scroll:        0,
+		reservedLines: 6,
+		title:         "Set Inactivity Timeout",
+		titleStyle:    browserCardTitle,
+		hint:          "Enter:apply  Esc:cancel",
+		cardBorder:    browserCardBorder,
+	})
+}
+
+// formatTimeoutValue renders a timeout pointer for display in the overlay:
+// nil → "default", pointer-to-0 → "disabled", positive → compact duration.
+func formatTimeoutValue(d *time.Duration) string {
+	if d == nil {
+		return "default"
+	}
+	if *d == 0 {
+		return "disabled"
+	}
+	return compactDuration(*d)
+}
+
+// timeoutSegmentValue returns the status-bar value portion of the timeout
+// segment: "def" (default), "off" (disabled), or a compact duration string
+// like "5m". The status bar prepends "t:" via styled key glyph + ":" +
+// this value.
+func timeoutSegmentValue(d *time.Duration) string {
+	if d == nil {
+		return "def"
+	}
+	if *d == 0 {
+		return "off"
+	}
+	return compactDuration(*d)
+}
+
+// compactDuration formats a positive duration with whole-unit suppression:
+// 5m0s → "5m", 1h0m0s → "1h", 1h30m0s → "1h30m". Sub-second precision falls
+// back to time.Duration's String().
+func compactDuration(d time.Duration) string {
+	if d <= 0 {
+		return "0s"
+	}
+	if d%time.Second != 0 {
+		return d.String()
+	}
+	h := int(d / time.Hour)
+	d -= time.Duration(h) * time.Hour
+	mins := int(d / time.Minute)
+	d -= time.Duration(mins) * time.Minute
+	secs := int(d / time.Second)
+	switch {
+	case h > 0 && mins == 0 && secs == 0:
+		return fmt.Sprintf("%dh", h)
+	case h > 0 && secs == 0:
+		return fmt.Sprintf("%dh%dm", h, mins)
+	case h > 0:
+		return fmt.Sprintf("%dh%dm%ds", h, mins, secs)
+	case mins > 0 && secs == 0:
+		return fmt.Sprintf("%dm", mins)
+	case mins > 0:
+		return fmt.Sprintf("%dm%ds", mins, secs)
+	default:
+		return fmt.Sprintf("%ds", secs)
+	}
 }

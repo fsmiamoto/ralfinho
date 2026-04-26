@@ -124,7 +124,7 @@ func TestMainIndex_RebuildFromDirtyTail(t *testing.T) {
 }
 
 func TestModelInvalidateMainLayoutFromAssistantDelta(t *testing.T) {
-	m := NewModel(nil, "", "", "", "")
+	m := NewModel(nil, "", "", "", "", nil, nil)
 	m.running = true
 	m.width = 80
 	m.height = 40
@@ -173,7 +173,7 @@ func TestModelInvalidateMainLayoutFromAssistantDelta(t *testing.T) {
 }
 
 func TestModelInvalidateMainLayoutFromAssistantFinal(t *testing.T) {
-	m := NewModel(nil, "", "", "", "")
+	m := NewModel(nil, "", "", "", "", nil, nil)
 	m.running = true
 
 	// Build history + streaming assistant.
@@ -208,7 +208,7 @@ func TestModelInvalidateMainLayoutFromAssistantFinal(t *testing.T) {
 }
 
 func TestModelInvalidateAllMainLayoutsOnWidthChange(t *testing.T) {
-	m := NewModel(nil, "", "", "", "")
+	m := NewModel(nil, "", "", "", "", nil, nil)
 	m.width = 80
 	m.height = 40
 
@@ -240,7 +240,7 @@ func TestModelInvalidateAllMainLayoutsOnWidthChange(t *testing.T) {
 }
 
 func TestModelAppendBlockKeepsEarlierLayoutsReusable(t *testing.T) {
-	m := NewModel(nil, "", "", "", "")
+	m := NewModel(nil, "", "", "", "", nil, nil)
 	m.running = true
 
 	// Build initial blocks and compute layout.

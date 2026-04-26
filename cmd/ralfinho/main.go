@@ -208,7 +208,7 @@ func runAgentWithTUI(runCfg runner.RunConfig) (runner.RunResult, error) {
 
 	notesPath := filepath.Join(runCfg.RunsDir, runCfg.RunID, "NOTES.md")
 	progressPath := filepath.Join(runCfg.RunsDir, runCfg.RunID, "PROGRESS.md")
-	model := tui.NewModel(eventCh, runCfg.Agent, runCfg.Prompt, notesPath, progressPath)
+	model := tui.NewModel(eventCh, runCfg.Agent, runCfg.Prompt, notesPath, progressPath, runCfg.InactivityTimeout, nil)
 	p := newTeaProgram(model, tea.WithAltScreen())
 
 	// Feed DoneMsg to the program when the runner finishes.

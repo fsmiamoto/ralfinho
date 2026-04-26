@@ -274,7 +274,7 @@ func TestRenderDetailSupportsRawAndRenderedAssistantModes(t *testing.T) {
 
 func TestRenderStatusAdjustsHintsForWidthAndConfirmationMode(t *testing.T) {
 	t.Run("full width", func(t *testing.T) {
-		m := Model{width: 80, status: "Idle"}
+		m := Model{width: 100, status: "Idle"}
 		status := stripANSI(m.renderStatus())
 		for _, want := range []string{"Idle", "↑↓:nav", "Tab:pane", "r:rendered", "q:quit"} {
 			if !strings.Contains(status, want) {
@@ -314,7 +314,7 @@ func TestRenderStatusAdjustsHintsForWidthAndConfirmationMode(t *testing.T) {
 }
 
 func TestRenderHeaderShowsElapsedTimeForRunningModel(t *testing.T) {
-	m := NewModel(nil, "", "", "", "")
+	m := NewModel(nil, "", "", "", "", nil, nil)
 	m.width = 80
 	m.iteration = 3
 	m.modelName = "claude-opus-4-1"
@@ -454,7 +454,7 @@ func TestRenderHeaderShowsAgentNameAfterRalfinho(t *testing.T) {
 }
 
 func TestRenderStatusIncludesPromptHint(t *testing.T) {
-	m := Model{width: 80, status: "Idle"}
+	m := Model{width: 100, status: "Idle"}
 	status := stripANSI(m.renderStatus())
 	if !strings.Contains(status, "p:prompt") {
 		t.Fatalf("renderStatus() = %q, want p:prompt hint", status)
@@ -744,7 +744,7 @@ func TestMemoryOverlayShowsNoPathMessage(t *testing.T) {
 }
 
 func TestStatusBarContainsMemoryHint(t *testing.T) {
-	m := NewModel(nil, "", "", "", "")
+	m := NewModel(nil, "", "", "", "", nil, nil)
 	m.width = 200 // wide enough to show all hints
 	m.height = 24
 	status := stripANSI(m.renderStatus())
@@ -1312,3 +1312,252 @@ func TestFormatElapsed(t *testing.T) {
 		}
 	}
 }
+
+// --- Task 6: timeout overlay tests ---
+
+func TestTimeoutOverlayOpenedByT(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 1)
+	m := Model{width: 80, height: 24, controlSend: ctrl}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'t'}}))
+	if !m.timeoutOverlay {
+		t.Fatal("after t: timeoutOverlay = false, want true")
+	}
+	if m.timeoutInput != "" {
+		t.Fatalf("after t: timeoutInput = %q, want empty", m.timeoutInput)
+	}
+}
+
+func TestTimeoutOverlayIgnoredInViewerMode(t *testing.T) {
+	// No controlSend → viewer/replay mode; t is a no-op.
+	m := Model{width: 80, height: 24}
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'t'}}))
+	if m.timeoutOverlay {
+		t.Fatal("viewer mode: t opened timeoutOverlay, want no-op")
+	}
+}
+
+func TestTimeoutOverlayInputAppendAndBackspace(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 1)
+	m := Model{width: 80, height: 24, controlSend: ctrl, timeoutOverlay: true}
+
+	for _, r := range "10m" {
+		m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{r}}))
+	}
+	if m.timeoutInput != "10m" {
+		t.Fatalf("after typing 10m: timeoutInput = %q, want 10m", m.timeoutInput)
+	}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyBackspace}))
+	if m.timeoutInput != "10" {
+		t.Fatalf("after backspace: timeoutInput = %q, want 10", m.timeoutInput)
+	}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlU}))
+	if m.timeoutInput != "" {
+		t.Fatalf("after ctrl+u: timeoutInput = %q, want empty", m.timeoutInput)
+	}
+}
+
+func TestTimeoutOverlayEscClosesWithoutSending(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 1)
+	m := Model{width: 80, height: 24, controlSend: ctrl, timeoutOverlay: true, timeoutInput: "10m"}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEscape}))
+	if m.timeoutOverlay {
+		t.Fatal("after Esc: timeoutOverlay = true, want false")
+	}
+	if m.timeoutInput != "" {
+		t.Fatalf("after Esc: timeoutInput = %q, want empty (input discarded)", m.timeoutInput)
+	}
+	select {
+	case msg := <-ctrl:
+		t.Fatalf("after Esc: control channel got %+v, want no message", msg)
+	default:
+	}
+}
+
+func TestTimeoutOverlayEnterValidDurationSendsAndUpdates(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 1)
+	m := Model{width: 80, height: 24, controlSend: ctrl, timeoutOverlay: true, timeoutInput: "30s"}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+	if m.timeoutOverlay {
+		t.Fatal("after Enter (valid): timeoutOverlay = true, want false")
+	}
+	select {
+	case msg := <-ctrl:
+		if msg.Kind != runner.ControlSetTimeout {
+			t.Fatalf("ControlMsg.Kind = %v, want ControlSetTimeout", msg.Kind)
+		}
+		if msg.Timeout == nil {
+			t.Fatal("ControlMsg.Timeout = nil, want pointer to 30s")
+		}
+		if *msg.Timeout != 30*time.Second {
+			t.Fatalf("ControlMsg.Timeout = %v, want 30s", *msg.Timeout)
+		}
+	default:
+		t.Fatal("after Enter (valid): no ControlMsg sent")
+	}
+	if m.currentTimeout == nil || *m.currentTimeout != 30*time.Second {
+		t.Fatalf("currentTimeout = %v, want pointer to 30s", m.currentTimeout)
+	}
+}
+
+func TestTimeoutOverlayEnterEmptyClosesWithoutSending(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 1)
+	m := Model{width: 80, height: 24, controlSend: ctrl, timeoutOverlay: true, timeoutInput: ""}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+	if m.timeoutOverlay {
+		t.Fatal("Enter on empty: timeoutOverlay = true, want closed")
+	}
+	select {
+	case msg := <-ctrl:
+		t.Fatalf("Enter on empty: got %+v, want no message", msg)
+	default:
+	}
+}
+
+func TestTimeoutOverlayEnterZeroDisables(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 1)
+	m := Model{width: 80, height: 24, controlSend: ctrl, timeoutOverlay: true, timeoutInput: "0"}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+	select {
+	case msg := <-ctrl:
+		if msg.Timeout == nil || *msg.Timeout != 0 {
+			t.Fatalf("Enter '0': ControlMsg.Timeout = %v, want pointer to 0", msg.Timeout)
+		}
+	default:
+		t.Fatal("Enter '0': no ControlMsg sent")
+	}
+	if m.currentTimeout == nil || *m.currentTimeout != 0 {
+		t.Fatalf("currentTimeout = %v, want pointer to 0 (disabled)", m.currentTimeout)
+	}
+}
+
+func TestTimeoutOverlayEnterDefaultRevertsToNil(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 1)
+	initial := 5 * time.Minute
+	m := Model{width: 80, height: 24, controlSend: ctrl, timeoutOverlay: true, timeoutInput: "default", currentTimeout: &initial}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+	select {
+	case msg := <-ctrl:
+		if msg.Timeout != nil {
+			t.Fatalf("Enter 'default': ControlMsg.Timeout = %v, want nil", *msg.Timeout)
+		}
+	default:
+		t.Fatal("Enter 'default': no ControlMsg sent")
+	}
+	if m.currentTimeout != nil {
+		t.Fatalf("currentTimeout = %v, want nil (default)", *m.currentTimeout)
+	}
+}
+
+func TestTimeoutOverlayEnterInvalidStaysOpenWithError(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 1)
+	m := Model{width: 80, height: 24, controlSend: ctrl, timeoutOverlay: true, timeoutInput: "garbage"}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+	if !m.timeoutOverlay {
+		t.Fatal("invalid input: overlay closed, want still open")
+	}
+	if m.timeoutError == "" {
+		t.Fatal("invalid input: timeoutError empty, want populated")
+	}
+	select {
+	case msg := <-ctrl:
+		t.Fatalf("invalid input: got %+v, want no message", msg)
+	default:
+	}
+}
+
+func TestTimeoutOverlayRendersInputAndCurrent(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 1)
+	current := 5 * time.Minute
+	m := Model{
+		width:          80,
+		height:         24,
+		controlSend:    ctrl,
+		timeoutOverlay: true,
+		timeoutInput:   "10m",
+		currentTimeout: &current,
+	}
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Set Inactivity Timeout", "Current: 5m", "10m", "Enter:apply", "Esc:cancel"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("timeout overlay view = %q, want substring %q", view, want)
+		}
+	}
+}
+
+func TestTimeoutOverlayRendersError(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 1)
+	m := Model{
+		width:          80,
+		height:         24,
+		controlSend:    ctrl,
+		timeoutOverlay: true,
+		timeoutInput:   "garbage",
+		timeoutError:   "time: invalid duration \"garbage\"",
+	}
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "Error:") {
+		t.Fatalf("timeout overlay view missing 'Error:', got:\n%s", view)
+	}
+	if !strings.Contains(view, "invalid duration") {
+		t.Fatalf("timeout overlay view missing parse error, got:\n%s", view)
+	}
+}
+
+func TestStatusBarContainsTimeoutSegment(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout *time.Duration
+		want    string
+	}{
+		{"default (nil)", nil, "t:def"},
+		{"disabled (0)", durPtr(0), "t:off"},
+		{"custom 5m", durPtr(5 * time.Minute), "t:5m"},
+		{"custom 30s", durPtr(30 * time.Second), "t:30s"},
+		{"custom 1h30m", durPtr(time.Hour + 30*time.Minute), "t:1h30m"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := Model{width: 200, status: "Idle", currentTimeout: tt.timeout}
+			status := stripANSI(m.renderStatus())
+			if !strings.Contains(status, tt.want) {
+				t.Fatalf("renderStatus() = %q, want substring %q", status, tt.want)
+			}
+		})
+	}
+}
+
+func TestCompactDuration(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "0s"},
+		{30 * time.Second, "30s"},
+		{59 * time.Second, "59s"},
+		{1 * time.Minute, "1m"},
+		{5 * time.Minute, "5m"},
+		{1*time.Minute + 30*time.Second, "1m30s"},
+		{1 * time.Hour, "1h"},
+		{1*time.Hour + 30*time.Minute, "1h30m"},
+		{2*time.Hour + 5*time.Minute + 30*time.Second, "2h5m30s"},
+		{500 * time.Millisecond, "500ms"}, // sub-second falls back to time.Duration.String()
+	}
+	for _, tt := range tests {
+		if got := compactDuration(tt.d); got != tt.want {
+			t.Errorf("compactDuration(%v) = %q, want %q", tt.d, got, tt.want)
+		}
+	}
+}
+
+func durPtr(d time.Duration) *time.Duration { return &d }

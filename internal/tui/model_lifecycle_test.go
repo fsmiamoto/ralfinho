@@ -11,7 +11,7 @@ import (
 
 func TestNewModelInitializesDefaultsAndInitBatch(t *testing.T) {
 	ch := make(chan runner.Event)
-	m := NewModel(ch, "", "", "", "")
+	m := NewModel(ch, "", "", "", "", nil, nil)
 
 	if m.eventCh != ch {
 		t.Fatal("NewModel() did not keep the supplied event channel")
@@ -136,7 +136,7 @@ func TestWaitForEventHandlesNilBufferedAndClosedChannels(t *testing.T) {
 }
 
 func TestModelUpdateHandlesWindowSizeStatusEventAndDone(t *testing.T) {
-	m := NewModel(nil, "", "", "", "")
+	m := NewModel(nil, "", "", "", "", nil, nil)
 
 	updated, cmd := m.Update(tea.WindowSizeMsg{Width: 72, Height: 24})
 	if cmd != nil {
@@ -190,7 +190,7 @@ func TestModelUpdateRawEventMsgConvertsAndSchedulesNextRead(t *testing.T) {
 	next := runner.Event{Type: runner.EventTurnEnd, ID: "turn-2"}
 	ch <- next
 
-	m := NewModel(ch, "", "", "", "")
+	m := NewModel(ch, "", "", "", "", nil, nil)
 	updated, cmd := m.Update(rawEventMsg(runner.Event{Type: runner.EventIteration, ID: "iteration-2"}))
 	if cmd == nil {
 		t.Fatal("Update(rawEventMsg) returned nil cmd, want follow-up waitForEvent command")
@@ -352,7 +352,7 @@ func TestModelKeyHandlingNavigatesMainStreamAndDetailPanes(t *testing.T) {
 }
 
 func TestModelAssistantBlockTransitionsToFinal(t *testing.T) {
-	m := NewModel(nil, "", "", "", "")
+	m := NewModel(nil, "", "", "", "", nil, nil)
 	m.running = true
 
 	// Simulate: message_start → text_delta → text_delta → message_end
@@ -448,7 +448,7 @@ func TestAddDisplayEvent_MergesAssistantFinalState(t *testing.T) {
 	// 2. buildBlock propagates AssistantFinal when creating/merging blocks
 	// 3. updateAssistantBlock propagates AssistantFinal during streaming
 
-	m := NewModel(nil, "", "", "", "")
+	m := NewModel(nil, "", "", "", "", nil, nil)
 	m.running = true
 
 	// Path: buildBlock creates a new block with AssistantFinal=false
@@ -554,7 +554,7 @@ func TestNewViewerModel_BlocksAreAssistantFinal(t *testing.T) {
 }
 
 func TestDoneMsg_StatusStuck_ShowsErrorOverlay(t *testing.T) {
-	m := NewModel(nil, "pi", "", "", "")
+	m := NewModel(nil, "pi", "", "", "", nil, nil)
 	m.width = 80
 	m.height = 24
 
@@ -579,7 +579,7 @@ func TestDoneMsg_StatusStuck_ShowsErrorOverlay(t *testing.T) {
 }
 
 func TestHandleRawEvent_SetsLastEventTime(t *testing.T) {
-	m := NewModel(nil, "pi", "", "", "")
+	m := NewModel(nil, "pi", "", "", "", nil, nil)
 	m.running = true
 
 	if !m.lastEventTime.IsZero() {
