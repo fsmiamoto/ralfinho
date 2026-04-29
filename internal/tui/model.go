@@ -680,18 +680,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.timeoutInput = ""
 		m.timeoutError = ""
 
-	case "m":
-		// Open the reminder editor. Buffer is preserved across Esc, so the
-		// user never loses what they typed.
+	case "s":
 		if m.controlSend == nil {
 			break
 		}
 		m.reminderOverlay = true
 		m.reminderError = ""
 
-	case "M":
-		// Open the pending-reminders removal overlay. No-op if there is
-		// nothing to remove.
+	case "S":
 		if m.controlSend == nil || len(m.pendingReminders) == 0 {
 			break
 		}
@@ -889,7 +885,7 @@ func (m Model) queueReminder(applyNow bool) (tea.Model, tea.Cmd) {
 // handlePendingKey handles the pending-reminders removal overlay.
 func (m Model) handlePendingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "q", "M":
+	case "esc", "q", "S":
 		m.pendingOverlay = false
 		m.pendingError = ""
 		return m, nil
@@ -1156,6 +1152,7 @@ func (m Model) renderHeader() string {
 	if m.running && !m.startTime.IsZero() {
 		optional = append(optional, formatElapsed(time.Since(m.startTime)))
 	}
+	optional = append(optional, "Timeout: "+timeoutHeaderValue(m.currentTimeout))
 
 	bar := strings.Join(parts, sep)
 	for _, seg := range optional {
@@ -1358,8 +1355,8 @@ func (m Model) renderStatus() string {
 	right := statusKeyStyle.Render("↑↓") + ":nav" +
 		sep + statusKeyStyle.Render("Tab") + ":pane" +
 		sep + statusKeyStyle.Render("r") + ":" + modeStr +
-		sep + statusKeyStyle.Render("t") + ":" + timeoutSegmentValue(m.currentTimeout) +
-		sep + statusKeyStyle.Render("m") + ":rmd" +
+		sep + statusKeyStyle.Render("t") + ":timeout" +
+		sep + statusKeyStyle.Render("s") + ":steering" +
 		sep + statusKeyStyle.Render("p") + ":prompt" +
 		sep + statusKeyStyle.Render("n") + ":memory" +
 		sep + statusKeyStyle.Render("?") + ":help" +
@@ -1448,10 +1445,10 @@ func (m Model) renderHelpOverlay() string {
 		"\n" +
 		"Control\n" +
 		"  t             Set inactivity timeout\n" +
-		"  m             Add reminder for next iteration\n" +
+		"  s             Add steering for next iteration\n" +
 		"                  Ctrl+P     toggle persistent\n" +
 		"                  Ctrl+Enter apply now (restart)\n" +
-		"  M             Remove pending reminder\n" +
+		"  S             Remove pending steering\n" +
 		"\n" +
 		"Other\n" +
 		"  q             Quit (press again to confirm)\n" +
@@ -1620,7 +1617,7 @@ func (m Model) renderTimeoutOverlay() string {
 	})
 }
 
-// renderReminderOverlay renders the reminder editor as a centered modal card
+// renderReminderOverlay renders the steering editor as a centered modal card
 // with a single-line input field, persistence state, and key hints.
 func (m Model) renderReminderOverlay() string {
 	persistText := "off"
@@ -1638,25 +1635,25 @@ func (m Model) renderReminderOverlay() string {
 		body:          body,
 		scroll:        0,
 		reservedLines: 6,
-		title:         "Add Reminder",
+		title:         "Add Steering",
 		titleStyle:    browserCardTitle,
 		hint:          "Esc:close  Enter:queue  Ctrl+Enter:apply now  Ctrl+P:persistent",
 		cardBorder:    browserCardBorder,
 	})
 }
 
-// renderPendingOverlay renders the pending-reminders removal list as a
+// renderPendingOverlay renders the pending-steering removal list as a
 // centered modal card. The cursor row is highlighted; `x` removes the entry,
-// `q`/`Esc`/`M` close. Persistent entries are marked `[P]`.
+// `q`/`Esc`/`S` close. Persistent entries are marked `[P]`.
 func (m Model) renderPendingOverlay() string {
 	if len(m.pendingReminders) == 0 {
 		return m.renderOverlayCard(overlayContent{
-			body:          "(no pending reminders)",
+			body:          "(no pending steering)",
 			scroll:        0,
 			reservedLines: 6,
-			title:         "Pending Reminders",
+			title:         "Pending Steering",
 			titleStyle:    browserCardTitle,
-			hint:          "M/Esc/q:close",
+			hint:          "S/Esc/q:close",
 			cardBorder:    browserCardBorder,
 		})
 	}
@@ -1682,15 +1679,15 @@ func (m Model) renderPendingOverlay() string {
 		body:          body,
 		scroll:        0,
 		reservedLines: 6,
-		title:         "Pending Reminders",
+		title:         "Pending Steering",
 		titleStyle:    browserCardTitle,
-		hint:          "j/k:move  x:remove  M/Esc/q:close",
+		hint:          "j/k:move  x:remove  S/Esc/q:close",
 		cardBorder:    browserCardBorder,
 	})
 }
 
-// remindersStrip returns a compact summary of pending reminders for the
-// status bar (e.g. "Reminders: 1 one-off, 2 persistent"). Empty list returns
+// remindersStrip returns a compact summary of pending steering for the
+// status bar (e.g. "Steering: 1 one-off, 2 persistent"). Empty list returns
 // the empty string so the caller can decide whether to render anything.
 func remindersStrip(rs []runner.Reminder) string {
 	if len(rs) == 0 {
@@ -1706,11 +1703,11 @@ func remindersStrip(rs []runner.Reminder) string {
 	}
 	switch {
 	case oneOff > 0 && persistent > 0:
-		return fmt.Sprintf("Reminders: %d one-off, %d persistent", oneOff, persistent)
+		return fmt.Sprintf("Steering: %d one-off, %d persistent", oneOff, persistent)
 	case persistent > 0:
-		return fmt.Sprintf("Reminders: %d persistent", persistent)
+		return fmt.Sprintf("Steering: %d persistent", persistent)
 	default:
-		return fmt.Sprintf("Reminders: %d one-off", oneOff)
+		return fmt.Sprintf("Steering: %d one-off", oneOff)
 	}
 }
 
@@ -1733,6 +1730,16 @@ func formatTimeoutValue(d *time.Duration) string {
 func timeoutSegmentValue(d *time.Duration) string {
 	if d == nil {
 		return "def"
+	}
+	if *d == 0 {
+		return "off"
+	}
+	return compactDuration(*d)
+}
+
+func timeoutHeaderValue(d *time.Duration) string {
+	if d == nil {
+		return "default"
 	}
 	if *d == 0 {
 		return "off"

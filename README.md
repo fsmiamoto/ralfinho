@@ -99,8 +99,8 @@ During a live run or when viewing a past session:
 | `p` | Show effective prompt |
 | `n` | Show memory files (NOTES.md / PROGRESS.md) |
 | `t` | Set inactivity timeout (e.g. `30s`, `0` to disable, `default`) |
-| `m` | Add a reminder for the next iteration (`Ctrl+P` toggles persistent, `Ctrl+Enter` applies now via restart) |
-| `M` | Remove a pending reminder |
+| `s` | Add steering for the next iteration (`Ctrl+P` toggles persistent, `Ctrl+Enter` applies now via restart) |
+| `S` | Remove pending steering |
 | `?` | Show keybinding help |
 | `q` / `Ctrl+C` | Quit (press twice to confirm) |
 
@@ -111,10 +111,10 @@ to switch between NOTES and PROGRESS.
 ### Session controls
 
 While a run is live, `t` adjusts the inactivity timeout without restarting
-ralfinho, and `m` opens an editor to append a steering note to the prompt
-the agent sees on its next iteration. One-off reminders are consumed when
-the iteration completes; persistent reminders (toggled with `Ctrl+P`)
-survive until you remove them with `M`. `Ctrl+Enter` queues the reminder
+ralfinho, and `s` opens an editor to append a steering note to the prompt
+the agent sees on its next iteration. One-off steering is consumed when
+the iteration completes; persistent steering (toggled with `Ctrl+P`)
+survives until you remove it with `S`. `Ctrl+Enter` queues the steering
 and immediately restarts the current iteration so the agent picks it up
 without waiting for the next turn. Every control action is appended to
 `operator-log.jsonl` in the run directory.
@@ -126,7 +126,7 @@ Each run is saved to `.ralfinho/runs/<uuid>/`:
 - `meta.json` — run metadata (status, agent, iterations, timing)
 - `events.jsonl` — raw event stream from the agent
 - `effective-prompt.md` — the prompt that was sent at startup
-- `operator-log.jsonl` — append-only audit of in-session control actions (timeout changes, reminders, restarts)
+- `operator-log.jsonl` — append-only audit of in-session control actions (timeout changes, steering, restarts)
 - `session.log` — human-readable timestamped log
 - `raw-output.log` — raw agent stdout
 - `NOTES.md` — agent's cross-iteration notes and decisions

@@ -274,7 +274,7 @@ func TestRenderDetailSupportsRawAndRenderedAssistantModes(t *testing.T) {
 
 func TestRenderStatusAdjustsHintsForWidthAndConfirmationMode(t *testing.T) {
 	t.Run("full width", func(t *testing.T) {
-		m := Model{width: 100, status: "Idle"}
+		m := Model{width: 120, status: "Idle"}
 		status := stripANSI(m.renderStatus())
 		for _, want := range []string{"Idle", "↑↓:nav", "Tab:pane", "r:rendered", "q:quit"} {
 			if !strings.Contains(status, want) {
@@ -343,7 +343,7 @@ func TestRenderHeaderHandlesVeryNarrowWidths(t *testing.T) {
 
 func TestRenderStatusCoversRunningRawAndTruncationBranches(t *testing.T) {
 	t.Run("running raw mode", func(t *testing.T) {
-		m := Model{width: 110, status: "Iteration #4", running: true, rawMode: true}
+		m := Model{width: 130, status: "Iteration #4", running: true, rawMode: true}
 		status := stripANSI(m.renderStatus())
 		for _, want := range []string{"Running │ Iteration #4", "r:raw", "n:memory", "q:quit"} {
 			if !strings.Contains(status, want) {
@@ -454,7 +454,7 @@ func TestRenderHeaderShowsAgentNameAfterRalfinho(t *testing.T) {
 }
 
 func TestRenderStatusIncludesPromptHint(t *testing.T) {
-	m := Model{width: 100, status: "Idle"}
+	m := Model{width: 120, status: "Idle"}
 	status := stripANSI(m.renderStatus())
 	if !strings.Contains(status, "p:prompt") {
 		t.Fatalf("renderStatus() = %q, want p:prompt hint", status)
@@ -1549,24 +1549,24 @@ func TestTimeoutOverlayRendersError(t *testing.T) {
 	}
 }
 
-func TestStatusBarContainsTimeoutSegment(t *testing.T) {
+func TestHeaderContainsTimeoutSegment(t *testing.T) {
 	tests := []struct {
 		name    string
 		timeout *time.Duration
 		want    string
 	}{
-		{"default (nil)", nil, "t:def"},
-		{"disabled (0)", durPtr(0), "t:off"},
-		{"custom 5m", durPtr(5 * time.Minute), "t:5m"},
-		{"custom 30s", durPtr(30 * time.Second), "t:30s"},
-		{"custom 1h30m", durPtr(time.Hour + 30*time.Minute), "t:1h30m"},
+		{"default (nil)", nil, "Timeout: default"},
+		{"disabled (0)", durPtr(0), "Timeout: off"},
+		{"custom 5m", durPtr(5 * time.Minute), "Timeout: 5m"},
+		{"custom 30s", durPtr(30 * time.Second), "Timeout: 30s"},
+		{"custom 1h30m", durPtr(time.Hour + 30*time.Minute), "Timeout: 1h30m"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := Model{width: 200, status: "Idle", currentTimeout: tt.timeout}
-			status := stripANSI(m.renderStatus())
-			if !strings.Contains(status, tt.want) {
-				t.Fatalf("renderStatus() = %q, want substring %q", status, tt.want)
+			m := Model{width: 200, currentTimeout: tt.timeout}
+			header := stripANSI(m.renderHeader())
+			if !strings.Contains(header, tt.want) {
+				t.Fatalf("renderHeader() = %q, want substring %q", header, tt.want)
 			}
 		})
 	}
@@ -1599,24 +1599,24 @@ func durPtr(d time.Duration) *time.Duration { return &d }
 
 // --- Task 7: reminder editor & pending list overlays ---
 
-func TestReminderOverlayOpenedByM(t *testing.T) {
+func TestReminderOverlayOpenedByS(t *testing.T) {
 	ctrl := make(chan runner.ControlMsg, 4)
 	m := Model{width: 80, height: 24, controlSend: ctrl}
 
-	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'m'}}))
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'s'}}))
 	if !m.reminderOverlay {
-		t.Fatal("after m: reminderOverlay = false, want true")
+		t.Fatal("after s: reminderOverlay = false, want true")
 	}
 	if m.reminderBuffer != "" {
-		t.Fatalf("after m: reminderBuffer = %q, want empty", m.reminderBuffer)
+		t.Fatalf("after s: reminderBuffer = %q, want empty", m.reminderBuffer)
 	}
 }
 
 func TestReminderOverlayIgnoredInViewerMode(t *testing.T) {
 	m := Model{width: 80, height: 24}
-	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'m'}}))
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'s'}}))
 	if m.reminderOverlay {
-		t.Fatal("viewer mode: m opened reminderOverlay, want no-op")
+		t.Fatal("viewer mode: s opened reminderOverlay, want no-op")
 	}
 }
 
@@ -1640,9 +1640,9 @@ func TestReminderOverlayBufferPreservedAcrossEsc(t *testing.T) {
 	}
 
 	// Reopen — buffer should still be there.
-	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'m'}}))
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'s'}}))
 	if !m.reminderOverlay {
-		t.Fatal("reopen with m: reminderOverlay = false, want true")
+		t.Fatal("reopen with s: reminderOverlay = false, want true")
 	}
 	if m.reminderBuffer != "lint code" {
 		t.Fatalf("reopen: reminderBuffer = %q, want preserved %q", m.reminderBuffer, "lint code")
@@ -1769,7 +1769,7 @@ func TestReminderOverlayRendersBufferAndPersistentState(t *testing.T) {
 	}
 
 	view := stripANSI(m.View())
-	for _, want := range []string{"Add Reminder", "be more careful", "persistent: on"} {
+	for _, want := range []string{"Add Steering", "be more careful", "persistent: on"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("reminder overlay view = %q, want substring %q", view, want)
 		}
@@ -1866,16 +1866,16 @@ func TestStatusBarIncludesRemindersStrip(t *testing.T) {
 		},
 	}
 	status := stripANSI(m.renderStatus())
-	if !strings.Contains(status, "Reminders: 1 one-off, 2 persistent") {
-		t.Fatalf("renderStatus() = %q, want reminders strip", status)
+	if !strings.Contains(status, "Steering: 1 one-off, 2 persistent") {
+		t.Fatalf("renderStatus() = %q, want steering strip", status)
 	}
 }
 
 func TestStatusBarOmitsRemindersStripWhenEmpty(t *testing.T) {
 	m := Model{width: 200, status: "Idle"}
 	status := stripANSI(m.renderStatus())
-	if strings.Contains(status, "Reminders:") {
-		t.Fatalf("renderStatus() = %q, should not show reminders strip when empty", status)
+	if strings.Contains(status, "Steering:") {
+		t.Fatalf("renderStatus() = %q, should not show steering strip when empty", status)
 	}
 }
 
@@ -1886,15 +1886,15 @@ func TestRemindersStripFormatting(t *testing.T) {
 		want string
 	}{
 		{"empty", nil, ""},
-		{"one-off only", []runner.Reminder{{Kind: runner.ReminderOneOff}}, "Reminders: 1 one-off"},
-		{"persistent only", []runner.Reminder{{Kind: runner.ReminderPersistent}}, "Reminders: 1 persistent"},
+		{"one-off only", []runner.Reminder{{Kind: runner.ReminderOneOff}}, "Steering: 1 one-off"},
+		{"persistent only", []runner.Reminder{{Kind: runner.ReminderPersistent}}, "Steering: 1 persistent"},
 		{
 			"both",
 			[]runner.Reminder{
 				{Kind: runner.ReminderOneOff},
 				{Kind: runner.ReminderPersistent},
 			},
-			"Reminders: 1 one-off, 1 persistent",
+			"Steering: 1 one-off, 1 persistent",
 		},
 	}
 	for _, tt := range tests {
@@ -1906,7 +1906,7 @@ func TestRemindersStripFormatting(t *testing.T) {
 	}
 }
 
-func TestPendingOverlayOpenedByCapitalM(t *testing.T) {
+func TestPendingOverlayOpenedByCapitalS(t *testing.T) {
 	ctrl := make(chan runner.ControlMsg, 4)
 	m := Model{
 		width:       80,
@@ -1917,19 +1917,19 @@ func TestPendingOverlayOpenedByCapitalM(t *testing.T) {
 		},
 	}
 
-	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'M'}}))
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'S'}}))
 	if !m.pendingOverlay {
-		t.Fatal("after M: pendingOverlay = false, want true")
+		t.Fatal("after S: pendingOverlay = false, want true")
 	}
 }
 
-func TestPendingOverlayCapitalMNoOpWhenEmpty(t *testing.T) {
+func TestPendingOverlayCapitalSNoOpWhenEmpty(t *testing.T) {
 	ctrl := make(chan runner.ControlMsg, 4)
 	m := Model{width: 80, height: 24, controlSend: ctrl}
 
-	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'M'}}))
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{'S'}}))
 	if m.pendingOverlay {
-		t.Fatal("M with no pending: opened overlay, want no-op")
+		t.Fatal("S with no pending: opened overlay, want no-op")
 	}
 }
 
@@ -2007,7 +2007,7 @@ func TestPendingOverlayRendersEntries(t *testing.T) {
 	}
 
 	view := stripANSI(m.View())
-	for _, want := range []string{"Pending Reminders", "always lint", "fix auth", "[P]"} {
+	for _, want := range []string{"Pending Steering", "always lint", "fix auth", "[P]"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("pending overlay view = %q, want substring %q", view, want)
 		}
@@ -2144,10 +2144,10 @@ func TestPendingOverlayErrorClearsOnMovement(t *testing.T) {
 	}
 }
 
-func TestHelpOverlayIncludesReminderKeys(t *testing.T) {
+func TestHelpOverlayIncludesSteeringKeys(t *testing.T) {
 	m := Model{width: 80, height: 40, helpOverlay: true}
 	view := stripANSI(m.renderHelpOverlay())
-	for _, want := range []string{"m", "Add reminder", "Ctrl+P", "Ctrl+Enter", "M", "Remove pending"} {
+	for _, want := range []string{"s", "Add steering", "Ctrl+P", "Ctrl+Enter", "S", "Remove pending"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("renderHelpOverlay() missing %q, got:\n%s", want, view)
 		}
