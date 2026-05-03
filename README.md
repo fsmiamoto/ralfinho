@@ -1,11 +1,8 @@
-# Ralfinho
-
-My take on the [Ralph Wiggum](https://ghuntley.com/ralph/) technique.
-
 <p align="center">
-  <img src="docs/logo.png" alt="ralfinho logo" width="400">
+  <img src="docs/logo.png" alt="ralfinho logo" width="250">
 </p>
 
+My take on the [Ralph Wiggum](https://ghuntley.com/ralph/) technique.
 
 > _Aren't there already one hundred million tools for doing this?_
 >
