@@ -2,6 +2,11 @@
 
 My take on the [Ralph Wiggum](https://ghuntley.com/ralph/) technique.
 
+<p align="center">
+  <img src="docs/logo.png" alt="ralfinho logo" width="400">
+</p>
+
+
 > _Aren't there already one hundred million tools for doing this?_
 >
 > Yes, but what do I learn by just using those?
