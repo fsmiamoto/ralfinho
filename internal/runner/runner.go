@@ -363,6 +363,8 @@ func (r *Runner) runIteration(ctx context.Context) (iterStatus, error) {
 	// Delegate to the agent. The onEvent callback persists, stores, and
 	// processes each event as it arrives.
 	assistantText, err := r.iterAgent.RunIteration(iterCtx, prompt, func(ev Event) {
+		ensureEventTimestamp(&ev, time.Now())
+
 		// Reset the inactivity watchdog on every event, picking up live
 		// timeout changes from controlState. If the watchdog was disabled
 		// mid-iteration, skip the Reset.
@@ -740,6 +742,13 @@ func (r *Runner) sessionLogf(format string, args ...any) {
 // timestamp returns the current time in RFC3339 format for session log entries.
 func (r *Runner) timestamp() string {
 	return time.Now().Format(time.RFC3339)
+}
+
+func ensureEventTimestamp(ev *Event, now time.Time) {
+	if ev.Timestamp != "" {
+		return
+	}
+	ev.Timestamp = now.Format(time.RFC3339Nano)
 }
 
 // writeMeta writes meta.json to the run directory. For terminal statuses

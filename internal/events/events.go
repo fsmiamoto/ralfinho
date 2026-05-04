@@ -66,7 +66,8 @@ type Reminder struct {
 type Event struct {
 	Type EventType `json:"type"`
 
-	// session fields
+	// Common metadata. Timestamp may be provided by the agent backend or
+	// filled by the runner at ingest before persistence/forwarding.
 	Version   int    `json:"version,omitempty"`
 	ID        string `json:"id,omitempty"`
 	Timestamp string `json:"timestamp,omitempty"`

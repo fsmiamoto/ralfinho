@@ -961,13 +961,14 @@ func TestRun_WritesEffectivePrompt(t *testing.T) {
 }
 
 func TestRun_PersistsEventsToJSONL(t *testing.T) {
+	preservedTimestamp := "not-a-time"
 	fa := &fakeAgent{
 		responses: []fakeResponse{
 			{
 				text: completionMarker,
 				events: []events.Event{
 					{Type: events.EventMessageStart, Message: json.RawMessage(`{"role":"assistant","model":"test"}`)},
-					{Type: events.EventMessageEnd},
+					{Type: events.EventMessageEnd, Timestamp: preservedTimestamp},
 					{Type: events.EventTurnEnd},
 				},
 			},
@@ -992,13 +993,27 @@ func TestRun_PersistsEventsToJSONL(t *testing.T) {
 		t.Fatalf("expected 3 lines in events.jsonl, got %d", len(lines))
 	}
 
-	// Verify first event type.
+	// Verify first event type and generated timestamp.
 	var first events.Event
 	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
 		t.Fatalf("parsing first event: %v", err)
 	}
 	if first.Type != events.EventMessageStart {
 		t.Errorf("first event type = %s, want %s", first.Type, events.EventMessageStart)
+	}
+	if first.Timestamp == "" {
+		t.Fatal("first event timestamp is empty")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, first.Timestamp); err != nil {
+		t.Fatalf("first event timestamp = %q, want RFC3339Nano: %v", first.Timestamp, err)
+	}
+
+	var second events.Event
+	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
+		t.Fatalf("parsing second event: %v", err)
+	}
+	if second.Timestamp != preservedTimestamp {
+		t.Errorf("second event timestamp = %q, want preserved %q", second.Timestamp, preservedTimestamp)
 	}
 }
 
@@ -1036,12 +1051,15 @@ func TestRun_ForwardsEventsToTUIChannel(t *testing.T) {
 	}
 done:
 	if len(received) < 3 {
-		t.Errorf("expected at least 3 events on TUI channel, got %d", len(received))
+		t.Fatalf("expected at least 3 events on TUI channel, got %d", len(received))
 	}
 
 	// First event should be the synthetic iteration event.
 	if received[0].Type != EventIteration {
 		t.Errorf("first TUI event type = %s, want %s", received[0].Type, EventIteration)
+	}
+	if received[1].Timestamp == "" {
+		t.Error("first backend TUI event timestamp is empty")
 	}
 }
 
