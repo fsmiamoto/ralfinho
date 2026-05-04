@@ -210,6 +210,9 @@ func TestRun_InvalidAgentReturnsFailureAndWritesFailedMeta(t *testing.T) {
 	if result.Iterations != 0 {
 		t.Fatalf("result.Iterations = %d, want 0", result.Iterations)
 	}
+	if result.Duration <= 0 {
+		t.Fatalf("result.Duration = %s, want > 0", result.Duration)
+	}
 	if !strings.Contains(result.Error, `unknown agent "mystery-agent"`) {
 		t.Fatalf("result.Error = %q, want unknown-agent message", result.Error)
 	}
@@ -239,6 +242,9 @@ func TestRun_InvalidAgentReturnsFailureAndWritesFailedMeta(t *testing.T) {
 	}
 	if meta.Agent != "mystery-agent" {
 		t.Fatalf("meta.Agent = %q, want %q", meta.Agent, "mystery-agent")
+	}
+	if meta.DurationMs <= 0 {
+		t.Fatalf("meta.DurationMs = %d, want > 0", meta.DurationMs)
 	}
 	if !strings.Contains(stderr.String(), "error: unknown agent \"mystery-agent\"") {
 		t.Fatalf("stderr = %q, want unknown-agent log", stderr.String())

@@ -18,6 +18,7 @@ type RunMeta struct {
 	PlanFile            string `json:"plan_file"`
 	MaxIterations       int    `json:"max_iterations"`
 	IterationsCompleted int    `json:"iterations_completed"`
+	DurationMs          int64  `json:"duration_ms,omitempty"`
 }
 
 // writeMetaJSON writes meta.json to the given path.

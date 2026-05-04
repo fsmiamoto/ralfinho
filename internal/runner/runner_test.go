@@ -595,7 +595,7 @@ func TestRunner_EventPersistence(t *testing.T) {
 
 func TestRunner_WriteMeta(t *testing.T) {
 	r, runDir := newTestRunner(t)
-	r.startedAt = time.Now()
+	r.startedAt = time.Now().Add(-1500 * time.Millisecond)
 
 	r.writeMeta(StatusCompleted, 3)
 
@@ -624,6 +624,9 @@ func TestRunner_WriteMeta(t *testing.T) {
 	if meta.EndedAt == "" {
 		t.Error("expected ended_at to be set for completed status")
 	}
+	if meta.DurationMs <= 0 {
+		t.Errorf("expected duration_ms > 0 for completed status, got %d", meta.DurationMs)
+	}
 }
 
 func TestRunner_WriteMeta_Running_EmptyEndedAt(t *testing.T) {
@@ -641,6 +644,10 @@ func TestRunner_WriteMeta_Running_EmptyEndedAt(t *testing.T) {
 	if err := json.Unmarshal(data, &meta); err != nil {
 		t.Fatalf("meta.json is not valid JSON: %v", err)
 	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("meta.json is not valid object: %v", err)
+	}
 
 	if meta.Status != "running" {
 		t.Errorf("expected status=running, got %q", meta.Status)
@@ -651,11 +658,17 @@ func TestRunner_WriteMeta_Running_EmptyEndedAt(t *testing.T) {
 	if meta.IterationsCompleted != 2 {
 		t.Errorf("expected iterations_completed=2, got %d", meta.IterationsCompleted)
 	}
+	if _, ok := raw["duration_ms"]; ok {
+		t.Errorf("expected duration_ms to be omitted for running status, got raw meta %v", raw["duration_ms"])
+	}
+	if meta.DurationMs != 0 {
+		t.Errorf("expected DurationMs=0 for running status, got %d", meta.DurationMs)
+	}
 }
 
 func TestRunner_WriteMeta_Terminal_HasEndedAt(t *testing.T) {
 	r, runDir := newTestRunner(t)
-	r.startedAt = time.Now()
+	r.startedAt = time.Now().Add(-2 * time.Second)
 
 	for _, status := range []Status{StatusCompleted, StatusFailed, StatusInterrupted, StatusMaxIterationsReached, StatusStuck} {
 		r.writeMeta(status, 5)
@@ -672,6 +685,9 @@ func TestRunner_WriteMeta_Terminal_HasEndedAt(t *testing.T) {
 
 		if meta.EndedAt == "" {
 			t.Errorf("expected ended_at to be set for %s status", status)
+		}
+		if meta.DurationMs <= 0 {
+			t.Errorf("expected duration_ms > 0 for %s status, got %d", status, meta.DurationMs)
 		}
 	}
 }
@@ -935,6 +951,12 @@ func TestRun_WritesMetaJSON(t *testing.T) {
 	if meta.IterationsCompleted != 1 {
 		t.Errorf("meta.iterations_completed = %d, want 1", meta.IterationsCompleted)
 	}
+	if meta.DurationMs <= 0 {
+		t.Errorf("meta.duration_ms = %d, want > 0", meta.DurationMs)
+	}
+	if result.Duration <= 0 {
+		t.Errorf("result.Duration = %s, want > 0", result.Duration)
+	}
 }
 
 func TestRun_WritesEffectivePrompt(t *testing.T) {
@@ -1143,6 +1165,9 @@ func TestRun_WritesRunningMetaDuringLoop(t *testing.T) {
 		if snap.EndedAt != "" {
 			t.Errorf("snapshot %d: ended_at = %q, want empty", i, snap.EndedAt)
 		}
+		if snap.DurationMs != 0 {
+			t.Errorf("snapshot %d: duration_ms = %d, want 0 while running", i, snap.DurationMs)
+		}
 		if snap.IterationsCompleted != i+1 {
 			t.Errorf("snapshot %d: iterations_completed = %d, want %d", i, snap.IterationsCompleted, i+1)
 		}
@@ -1163,6 +1188,12 @@ func TestRun_WritesRunningMetaDuringLoop(t *testing.T) {
 	}
 	if finalMeta.EndedAt == "" {
 		t.Error("final ended_at should be populated")
+	}
+	if finalMeta.DurationMs <= 0 {
+		t.Errorf("final duration_ms = %d, want > 0", finalMeta.DurationMs)
+	}
+	if result.Duration <= 0 {
+		t.Errorf("result.Duration = %s, want > 0", result.Duration)
 	}
 	if finalMeta.IterationsCompleted != 3 {
 		t.Errorf("final iterations = %d, want 3", finalMeta.IterationsCompleted)

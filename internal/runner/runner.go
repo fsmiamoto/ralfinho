@@ -57,6 +57,7 @@ type RunResult struct {
 	Iterations int
 	Status     Status
 	Agent      string
+	Duration   time.Duration
 	Error      string // non-empty when Status == StatusFailed
 }
 
@@ -144,6 +145,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 			r.logf("error: %v\n", err)
 			result.Status = StatusFailed
 			result.Error = err.Error()
+			result.Duration = time.Since(r.startedAt)
 			r.writeMeta(result.Status, result.Iterations)
 			r.closeRunFiles()
 			return result
@@ -231,6 +233,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 	}
 
 	// Write final meta.json and close persistence files.
+	result.Duration = time.Since(r.startedAt)
 	r.writeMeta(result.Status, result.Iterations)
 	r.closeRunFiles()
 
@@ -751,6 +754,17 @@ func ensureEventTimestamp(ev *Event, now time.Time) {
 	ev.Timestamp = now.Format(time.RFC3339Nano)
 }
 
+func durationMilliseconds(d time.Duration) int64 {
+	if d <= 0 {
+		return 0
+	}
+	ms := d.Milliseconds()
+	if ms == 0 {
+		return 1
+	}
+	return ms
+}
+
 // writeMeta writes meta.json to the run directory. For terminal statuses
 // (anything other than StatusRunning), EndedAt is populated with the current
 // time. For StatusRunning, EndedAt is left empty to signal the run is still
@@ -758,8 +772,13 @@ func ensureEventTimestamp(ev *Event, now time.Time) {
 func (r *Runner) writeMeta(status Status, iterations int) {
 	dir := filepath.Join(r.cfg.RunsDir, r.runID)
 	var endedAt string
+	var durationMs int64
 	if status != StatusRunning {
-		endedAt = time.Now().Format(time.RFC3339)
+		now := time.Now()
+		endedAt = now.Format(time.RFC3339)
+		if !r.startedAt.IsZero() {
+			durationMs = durationMilliseconds(now.Sub(r.startedAt))
+		}
 	}
 	meta := RunMeta{
 		RunID:               r.runID,
@@ -772,6 +791,7 @@ func (r *Runner) writeMeta(status Status, iterations int) {
 		PlanFile:            r.cfg.PlanFile,
 		MaxIterations:       r.cfg.MaxIterations,
 		IterationsCompleted: iterations,
+		DurationMs:          durationMs,
 	}
 	if err := writeMetaJSON(filepath.Join(dir, "meta.json"), meta); err != nil {
 		r.logf("warning: could not write meta.json: %v\n", err)
