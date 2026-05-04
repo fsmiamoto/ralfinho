@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
+
 // normalizeToolName maps tool name variants from different agent backends
 // to a canonical lowercase form. Comparison is case-insensitive so that
 // "Bash", "bash", "BASH" all normalize to "bash".
@@ -25,16 +27,15 @@ func normalizeToolName(name string) string {
 	}
 }
 
-
 // BlockKind identifies the type of content block rendered in the main view.
 type BlockKind int
 
 const (
-	BlockIteration    BlockKind = iota // ── iteration N ──
-	BlockAssistantText                 // rendered markdown prose
-	BlockThinking                      // single dim summary line
-	BlockToolCall                      // bordered tool box with args/result
-	BlockInfo                          // informational text
+	BlockIteration     BlockKind = iota // ── iteration N ──
+	BlockAssistantText                  // rendered markdown prose
+	BlockThinking                       // single dim summary line
+	BlockToolCall                       // bordered tool box with args/result
+	BlockInfo                           // informational text
 )
 
 // MainBlock represents a single rendered unit in the main (live) view.
@@ -43,6 +44,7 @@ type MainBlock struct {
 	Iteration      int
 	Text           string // accumulated markdown for BlockAssistantText
 	AssistantFinal bool   // true when the assistant message is complete
+	AssistantModel string // model label for assistant metadata
 	ToolName       string // for BlockToolCall
 	ToolCallID     string // to match tool_start with tool_end
 	ToolArgs       string // formatted: "$ cmd" for bash, filepath for read/edit/write
@@ -51,6 +53,9 @@ type MainBlock struct {
 	ToolError      bool
 	ThinkingLen    int    // char count for thinking summary
 	InfoText       string // for BlockInfo
+	StartTime      time.Time
+	EndTime        time.Time
+	Duration       time.Duration
 
 	// Layout cache: rendered screen lines for a given width.
 	// Nil layoutLines means the cache is stale and must be recomputed.
@@ -103,6 +108,9 @@ func (b *MainBlock) InvalidateLayout() {
 
 func (b *MainBlock) renderIteration(width int) string {
 	label := fmt.Sprintf("iteration %d", b.Iteration)
+	if ts := formatBlockTime(b.StartTime); ts != "" {
+		label += " · " + ts
+	}
 	// Fill remaining width with ─ characters.
 	labelW := 3 + len(label) + 1 // "── " prefix + label + " " trailing
 	remaining := width - labelW
@@ -114,7 +122,15 @@ func (b *MainBlock) renderIteration(width int) string {
 }
 
 func (b *MainBlock) renderAssistantText(width int) string {
-	return renderAssistantContent(b.Text, width, b.AssistantFinal)
+	content := renderAssistantContent(b.Text, width, b.AssistantFinal)
+	header := b.assistantMetadataHeader()
+	if header == "" {
+		return content
+	}
+	if content == "" {
+		return header
+	}
+	return header + "\n" + content
 }
 
 // renderAssistantContent is the shared helper for rendering assistant text in
@@ -136,16 +152,75 @@ func (b *MainBlock) renderThinking() string {
 	return thinkingLineStyle.Render(line)
 }
 
-func (b *MainBlock) renderToolCall(width int) string {
-	// Build the header: toolname [status]
-	var header string
-	if b.ToolError {
-		header = toolHeaderErrorStyle.Render(fmt.Sprintf("%s !", b.ToolName))
-	} else if b.ToolDone {
-		header = toolHeaderStyle.Render(fmt.Sprintf("%s ok", b.ToolName))
-	} else {
-		header = toolHeaderStyle.Render(fmt.Sprintf("%s ...", b.ToolName))
+func formatBlockTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
 	}
+	return t.Format("15:04:05")
+}
+
+func formatBlockDuration(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	return compactDuration(d.Truncate(time.Second))
+}
+
+func blockTimingSegments(start time.Time, duration time.Duration) []string {
+	var segments []string
+	if ts := formatBlockTime(start); ts != "" {
+		segments = append(segments, ts)
+	}
+	if elapsed := formatBlockDuration(duration); elapsed != "" {
+		segments = append(segments, elapsed)
+	}
+	return segments
+}
+
+func (b *MainBlock) assistantMetadataHeader() string {
+	start := formatBlockTime(b.StartTime)
+	if start == "" && b.AssistantModel == "" && b.Duration <= 0 {
+		return ""
+	}
+
+	// Keep start-time semantics visually first: "15:04:05 assistant · model · 38s".
+	header := "assistant"
+	if start != "" {
+		header = start + " " + header
+	}
+	if b.AssistantModel != "" {
+		header += " · " + b.AssistantModel
+	}
+	if elapsed := formatBlockDuration(b.Duration); elapsed != "" {
+		header += " · " + elapsed
+	}
+	return thinkingLineStyle.Render(header)
+}
+
+func (b *MainBlock) toolHeader() string {
+	var status string
+	var style lipgloss.Style
+	if b.ToolError {
+		status = fmt.Sprintf("%s !", b.ToolName)
+		style = toolHeaderErrorStyle
+	} else if b.ToolDone {
+		status = fmt.Sprintf("%s ok", b.ToolName)
+		style = toolHeaderStyle
+	} else {
+		status = fmt.Sprintf("%s ...", b.ToolName)
+		style = toolHeaderStyle
+	}
+
+	header := style.Render(status)
+	if segments := blockTimingSegments(b.StartTime, b.Duration); len(segments) > 0 {
+		header += toolSepStyle.Render(" · " + strings.Join(segments, " · "))
+	}
+	return header
+}
+
+func (b *MainBlock) renderToolCall(width int) string {
+	// Build the header: toolname [status] plus optional timing metadata.
+	header := b.toolHeader()
 
 	// Build inner content.
 	var inner []string

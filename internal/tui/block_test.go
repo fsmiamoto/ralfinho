@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -455,7 +456,14 @@ func TestBuildBlock_Iteration(t *testing.T) {
 
 func TestBuildBlock_AssistantText_NewBlock(t *testing.T) {
 	m := &Model{activeToolIdx: -1}
-	m.buildBlock(DisplayEvent{Type: DisplayAssistantText, Iteration: 1, Detail: "hello"})
+	start := time.Date(2026, 5, 3, 15, 4, 5, 0, time.Local)
+	m.buildBlock(DisplayEvent{
+		Type:           DisplayAssistantText,
+		Iteration:      1,
+		Detail:         "hello",
+		StartTime:      start,
+		AssistantModel: "claude-sonnet",
+	})
 
 	if len(m.blocks) != 1 {
 		t.Fatalf("expected 1 block, got %d", len(m.blocks))
@@ -465,6 +473,9 @@ func TestBuildBlock_AssistantText_NewBlock(t *testing.T) {
 	}
 	if m.blocks[0].Text != "hello" {
 		t.Errorf("expected Text=%q, got %q", "hello", m.blocks[0].Text)
+	}
+	if !m.blocks[0].StartTime.Equal(start) || m.blocks[0].AssistantModel != "claude-sonnet" {
+		t.Errorf("assistant timing/model not propagated: %#v", m.blocks[0])
 	}
 }
 
@@ -529,6 +540,8 @@ func TestBuildBlock_Thinking(t *testing.T) {
 
 func TestBuildBlock_ToolLifecycle_StartUpdateEnd(t *testing.T) {
 	m := &Model{activeToolIdx: -1}
+	start := time.Date(2026, 5, 3, 15, 4, 5, 0, time.Local)
+	end := start.Add(2 * time.Second)
 
 	// Start
 	m.buildBlock(DisplayEvent{
@@ -536,6 +549,7 @@ func TestBuildBlock_ToolLifecycle_StartUpdateEnd(t *testing.T) {
 		ToolCallID: "tc-1",
 		ToolName:   "bash",
 		RawArgs:    json.RawMessage(`{"command":"echo hi"}`),
+		StartTime:  start,
 	})
 	if len(m.blocks) != 1 {
 		t.Fatalf("after start: expected 1 block, got %d", len(m.blocks))
@@ -545,6 +559,9 @@ func TestBuildBlock_ToolLifecycle_StartUpdateEnd(t *testing.T) {
 	}
 	if m.blocks[0].ToolDone {
 		t.Error("tool should not be done after start")
+	}
+	if !m.blocks[0].StartTime.Equal(start) {
+		t.Errorf("expected StartTime=%v, got %v", start, m.blocks[0].StartTime)
 	}
 
 	// Update
@@ -568,6 +585,9 @@ func TestBuildBlock_ToolLifecycle_StartUpdateEnd(t *testing.T) {
 		ToolName:       "bash",
 		ToolResultText: "hi\n",
 		ToolIsError:    false,
+		StartTime:      start,
+		EndTime:        end,
+		Duration:       2 * time.Second,
 	})
 	if m.blocks[0].ToolDone != true {
 		t.Error("tool should be done after end")
@@ -580,6 +600,9 @@ func TestBuildBlock_ToolLifecycle_StartUpdateEnd(t *testing.T) {
 	}
 	if m.activeToolIdx != -1 {
 		t.Errorf("activeToolIdx should be -1 after tool end, got %d", m.activeToolIdx)
+	}
+	if !m.blocks[0].EndTime.Equal(end) || m.blocks[0].Duration != 2*time.Second {
+		t.Errorf("tool completion timing not propagated: %#v", m.blocks[0])
 	}
 }
 
@@ -879,6 +902,32 @@ func TestMainBlockRender_AssistantTextHandlesEmptyAndNonEmptyText(t *testing.T) 
 	}
 }
 
+func TestMainBlockRender_AssistantMetadataHeader(t *testing.T) {
+	start := time.Date(2026, 5, 3, 15, 4, 5, 0, time.Local)
+
+	streaming := stripANSI((&MainBlock{
+		Kind:           BlockAssistantText,
+		Text:           "working",
+		AssistantModel: "claude-sonnet",
+		StartTime:      start,
+	}).Render(80))
+	if !strings.Contains(streaming, "15:04:05 assistant · claude-sonnet") {
+		t.Fatalf("streaming Render() = %q, want assistant timestamp/model header", streaming)
+	}
+
+	final := stripANSI((&MainBlock{
+		Kind:           BlockAssistantText,
+		Text:           "done",
+		AssistantFinal: true,
+		AssistantModel: "claude-sonnet",
+		StartTime:      start,
+		Duration:       38 * time.Second,
+	}).Render(80))
+	if !strings.Contains(final, "15:04:05 assistant · claude-sonnet · 38s") {
+		t.Fatalf("final Render() = %q, want assistant duration header", final)
+	}
+}
+
 func TestMainBlockRender_Thinking(t *testing.T) {
 	got := stripANSI((&MainBlock{Kind: BlockThinking, ThinkingLen: 42}).Render(40))
 	want := "  thinking (42 chars)"
@@ -898,6 +947,40 @@ func TestMainBlockRender_ToolCallRunningShowsStaticDots(t *testing.T) {
 		if !strings.Contains(running, want) {
 			t.Fatalf("running Render() = %q, want substring %q", running, want)
 		}
+	}
+}
+
+func TestMainBlockRender_ToolCallHeadersIncludeTiming(t *testing.T) {
+	start := time.Date(2026, 5, 3, 15, 4, 5, 0, time.Local)
+	tests := []struct {
+		name  string
+		block MainBlock
+		want  string
+	}{
+		{
+			name:  "running",
+			block: MainBlock{Kind: BlockToolCall, ToolName: "bash", ToolArgs: "$ make test", StartTime: start},
+			want:  "bash ... · 15:04:05",
+		},
+		{
+			name:  "done",
+			block: MainBlock{Kind: BlockToolCall, ToolName: "bash", ToolDone: true, StartTime: start, Duration: 2*time.Minute + 13*time.Second},
+			want:  "bash ok · 15:04:05 · 2m13s",
+		},
+		{
+			name:  "error",
+			block: MainBlock{Kind: BlockToolCall, ToolName: "bash", ToolDone: true, ToolError: true, StartTime: start, Duration: 2*time.Minute + 13*time.Second},
+			want:  "bash ! · 15:04:05 · 2m13s",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripANSI((&tt.block).Render(60))
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("Render() = %q, want substring %q", got, tt.want)
+			}
+		})
 	}
 }
 

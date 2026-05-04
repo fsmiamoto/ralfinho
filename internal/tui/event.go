@@ -51,6 +51,8 @@ type DisplayEvent struct {
 	// the completed message (i.e. produced by EventMessageEnd), false
 	// while still streaming.
 	AssistantFinal bool
+	// AssistantModel is the structured model label for assistant block metadata.
+	AssistantModel string
 
 	// Tool-specific fields for block rendering in the main view.
 	ToolCallID      string          // for matching tool_start with tool_end
@@ -169,13 +171,14 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			c.inAssistant = true
 			c.assistantStartTime = eventTime
 			return []DisplayEvent{{
-				Type:         DisplayAssistantText,
-				Summary:      fmt.Sprintf("< assistant (%s)", c.currentModel),
-				Detail:       "",
-				Timestamp:    eventTime,
-				RawTimestamp: rawTimestamp,
-				Iteration:    c.iteration,
-				StartTime:    c.assistantStartTime,
+				Type:           DisplayAssistantText,
+				Summary:        fmt.Sprintf("< assistant (%s)", c.currentModel),
+				Detail:         "",
+				Timestamp:      eventTime,
+				RawTimestamp:   rawTimestamp,
+				Iteration:      c.iteration,
+				StartTime:      c.assistantStartTime,
+				AssistantModel: c.currentModel,
 			}}
 		}
 		return nil
@@ -194,13 +197,14 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			text := c.assistantText.String()
 			charCount := len(text)
 			return []DisplayEvent{{
-				Type:         DisplayAssistantText,
-				Summary:      fmt.Sprintf("< assistant (%s) [%d chars]", c.currentModel, charCount),
-				Detail:       text,
-				Timestamp:    eventTime,
-				RawTimestamp: rawTimestamp,
-				Iteration:    c.iteration,
-				StartTime:    c.assistantStartTime,
+				Type:           DisplayAssistantText,
+				Summary:        fmt.Sprintf("< assistant (%s) [%d chars]", c.currentModel, charCount),
+				Detail:         text,
+				Timestamp:      eventTime,
+				RawTimestamp:   rawTimestamp,
+				Iteration:      c.iteration,
+				StartTime:      c.assistantStartTime,
+				AssistantModel: c.currentModel,
 			}}
 		case "thinking_delta":
 			c.thinkingText.WriteString(ae.Delta)
@@ -251,6 +255,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 					StartTime:      startTime,
 					EndTime:        eventTime,
 					Duration:       displayDuration(startTime, eventTime),
+					AssistantModel: c.currentModel,
 				}}
 			}
 		}

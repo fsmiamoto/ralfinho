@@ -1083,6 +1083,22 @@ func TestRenderMainViewport_MatchesBaselineShort(t *testing.T) {
 	}
 }
 
+func TestRenderMainIterationDividerShowsStartTimestamp(t *testing.T) {
+	m := Model{
+		width:  80,
+		height: 30,
+		blocks: []MainBlock{{
+			Kind:      BlockIteration,
+			Iteration: 3,
+			StartTime: time.Date(2026, 5, 3, 15, 4, 5, 0, time.Local),
+		}},
+	}
+	got := stripANSI(m.renderMain())
+	if !strings.Contains(got, "iteration 3 · 15:04:05") {
+		t.Fatalf("renderMain() = %q, want timestamped iteration divider", got)
+	}
+}
+
 func TestRenderMainViewport_MatchesBaselineScrolled(t *testing.T) {
 	m := Model{
 		width:      80,

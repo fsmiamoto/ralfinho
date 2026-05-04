@@ -305,13 +305,18 @@ func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
 		// Fall through so the restart still appears in the stream/main view as info.
 	}
 
-	// Extract model name from assistant_text summaries like "← Assistant (claude-xxx)".
-	if de.Type == DisplayAssistantText && de.Summary != "" {
-		if start := strings.Index(de.Summary, "("); start != -1 {
-			if end := strings.Index(de.Summary[start:], ")"); end != -1 {
-				name := de.Summary[start+1 : start+end]
-				if name != "" {
-					m.modelName = name
+	// Extract model name from assistant_text display metadata. Prefer the
+	// structured field, but keep summary parsing for older tests/callers.
+	if de.Type == DisplayAssistantText {
+		if de.AssistantModel != "" {
+			m.modelName = de.AssistantModel
+		} else if de.Summary != "" {
+			if start := strings.Index(de.Summary, "("); start != -1 {
+				if end := strings.Index(de.Summary[start:], ")"); end != -1 {
+					name := de.Summary[start+1 : start+end]
+					if name != "" && !strings.HasSuffix(name, " chars") {
+						m.modelName = name
+					}
 				}
 			}
 		}
@@ -326,6 +331,14 @@ func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
 			last.Timestamp = de.Timestamp
 			last.RawTimestamp = de.RawTimestamp
 			last.AssistantFinal = de.AssistantFinal
+			if !de.StartTime.IsZero() {
+				last.StartTime = de.StartTime
+			}
+			last.EndTime = de.EndTime
+			last.Duration = de.Duration
+			if de.AssistantModel != "" {
+				last.AssistantModel = de.AssistantModel
+			}
 			// Also update the corresponding block.
 			m.updateAssistantBlock(de)
 			m.autoScrollMain()
@@ -356,6 +369,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 		m.blocks = append(m.blocks, MainBlock{
 			Kind:      BlockIteration,
 			Iteration: de.Iteration,
+			StartTime: de.StartTime,
 		})
 		m.invalidateMainLayoutFrom(len(m.blocks) - 1)
 	case DisplayAssistantText:
@@ -365,16 +379,32 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			if last.Kind == BlockAssistantText && last.Iteration == de.Iteration {
 				last.Text = de.Detail
 				last.AssistantFinal = de.AssistantFinal
+				if !de.StartTime.IsZero() {
+					last.StartTime = de.StartTime
+				}
+				last.EndTime = de.EndTime
+				last.Duration = de.Duration
+				if de.AssistantModel != "" {
+					last.AssistantModel = de.AssistantModel
+				}
 				last.InvalidateLayout()
 				m.invalidateMainLayoutFrom(len(m.blocks) - 1)
 				return
 			}
+		}
+		assistantModel := de.AssistantModel
+		if assistantModel == "" {
+			assistantModel = m.modelName
 		}
 		m.blocks = append(m.blocks, MainBlock{
 			Kind:           BlockAssistantText,
 			Iteration:      de.Iteration,
 			Text:           de.Detail,
 			AssistantFinal: de.AssistantFinal,
+			AssistantModel: assistantModel,
+			StartTime:      de.StartTime,
+			EndTime:        de.EndTime,
+			Duration:       de.Duration,
 		})
 		m.invalidateMainLayoutFrom(len(m.blocks) - 1)
 	case DisplayThinking:
@@ -395,6 +425,9 @@ func (m *Model) buildBlock(de DisplayEvent) {
 			ToolName:   de.ToolName,
 			ToolCallID: de.ToolCallID,
 			ToolArgs:   toolArgs,
+			StartTime:  de.StartTime,
+			EndTime:    de.EndTime,
+			Duration:   de.Duration,
 		})
 		m.activeToolIdx = len(m.blocks) - 1
 		m.invalidateMainLayoutFrom(len(m.blocks) - 1)
@@ -408,6 +441,9 @@ func (m *Model) buildBlock(de DisplayEvent) {
 					updatedArgs = formatToolArgs(de.ToolName, de.RawArgs)
 				}
 				m.blocks[i].ToolArgs = updatedArgs
+				if !de.StartTime.IsZero() {
+					m.blocks[i].StartTime = de.StartTime
+				}
 				m.blocks[i].InvalidateLayout()
 				m.invalidateMainLayoutFrom(i)
 				break
@@ -420,6 +456,11 @@ func (m *Model) buildBlock(de DisplayEvent) {
 				m.blocks[i].ToolDone = true
 				m.blocks[i].ToolResult = de.ToolResultText
 				m.blocks[i].ToolError = de.ToolIsError
+				if !de.StartTime.IsZero() {
+					m.blocks[i].StartTime = de.StartTime
+				}
+				m.blocks[i].EndTime = de.EndTime
+				m.blocks[i].Duration = de.Duration
 				m.blocks[i].InvalidateLayout()
 				m.invalidateMainLayoutFrom(i)
 				break
@@ -442,6 +483,14 @@ func (m *Model) updateAssistantBlock(de DisplayEvent) {
 		if m.blocks[i].Kind == BlockAssistantText && m.blocks[i].Iteration == de.Iteration {
 			m.blocks[i].Text = de.Detail
 			m.blocks[i].AssistantFinal = de.AssistantFinal
+			if !de.StartTime.IsZero() {
+				m.blocks[i].StartTime = de.StartTime
+			}
+			m.blocks[i].EndTime = de.EndTime
+			m.blocks[i].Duration = de.Duration
+			if de.AssistantModel != "" {
+				m.blocks[i].AssistantModel = de.AssistantModel
+			}
 			m.blocks[i].InvalidateLayout()
 			m.invalidateMainLayoutFrom(i)
 			return
