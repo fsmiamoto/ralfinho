@@ -40,6 +40,13 @@ type DisplayEvent struct {
 	RawTimestamp string
 	Iteration    int
 
+	// Display-only lifecycle timing metadata. StartTime is the original
+	// assistant/tool/iteration start timestamp. EndTime and Duration are set for
+	// completed assistant/tool blocks when both lifecycle timestamps are valid.
+	StartTime time.Time
+	EndTime   time.Time
+	Duration  time.Duration
+
 	// AssistantFinal is true when this assistant text event represents
 	// the completed message (i.e. produced by EventMessageEnd), false
 	// while still streaming.
@@ -64,17 +71,19 @@ type DisplayEvent struct {
 
 // EventConverter accumulates runner events and produces DisplayEvents.
 type EventConverter struct {
-	iteration     int
-	assistantText strings.Builder
-	thinkingText  strings.Builder
-	currentModel  string
-	inAssistant   bool
-	inThinking    bool
+	iteration          int
+	assistantText      strings.Builder
+	thinkingText       strings.Builder
+	currentModel       string
+	inAssistant        bool
+	inThinking         bool
+	assistantStartTime time.Time
+	toolStartTimes     map[string]time.Time
 }
 
 // NewEventConverter creates a new converter.
 func NewEventConverter() *EventConverter {
-	return &EventConverter{}
+	return &EventConverter{toolStartTimes: make(map[string]time.Time)}
 }
 
 func parseRunnerEventTimestamp(raw string) (time.Time, string) {
@@ -86,6 +95,13 @@ func parseRunnerEventTimestamp(raw string) (time.Time, string) {
 		return time.Time{}, raw
 	}
 	return parsed.Local(), raw
+}
+
+func displayDuration(start, end time.Time) time.Duration {
+	if start.IsZero() || end.IsZero() || end.Before(start) {
+		return 0
+	}
+	return end.Sub(start)
 }
 
 // Convert transforms a runner.Event into zero or more DisplayEvents.
@@ -151,6 +167,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			}
 			c.assistantText.Reset()
 			c.inAssistant = true
+			c.assistantStartTime = eventTime
 			return []DisplayEvent{{
 				Type:         DisplayAssistantText,
 				Summary:      fmt.Sprintf("< assistant (%s)", c.currentModel),
@@ -158,6 +175,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 				Timestamp:    eventTime,
 				RawTimestamp: rawTimestamp,
 				Iteration:    c.iteration,
+				StartTime:    c.assistantStartTime,
 			}}
 		}
 		return nil
@@ -182,6 +200,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 				Timestamp:    eventTime,
 				RawTimestamp: rawTimestamp,
 				Iteration:    c.iteration,
+				StartTime:    c.assistantStartTime,
 			}}
 		case "thinking_delta":
 			c.thinkingText.WriteString(ae.Delta)
@@ -216,6 +235,8 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 	case runner.EventMessageEnd:
 		if c.inAssistant {
 			c.inAssistant = false
+			startTime := c.assistantStartTime
+			c.assistantStartTime = time.Time{}
 			text := c.assistantText.String()
 			if text != "" {
 				charCount := len(text)
@@ -227,6 +248,9 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 					RawTimestamp:   rawTimestamp,
 					Iteration:      c.iteration,
 					AssistantFinal: true,
+					StartTime:      startTime,
+					EndTime:        eventTime,
+					Duration:       displayDuration(startTime, eventTime),
 				}}
 			}
 		}
@@ -250,6 +274,10 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 		if argsSummary != "" {
 			detail += fmt.Sprintf("\nArgs: %s", argsSummary)
 		}
+		if c.toolStartTimes == nil {
+			c.toolStartTimes = make(map[string]time.Time)
+		}
+		c.toolStartTimes[ev.ToolCallID] = eventTime
 		return []DisplayEvent{{
 			Type:            DisplayToolStart,
 			Summary:         summary,
@@ -261,11 +289,16 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			ToolName:        ev.ToolName,
 			RawArgs:         ev.Args,
 			ToolDisplayArgs: ev.ToolDisplayArgs,
+			StartTime:       eventTime,
 		}}
 
 	case runner.EventToolExecutionUpdate:
 		// Intermediate tool update — carries the actual arguments for a tool
 		// that was previously started with minimal info (common with kiro-cli).
+		startTime := time.Time{}
+		if c.toolStartTimes != nil {
+			startTime = c.toolStartTimes[ev.ToolCallID]
+		}
 		return []DisplayEvent{{
 			Type:            DisplayToolUpdate,
 			Summary:         fmt.Sprintf("~ %s", ev.ToolName),
@@ -277,6 +310,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			ToolName:        ev.ToolName,
 			RawArgs:         ev.Args,
 			ToolDisplayArgs: ev.ToolDisplayArgs,
+			StartTime:       startTime,
 		}}
 
 	case runner.EventToolExecutionEnd:
@@ -293,6 +327,11 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			resultText = jsonToText(ev.Result)
 			detail += fmt.Sprintf("\nResult:\n%s", resultText)
 		}
+		startTime := time.Time{}
+		if c.toolStartTimes != nil {
+			startTime = c.toolStartTimes[ev.ToolCallID]
+			delete(c.toolStartTimes, ev.ToolCallID)
+		}
 		return []DisplayEvent{{
 			Type:           DisplayToolEnd,
 			Summary:        summary,
@@ -304,6 +343,9 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			ToolName:       ev.ToolName,
 			ToolResultText: resultText,
 			ToolIsError:    isErr,
+			StartTime:      startTime,
+			EndTime:        eventTime,
+			Duration:       displayDuration(startTime, eventTime),
 		}}
 
 	case runner.EventTurnEnd:
@@ -401,6 +443,7 @@ func makeIterationEvent(n int, timestamp time.Time, rawTimestamp string) Display
 		Timestamp:    timestamp,
 		RawTimestamp: rawTimestamp,
 		Iteration:    n,
+		StartTime:    timestamp,
 	}
 }
 

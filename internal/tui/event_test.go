@@ -291,6 +291,83 @@ func TestEventConverter_MessageEnd_FlushesAssistantText(t *testing.T) {
 	}
 }
 
+func TestEventConverter_AssistantTimingMetadata(t *testing.T) {
+	c := NewEventConverter()
+	start := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC).Local()
+	end := time.Date(2026, 3, 14, 10, 0, 2, 500_000_000, time.UTC).Local()
+
+	des := c.Convert(&runner.Event{
+		Type:      runner.EventMessageStart,
+		Timestamp: "2026-03-14T10:00:00Z",
+		Message:   json.RawMessage(`{"role":"assistant","model":"test"}`),
+	})
+	if len(des) != 1 {
+		t.Fatalf("message_start: expected 1 event, got %d", len(des))
+	}
+	if !des[0].StartTime.Equal(start) {
+		t.Fatalf("message_start StartTime = %s, want %s", des[0].StartTime, start)
+	}
+
+	des = c.Convert(&runner.Event{
+		Type:                  runner.EventMessageUpdate,
+		Timestamp:             "2026-03-14T10:00:01Z",
+		AssistantMessageEvent: json.RawMessage(`{"type":"text_delta","contentIndex":0,"delta":"hello"}`),
+	})
+	if len(des) != 1 {
+		t.Fatalf("text_delta: expected 1 event, got %d", len(des))
+	}
+	if !des[0].StartTime.Equal(start) {
+		t.Fatalf("text_delta StartTime = %s, want original start %s", des[0].StartTime, start)
+	}
+	if des[0].Duration != 0 {
+		t.Fatalf("text_delta Duration = %s, want zero while streaming", des[0].Duration)
+	}
+
+	des = c.Convert(&runner.Event{
+		Type:      runner.EventMessageEnd,
+		Timestamp: "2026-03-14T10:00:02.5Z",
+	})
+	if len(des) != 1 {
+		t.Fatalf("message_end: expected 1 event, got %d", len(des))
+	}
+	if !des[0].StartTime.Equal(start) {
+		t.Fatalf("message_end StartTime = %s, want %s", des[0].StartTime, start)
+	}
+	if !des[0].EndTime.Equal(end) {
+		t.Fatalf("message_end EndTime = %s, want %s", des[0].EndTime, end)
+	}
+	if des[0].Duration != 2500*time.Millisecond {
+		t.Fatalf("message_end Duration = %s, want 2.5s", des[0].Duration)
+	}
+}
+
+func TestEventConverter_AssistantTimingInvalidTimestampsOmitDuration(t *testing.T) {
+	c := NewEventConverter()
+	c.Convert(&runner.Event{
+		Type:      runner.EventMessageStart,
+		Timestamp: "not-a-timestamp",
+		Message:   json.RawMessage(`{"role":"assistant","model":"test"}`),
+	})
+	c.Convert(&runner.Event{
+		Type:                  runner.EventMessageUpdate,
+		AssistantMessageEvent: json.RawMessage(`{"type":"text_delta","contentIndex":0,"delta":"hello"}`),
+	})
+
+	des := c.Convert(&runner.Event{
+		Type:      runner.EventMessageEnd,
+		Timestamp: "2026-03-14T10:00:02Z",
+	})
+	if len(des) != 1 {
+		t.Fatalf("message_end: expected 1 event, got %d", len(des))
+	}
+	if !des[0].StartTime.IsZero() {
+		t.Fatalf("StartTime = %s, want zero for malformed start timestamp", des[0].StartTime)
+	}
+	if des[0].Duration != 0 {
+		t.Fatalf("Duration = %s, want zero without valid start", des[0].Duration)
+	}
+}
+
 func TestEventConverter_MessageEnd_NoTextReturnsNil(t *testing.T) {
 	c := NewEventConverter()
 	c.Convert(&runner.Event{
@@ -421,6 +498,131 @@ func TestEventConverter_ToolEnd_Error(t *testing.T) {
 	}
 	if !strings.Contains(de.Summary, "error") {
 		t.Errorf("summary = %q, want 'error'", de.Summary)
+	}
+}
+
+func TestEventConverter_ToolTimingMetadataByToolCallID(t *testing.T) {
+	c := NewEventConverter()
+	startA := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC).Local()
+	startB := time.Date(2026, 3, 14, 10, 0, 10, 0, time.UTC).Local()
+	endA := time.Date(2026, 3, 14, 10, 0, 3, 0, time.UTC).Local()
+
+	des := c.Convert(&runner.Event{
+		Type:       runner.EventToolExecutionStart,
+		Timestamp:  "2026-03-14T10:00:00Z",
+		ToolCallID: "tc-a",
+		ToolName:   "bash",
+	})
+	if len(des) != 1 {
+		t.Fatalf("tool_start A: expected 1 event, got %d", len(des))
+	}
+	if !des[0].StartTime.Equal(startA) {
+		t.Fatalf("tool_start A StartTime = %s, want %s", des[0].StartTime, startA)
+	}
+
+	des = c.Convert(&runner.Event{
+		Type:       runner.EventToolExecutionStart,
+		Timestamp:  "2026-03-14T10:00:10Z",
+		ToolCallID: "tc-b",
+		ToolName:   "read",
+	})
+	if len(des) != 1 {
+		t.Fatalf("tool_start B: expected 1 event, got %d", len(des))
+	}
+	if !des[0].StartTime.Equal(startB) {
+		t.Fatalf("tool_start B StartTime = %s, want %s", des[0].StartTime, startB)
+	}
+
+	des = c.Convert(&runner.Event{
+		Type:       runner.EventToolExecutionUpdate,
+		Timestamp:  "2026-03-14T10:00:01Z",
+		ToolCallID: "tc-a",
+		ToolName:   "bash",
+	})
+	if len(des) != 1 {
+		t.Fatalf("tool_update A: expected 1 event, got %d", len(des))
+	}
+	if !des[0].StartTime.Equal(startA) {
+		t.Fatalf("tool_update A StartTime = %s, want original start %s", des[0].StartTime, startA)
+	}
+
+	des = c.Convert(&runner.Event{
+		Type:       runner.EventToolExecutionEnd,
+		Timestamp:  "2026-03-14T10:00:03Z",
+		ToolCallID: "tc-a",
+		ToolName:   "bash",
+	})
+	if len(des) != 1 {
+		t.Fatalf("tool_end A: expected 1 event, got %d", len(des))
+	}
+	if !des[0].StartTime.Equal(startA) {
+		t.Fatalf("tool_end A StartTime = %s, want %s", des[0].StartTime, startA)
+	}
+	if !des[0].EndTime.Equal(endA) {
+		t.Fatalf("tool_end A EndTime = %s, want %s", des[0].EndTime, endA)
+	}
+	if des[0].Duration != 3*time.Second {
+		t.Fatalf("tool_end A Duration = %s, want 3s", des[0].Duration)
+	}
+
+	des = c.Convert(&runner.Event{
+		Type:       runner.EventToolExecutionEnd,
+		Timestamp:  "2026-03-14T10:00:12Z",
+		ToolCallID: "tc-b",
+		ToolName:   "read",
+	})
+	if len(des) != 1 {
+		t.Fatalf("tool_end B: expected 1 event, got %d", len(des))
+	}
+	if !des[0].StartTime.Equal(startB) {
+		t.Fatalf("tool_end B StartTime = %s, want %s", des[0].StartTime, startB)
+	}
+	if des[0].Duration != 2*time.Second {
+		t.Fatalf("tool_end B Duration = %s, want 2s", des[0].Duration)
+	}
+}
+
+func TestEventConverter_ToolEndWithoutStartOmitsDuration(t *testing.T) {
+	c := NewEventConverter()
+	des := c.Convert(&runner.Event{
+		Type:       runner.EventToolExecutionEnd,
+		Timestamp:  "2026-03-14T10:00:03Z",
+		ToolCallID: "tc-missing",
+		ToolName:   "bash",
+	})
+	if len(des) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(des))
+	}
+	if !des[0].StartTime.IsZero() {
+		t.Fatalf("StartTime = %s, want zero without matching tool_start", des[0].StartTime)
+	}
+	if !des[0].EndTime.Equal(time.Date(2026, 3, 14, 10, 0, 3, 0, time.UTC).Local()) {
+		t.Fatalf("EndTime = %s, want parsed end timestamp", des[0].EndTime)
+	}
+	if des[0].Duration != 0 {
+		t.Fatalf("Duration = %s, want zero without matching tool_start", des[0].Duration)
+	}
+}
+
+func TestEventConverter_ToolTimingOutOfOrderOmitsDuration(t *testing.T) {
+	c := NewEventConverter()
+	c.Convert(&runner.Event{
+		Type:       runner.EventToolExecutionStart,
+		Timestamp:  "2026-03-14T10:00:05Z",
+		ToolCallID: "tc-skew",
+		ToolName:   "bash",
+	})
+	des := c.Convert(&runner.Event{
+		Type:       runner.EventToolExecutionEnd,
+		Timestamp:  "2026-03-14T10:00:03Z",
+		ToolCallID: "tc-skew",
+		ToolName:   "bash",
+	})
+	if len(des) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(des))
+	}
+	if des[0].Duration != 0 {
+		t.Fatalf("Duration = %s, want zero for end before start", des[0].Duration)
 	}
 }
 
