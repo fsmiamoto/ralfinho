@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ---------------------------------------------------------------------------
@@ -928,6 +930,28 @@ func TestMainBlockRender_AssistantMetadataHeader(t *testing.T) {
 	}
 }
 
+func TestMainBlockRender_AssistantMetadataTruncatesLongModel(t *testing.T) {
+	start := time.Date(2026, 5, 3, 15, 4, 5, 0, time.Local)
+	got := stripANSI((&MainBlock{
+		Kind:           BlockAssistantText,
+		Text:           "done",
+		AssistantFinal: true,
+		AssistantModel: "provider/very-long-model-name-that-would-wrap",
+		StartTime:      start,
+		Duration:       38 * time.Second,
+	}).Render(36))
+
+	firstLine := strings.Split(got, "\n")[0]
+	if lipgloss.Width(firstLine) > 36 {
+		t.Fatalf("assistant metadata width = %d, want <= 36; line %q", lipgloss.Width(firstLine), firstLine)
+	}
+	for _, want := range []string{"15:04:05 assistant", "...", "38s"} {
+		if !strings.Contains(firstLine, want) {
+			t.Fatalf("assistant metadata line = %q, want substring %q", firstLine, want)
+		}
+	}
+}
+
 func TestMainBlockRender_Thinking(t *testing.T) {
 	got := stripANSI((&MainBlock{Kind: BlockThinking, ThinkingLen: 42}).Render(40))
 	want := "  thinking (42 chars)"
@@ -981,6 +1005,49 @@ func TestMainBlockRender_ToolCallHeadersIncludeTiming(t *testing.T) {
 				t.Fatalf("Render() = %q, want substring %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMainBlockRender_ToolCallHeaderTruncatesLongToolName(t *testing.T) {
+	start := time.Date(2026, 5, 3, 15, 4, 5, 0, time.Local)
+	got := stripANSI((&MainBlock{
+		Kind:      BlockToolCall,
+		ToolName:  "very-long-tool-name-that-would-wrap",
+		ToolDone:  true,
+		StartTime: start,
+		Duration:  2*time.Minute + 13*time.Second,
+	}).Render(34))
+
+	lines := strings.Split(got, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("Render() = %q, want bordered tool block", got)
+	}
+	header := lines[1]
+	if lipgloss.Width(header) > 34 {
+		t.Fatalf("tool header width = %d, want <= 34; line %q", lipgloss.Width(header), header)
+	}
+	for _, want := range []string{"...", " ok", "15:04:05", "2m13s"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("tool header = %q, want substring %q", header, want)
+		}
+	}
+}
+
+func TestMainBlockRender_ToolCallHeaderDropsTimingWhenNarrow(t *testing.T) {
+	start := time.Date(2026, 5, 3, 15, 4, 5, 0, time.Local)
+	got := stripANSI((&MainBlock{
+		Kind:      BlockToolCall,
+		ToolName:  "very-long-tool-name-that-would-wrap",
+		ToolDone:  true,
+		StartTime: start,
+		Duration:  2*time.Minute + 13*time.Second,
+	}).Render(18))
+
+	if !strings.Contains(got, " ok") {
+		t.Fatalf("narrow Render() = %q, want status retained", got)
+	}
+	if strings.Contains(got, "15:04:05") || strings.Contains(got, "2m13s") {
+		t.Fatalf("narrow Render() = %q, should drop timing before obscuring status", got)
 	}
 }
 

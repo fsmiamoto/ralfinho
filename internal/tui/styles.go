@@ -29,11 +29,10 @@ var (
 // Header styles for the top bar.
 var (
 	headerStyle = lipgloss.NewStyle().
-			Background(ColorAccent).
-			Foreground(lipgloss.Color("255")).
-			Bold(true).
-			Padding(0, 1)
-
+		Background(ColorAccent).
+		Foreground(lipgloss.Color("255")).
+		Bold(true).
+		Padding(0, 1)
 )
 
 // Selection styles.
@@ -136,6 +135,11 @@ var (
 // Thinking line style.
 var thinkingLineStyle = lipgloss.NewStyle().
 	Foreground(colorThinking).
+	Italic(true)
+
+// Block metadata style for subtle LIVE-pane timing/model labels.
+var blockMetadataStyle = lipgloss.NewStyle().
+	Foreground(colorDim).
 	Italic(true)
 
 // Iteration rule style (for the ━━━ line in main view).

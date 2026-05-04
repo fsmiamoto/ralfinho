@@ -123,7 +123,7 @@ func (b *MainBlock) renderIteration(width int) string {
 
 func (b *MainBlock) renderAssistantText(width int) string {
 	content := renderAssistantContent(b.Text, width, b.AssistantFinal)
-	header := b.assistantMetadataHeader()
+	header := b.assistantMetadataHeader(width)
 	if header == "" {
 		return content
 	}
@@ -177,50 +177,131 @@ func blockTimingSegments(start time.Time, duration time.Duration) []string {
 	return segments
 }
 
-func (b *MainBlock) assistantMetadataHeader() string {
+func (b *MainBlock) assistantMetadataHeader(width int) string {
 	start := formatBlockTime(b.StartTime)
-	if start == "" && b.AssistantModel == "" && b.Duration <= 0 {
+	elapsed := formatBlockDuration(b.Duration)
+	if start == "" && b.AssistantModel == "" && elapsed == "" {
 		return ""
 	}
 
 	// Keep start-time semantics visually first: "15:04:05 assistant · model · 38s".
-	header := "assistant"
+	primary := "assistant"
 	if start != "" {
-		header = start + " " + header
+		primary = start + " " + primary
 	}
-	if b.AssistantModel != "" {
-		header += " · " + b.AssistantModel
-	}
-	if elapsed := formatBlockDuration(b.Duration); elapsed != "" {
-		header += " · " + elapsed
-	}
-	return thinkingLineStyle.Render(header)
+	header := fitAssistantMetadataHeader(primary, b.AssistantModel, elapsed, width)
+	return blockMetadataStyle.Render(header)
 }
 
-func (b *MainBlock) toolHeader() string {
-	var status string
+func fitAssistantMetadataHeader(primary, model, elapsed string, maxWidth int) string {
+	build := func(model string) string {
+		parts := []string{primary}
+		if model != "" {
+			parts = append(parts, model)
+		}
+		if elapsed != "" {
+			parts = append(parts, elapsed)
+		}
+		return strings.Join(parts, " · ")
+	}
+
+	header := build(model)
+	if maxWidth <= 0 || lipgloss.Width(header) <= maxWidth {
+		return header
+	}
+
+	// Prefer preserving start/status and elapsed duration over a long model name.
+	if model != "" {
+		reserved := lipgloss.Width(primary)
+		if elapsed != "" {
+			reserved += lipgloss.Width(" · " + elapsed)
+		}
+		modelWidth := maxWidth - reserved - lipgloss.Width(" · ")
+		if modelWidth > 0 {
+			candidate := build(truncateMetadataToWidth(model, modelWidth))
+			if lipgloss.Width(candidate) <= maxWidth {
+				return candidate
+			}
+		}
+
+		header = build("")
+		if lipgloss.Width(header) <= maxWidth {
+			return header
+		}
+	}
+	if elapsed != "" && lipgloss.Width(primary) <= maxWidth {
+		return primary
+	}
+
+	return truncateMetadataToWidth(header, maxWidth)
+}
+
+func truncateMetadataToWidth(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= maxWidth {
+		return s
+	}
+	if maxWidth < 4 {
+		return clipToWidth(s, maxWidth)
+	}
+	return truncateToWidth(s, maxWidth)
+}
+
+func (b *MainBlock) toolHeader(maxWidth int) string {
+	var suffix string
 	var style lipgloss.Style
 	if b.ToolError {
-		status = fmt.Sprintf("%s !", b.ToolName)
+		suffix = " !"
 		style = toolHeaderErrorStyle
 	} else if b.ToolDone {
-		status = fmt.Sprintf("%s ok", b.ToolName)
+		suffix = " ok"
 		style = toolHeaderStyle
 	} else {
-		status = fmt.Sprintf("%s ...", b.ToolName)
+		suffix = " ..."
 		style = toolHeaderStyle
 	}
 
-	header := style.Render(status)
-	if segments := blockTimingSegments(b.StartTime, b.Duration); len(segments) > 0 {
-		header += toolSepStyle.Render(" · " + strings.Join(segments, " · "))
+	metadata := strings.Join(blockTimingSegments(b.StartTime, b.Duration), " · ")
+	toolName, includeTiming := fitToolHeaderSegments(b.ToolName, suffix, metadata, maxWidth)
+	header := style.Render(toolName + suffix)
+	if includeTiming {
+		header += toolSepStyle.Render(" · " + metadata)
 	}
 	return header
 }
 
+func fitToolHeaderSegments(toolName, suffix, metadata string, maxWidth int) (string, bool) {
+	if maxWidth <= 0 {
+		return toolName, metadata != ""
+	}
+
+	metadataWidth := 0
+	if metadata != "" {
+		metadataWidth = lipgloss.Width(" · " + metadata)
+	}
+
+	// Timing metadata is secondary; keep the tool name/status clear on narrow panes.
+	if metadata != "" && maxWidth-metadataWidth >= lipgloss.Width(suffix)+4 {
+		nameWidth := maxWidth - metadataWidth - lipgloss.Width(suffix)
+		return truncateMetadataToWidth(toolName, nameWidth), true
+	}
+
+	nameWidth := maxWidth - lipgloss.Width(suffix)
+	if nameWidth <= 0 {
+		return "", false
+	}
+	return truncateMetadataToWidth(toolName, nameWidth), false
+}
+
 func (b *MainBlock) renderToolCall(width int) string {
 	// Build the header: toolname [status] plus optional timing metadata.
-	header := b.toolHeader()
+	headerWidth := width - 4 // border (2) + horizontal padding (2)
+	if headerWidth < 10 {
+		headerWidth = 10
+	}
+	header := b.toolHeader(headerWidth)
 
 	// Build inner content.
 	var inner []string
