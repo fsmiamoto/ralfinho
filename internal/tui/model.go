@@ -43,6 +43,7 @@ type Model struct {
 	confirmCtrlC bool // true if ctrl+c triggered confirm, false if q
 	result       *runner.RunResult
 	startTime    time.Time
+	runDuration  time.Duration
 	modelName    string
 	agentName    string
 	iteration    int // current iteration count for header display
@@ -129,8 +130,15 @@ func NewViewerModel(events []DisplayEvent, meta runner.RunMeta, promptText, note
 	if agentName == "" {
 		agentName = "pi"
 	}
+	runDuration := time.Duration(0)
+	if meta.DurationMs > 0 {
+		runDuration = time.Duration(meta.DurationMs) * time.Millisecond
+	}
 	status := fmt.Sprintf("Run %s | %s | %s | %s | %d iterations",
 		shortID(meta.RunID), agentName, meta.Status, meta.StartedAt, meta.IterationsCompleted)
+	if runDuration > 0 {
+		status += " | " + compactDuration(runDuration)
+	}
 
 	m := Model{
 		events:         events,
@@ -140,6 +148,7 @@ func NewViewerModel(events []DisplayEvent, meta runner.RunMeta, promptText, note
 		autoScroll:     false,
 		mainAutoScroll: false,
 		activeToolIdx:  -1,
+		runDuration:    runDuration,
 		agentName:      agentName,
 		promptText:     promptText,
 		notesPath:      notesPath,
@@ -236,7 +245,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DoneMsg:
 		m.running = false
+		m.runDuration = msg.Result.Duration
 		m.status = fmt.Sprintf("Done — %s | %s (%d iterations)", msg.Result.Agent, msg.Result.Status, msg.Result.Iterations)
+		if m.runDuration > 0 {
+			m.status += " | " + compactDuration(m.runDuration)
+		}
 		if msg.Result.Error != "" {
 			m.errorOverlay = msg.Result.Error
 			m.errorOverlayScroll = 0
@@ -1201,6 +1214,8 @@ func (m Model) renderHeader() string {
 	}
 	if m.running && !m.startTime.IsZero() {
 		optional = append(optional, formatElapsed(time.Since(m.startTime)))
+	} else if !m.running && m.runDuration > 0 {
+		optional = append(optional, compactDuration(m.runDuration))
 	}
 	optional = append(optional, "Timeout: "+timeoutHeaderValue(m.currentTimeout))
 

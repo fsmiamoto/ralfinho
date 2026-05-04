@@ -1960,9 +1960,9 @@ func TestBrowserResumeResultIncludesAllFields(t *testing.T) {
 
 func TestBrowserPromptDescriptor(t *testing.T) {
 	tests := []struct {
-		name   string
-		s      viewer.RunSummary
-		want   string
+		name string
+		s    viewer.RunSummary
+		want string
 	}{
 		{
 			name: "label and source",
@@ -2177,11 +2177,11 @@ func TestBrowserFacetLess(t *testing.T) {
 		a, b string
 		want bool
 	}{
-		{"pi", "unknown", true},         // known < unknown
-		{"unknown", "pi", false},        // unknown > known
-		{"alpha", "beta", true},         // alphabetical within same rank
-		{"", "unknown", true},           // both rank 1, "" < "unknown" alphabetically
-		{"unknown", "", false},          // both rank 1, "unknown" > "" alphabetically
+		{"pi", "unknown", true},  // known < unknown
+		{"unknown", "pi", false}, // unknown > known
+		{"alpha", "beta", true},  // alphabetical within same rank
+		{"", "unknown", true},    // both rank 1, "" < "unknown" alphabetically
+		{"unknown", "", false},   // both rank 1, "unknown" > "" alphabetically
 	}
 	for _, tt := range tests {
 		got := browserFacetLess(tt.a, tt.b)
@@ -2301,6 +2301,7 @@ func TestBrowserPreviewTextStandalone(t *testing.T) {
 			RunID:               "abc-123",
 			Dir:                 "/tmp/abc-123",
 			StartedAt:           now,
+			DurationText:        "3m12s",
 			Agent:               "pi",
 			Status:              "completed",
 			IterationsCompleted: 3,
@@ -2322,7 +2323,7 @@ func TestBrowserPreviewTextStandalone(t *testing.T) {
 		}
 		got := browserPreviewText(s)
 		for _, want := range []string{
-			"abc-123", "pi", "completed", "3", "/tmp/abc-123",
+			"abc-123", "pi", "completed", "Duration: 3m12s", "3", "/tmp/abc-123",
 			"my-plan (plan)", "/path/to/plan.md",
 			"meta.json: ok", "events.jsonl: ok", "effective-prompt.md: ok",
 			"open: available", "resume: available from plan file", "delete: available",
@@ -2366,6 +2367,19 @@ func TestBrowserPreviewTextStandalone(t *testing.T) {
 		got := browserPreviewText(s)
 		if !strings.Contains(got, "Started raw: march 8 2026") {
 			t.Errorf("expected raw date in output, got:\n%s", got)
+		}
+	})
+
+	t.Run("old run omits duration", func(t *testing.T) {
+		s := &viewer.RunSummary{
+			RunID:  "old-run",
+			Dir:    "/tmp/old-run",
+			Agent:  "pi",
+			Status: "completed",
+		}
+		got := browserPreviewText(s)
+		if strings.Contains(got, "Duration:") {
+			t.Errorf("old run preview should omit duration, got:\n%s", got)
 		}
 	})
 }
@@ -2753,6 +2767,22 @@ func TestBrowserSecondaryRow(t *testing.T) {
 		}
 	})
 
+	t.Run("includes duration when present", func(t *testing.T) {
+		withDuration := summary
+		withDuration.DurationText = "3m12s"
+		row := browserSecondaryRow(withDuration, 80)
+		if !strings.Contains(row, "completed • 3m12s • default") {
+			t.Errorf("secondaryRow %q does not include duration between status and prompt", row)
+		}
+	})
+
+	t.Run("omits duration when absent", func(t *testing.T) {
+		row := browserSecondaryRow(summary, 80)
+		if strings.Contains(row, "3m12s") {
+			t.Errorf("secondaryRow %q unexpectedly contains duration", row)
+		}
+	})
+
 	t.Run("truncated to width", func(t *testing.T) {
 		row := browserSecondaryRow(summary, 10)
 		if w := len([]rune(row)); w > 10 {
@@ -2776,7 +2806,7 @@ func TestBrowserLayoutHelpers(t *testing.T) {
 		}{
 			{height: 30, want: 26},
 			{height: 10, want: 6},
-			{height: 8, want: 6},   // 8-4=4 < 6, clamped to 6
+			{height: 8, want: 6}, // 8-4=4 < 6, clamped to 6
 			{height: 100, want: 96},
 		}
 		for _, tc := range tests {

@@ -382,6 +382,9 @@ func formatRunSummary(summary viewer.RunSummary) string {
 	}
 
 	details := fmt.Sprintf("%d iterations  (%s)", summary.IterationsCompleted, summary.PromptLabel)
+	if summary.DurationText != "" {
+		details = fmt.Sprintf("%d iterations  %s  (%s)", summary.IterationsCompleted, summary.DurationText, summary.PromptLabel)
+	}
 	if summary.ArtifactError != "" {
 		details = summary.ArtifactError
 	}

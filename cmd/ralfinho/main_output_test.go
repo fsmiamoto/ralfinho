@@ -98,6 +98,7 @@ func TestListRunsPrintsReadableOutput(t *testing.T) {
 			PromptSource:        "prompt",
 			PromptFile:          "tasks/browser-prompt.md",
 			IterationsCompleted: 4,
+			DurationMs:          192_000,
 		})
 
 		stdout, stderr := captureCommandOutput(t, func() {
@@ -115,7 +116,7 @@ func TestListRunsPrintsReadableOutput(t *testing.T) {
 			t.Fatalf("header = %q, want %q", lines[0], "Available runs:")
 		}
 
-		for _, want := range []string{"22222222", "2026-03-08 11:30", "kiro", "interrupted", "4 iterations", "browser-prompt.md"} {
+		for _, want := range []string{"22222222", "2026-03-08 11:30", "kiro", "interrupted", "4 iterations", "3m12s", "browser-prompt.md"} {
 			if !strings.Contains(lines[1], want) {
 				t.Fatalf("newest run line = %q, missing %q", lines[1], want)
 			}
@@ -124,6 +125,9 @@ func TestListRunsPrintsReadableOutput(t *testing.T) {
 			if !strings.Contains(lines[2], want) {
 				t.Fatalf("older run line = %q, missing %q", lines[2], want)
 			}
+		}
+		if strings.Contains(lines[2], "3m12s") {
+			t.Fatalf("older run line = %q, want old run duration omitted", lines[2])
 		}
 	})
 }

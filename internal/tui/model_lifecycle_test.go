@@ -57,6 +57,7 @@ func TestNewViewerModelBuildsBlocksAndDefaultsAgentName(t *testing.T) {
 		StartedAt:           "2026-03-15T12:00:00Z",
 		Status:              "completed",
 		IterationsCompleted: 2,
+		DurationMs:          90_000,
 	}
 
 	m := NewViewerModel(events, meta, "", "", "")
@@ -70,10 +71,14 @@ func TestNewViewerModelBuildsBlocksAndDefaultsAgentName(t *testing.T) {
 	if m.activeToolIdx != -1 {
 		t.Fatalf("NewViewerModel() activeToolIdx = %d, want -1", m.activeToolIdx)
 	}
-	for _, want := range []string{"Run 12345678", "pi", "completed", "2026-03-15T12:00:00Z", "2 iterations"} {
+	for _, want := range []string{"Run 12345678", "pi", "completed", "2026-03-15T12:00:00Z", "2 iterations", "1m30s"} {
 		if !strings.Contains(m.status, want) {
 			t.Fatalf("NewViewerModel() status = %q, want substring %q", m.status, want)
 		}
+	}
+	m.width = 80
+	if header := m.renderHeader(); !strings.Contains(header, "1m30s") {
+		t.Fatalf("NewViewerModel() header = %q, want final duration", header)
 	}
 	if len(m.blocks) != 3 {
 		t.Fatalf("NewViewerModel() built %d blocks, want 3", len(m.blocks))
@@ -83,6 +88,17 @@ func TestNewViewerModelBuildsBlocksAndDefaultsAgentName(t *testing.T) {
 	}
 	if m.blocks[2].Kind != BlockToolCall || !m.blocks[2].ToolDone || m.blocks[2].ToolResult != "ok" {
 		t.Fatalf("tool block = %#v, want completed tool call", m.blocks[2])
+	}
+}
+
+func TestNewViewerModel_OmitsDurationWhenUnavailable(t *testing.T) {
+	m := NewViewerModel(nil, runner.RunMeta{RunID: "old-run", Status: "completed"}, "", "", "")
+
+	if strings.Contains(m.status, "0s") {
+		t.Fatalf("NewViewerModel() status = %q, want old run duration omitted", m.status)
+	}
+	if m.runDuration != 0 {
+		t.Fatalf("NewViewerModel() runDuration = %s, want zero", m.runDuration)
 	}
 }
 

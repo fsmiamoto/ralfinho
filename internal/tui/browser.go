@@ -1260,7 +1260,6 @@ func (m BrowserModel) currentSummary() *viewer.RunSummary {
 	return &m.summaries[m.cursor]
 }
 
-
 func (m BrowserModel) browserPaneHeight() int {
 	h := m.height - 4
 	if h < 6 {
@@ -1396,7 +1395,12 @@ func browserPrimaryRow(summary viewer.RunSummary, width int) string {
 
 func browserSecondaryRow(summary viewer.RunSummary, width int) string {
 	prompt := browserPromptDescriptor(summary)
-	row := fmt.Sprintf("%s • %s • %s", summary.Agent, summary.Status, prompt)
+	parts := []string{summary.Agent, summary.Status}
+	if summary.DurationText != "" {
+		parts = append(parts, summary.DurationText)
+	}
+	parts = append(parts, prompt)
+	row := strings.Join(parts, " • ")
 	return truncateToWidth(row, width)
 }
 
@@ -1411,6 +1415,11 @@ func browserPreviewText(summary *viewer.RunSummary) string {
 		fmt.Sprintf("Started: %s", browserLongDate(*summary)),
 		fmt.Sprintf("Agent: %s", summary.Agent),
 		fmt.Sprintf("Status: %s", summary.Status),
+	)
+	if summary.DurationText != "" {
+		lines = append(lines, fmt.Sprintf("Duration: %s", summary.DurationText))
+	}
+	lines = append(lines,
 		fmt.Sprintf("Iterations: %d", summary.IterationsCompleted),
 		fmt.Sprintf("Directory: %s", summary.Dir),
 		"",
@@ -1454,7 +1463,6 @@ func browserPreviewText(summary *viewer.RunSummary) string {
 
 	return strings.Join(lines, "\n")
 }
-
 
 func browserPromptDescriptor(summary viewer.RunSummary) string {
 	label := strings.TrimSpace(summary.PromptLabel)
