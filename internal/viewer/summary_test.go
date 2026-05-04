@@ -681,6 +681,93 @@ func TestRunSummaryTimeParsing(t *testing.T) {
 	}
 }
 
+func TestRunSummaryDurationParsing(t *testing.T) {
+	runsDir := t.TempDir()
+
+	writeRunMeta(t, runsDir, "with-duration", runner.RunMeta{
+		RunID:        "with-duration",
+		StartedAt:    "2026-03-08T10:00:00Z",
+		Status:       string(runner.StatusCompleted),
+		Agent:        "pi",
+		PromptSource: "default",
+		DurationMs:   90_000,
+	})
+	writeRunEvents(t, runsDir, "with-duration")
+
+	summaries, err := ListRunSummaries(runsDir)
+	if err != nil {
+		t.Fatalf("ListRunSummaries() error = %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("len(summaries) = %d, want 1", len(summaries))
+	}
+
+	s := summaries[0]
+	if s.Duration != 90*time.Second {
+		t.Fatalf("Duration = %s, want 1m30s", s.Duration)
+	}
+	if s.DurationText != "1m30s" {
+		t.Fatalf("DurationText = %q, want %q", s.DurationText, "1m30s")
+	}
+	if s.ArtifactError != "" {
+		t.Fatalf("ArtifactError = %q, want empty", s.ArtifactError)
+	}
+	if !s.Matches("1m30s") {
+		t.Fatalf("SearchText = %q, expected duration text to be searchable", s.SearchText)
+	}
+}
+
+func TestRunSummaryIgnoresMissingZeroAndNegativeDuration(t *testing.T) {
+	runsDir := t.TempDir()
+
+	cases := []struct {
+		runID      string
+		durationMs int64
+	}{
+		{runID: "missing-duration"},
+		{runID: "zero-duration", durationMs: 0},
+		{runID: "negative-duration", durationMs: -250},
+	}
+
+	for i, tc := range cases {
+		writeRunMeta(t, runsDir, tc.runID, runner.RunMeta{
+			RunID:        tc.runID,
+			StartedAt:    time.Date(2026, 3, 8, 10-i, 0, 0, 0, time.UTC).Format(time.RFC3339),
+			Status:       string(runner.StatusCompleted),
+			Agent:        "pi",
+			PromptSource: "default",
+			DurationMs:   tc.durationMs,
+		})
+		writeRunEvents(t, runsDir, tc.runID)
+	}
+
+	summaries, err := ListRunSummaries(runsDir)
+	if err != nil {
+		t.Fatalf("ListRunSummaries() error = %v", err)
+	}
+
+	byID := make(map[string]RunSummary, len(summaries))
+	for _, s := range summaries {
+		byID[s.RunID] = s
+	}
+
+	for _, tc := range cases {
+		s := byID[tc.runID]
+		if !s.HasMeta {
+			t.Fatalf("%s: HasMeta = false, want true", tc.runID)
+		}
+		if s.Duration != 0 {
+			t.Fatalf("%s: Duration = %s, want zero", tc.runID, s.Duration)
+		}
+		if s.DurationText != "" {
+			t.Fatalf("%s: DurationText = %q, want empty", tc.runID, s.DurationText)
+		}
+		if s.ArtifactError != "" {
+			t.Fatalf("%s: ArtifactError = %q, want empty", tc.runID, s.ArtifactError)
+		}
+	}
+}
+
 func TestRunSummaryMatchesEmptyQuery(t *testing.T) {
 	s := RunSummary{RunID: "test-run", SearchText: "test-run\npi\ncompleted"}
 

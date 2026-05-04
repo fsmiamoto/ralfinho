@@ -57,6 +57,8 @@ type RunSummary struct {
 
 	StartedAt     time.Time // parsed meta.json started_at; zero when unavailable
 	StartedAtText string    // raw started_at text from meta.json
+	Duration      time.Duration
+	DurationText  string    // compact display text for duration_ms; empty when unavailable
 	SortTime      time.Time // ordering key; falls back to directory modtime
 
 	Status              string
@@ -173,6 +175,10 @@ func summarizeRunDir(runsDir string, entry os.DirEntry) RunSummary {
 		summary.StartedAt = startedAt
 		summary.SortTime = startedAt
 	}
+	if meta.DurationMs > 0 {
+		summary.Duration = time.Duration(meta.DurationMs) * time.Millisecond
+		summary.DurationText = formatSummaryDuration(summary.Duration)
+	}
 
 	summary.Actions = buildRunActions(summary)
 	summary.SearchText = buildSummarySearchText(summary)
@@ -189,6 +195,7 @@ func buildSummarySearchText(summary RunSummary) string {
 		summary.PromptLabel,
 		summary.PromptPath,
 		summary.StartedAtText,
+		summary.DurationText,
 		summary.ArtifactError,
 		summary.EventsError,
 		summary.EffectivePromptError,
@@ -365,4 +372,34 @@ func parseSummaryTime(raw string) (time.Time, bool) {
 		return t, true
 	}
 	return time.Time{}, false
+}
+
+func formatSummaryDuration(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	if d%time.Second != 0 {
+		return d.String()
+	}
+
+	hours := int(d / time.Hour)
+	d -= time.Duration(hours) * time.Hour
+	minutes := int(d / time.Minute)
+	d -= time.Duration(minutes) * time.Minute
+	seconds := int(d / time.Second)
+
+	switch {
+	case hours > 0 && minutes == 0 && seconds == 0:
+		return fmt.Sprintf("%dh", hours)
+	case hours > 0 && seconds == 0:
+		return fmt.Sprintf("%dh%dm", hours, minutes)
+	case hours > 0:
+		return fmt.Sprintf("%dh%dm%ds", hours, minutes, seconds)
+	case minutes > 0 && seconds == 0:
+		return fmt.Sprintf("%dm", minutes)
+	case minutes > 0:
+		return fmt.Sprintf("%dm%ds", minutes, seconds)
+	default:
+		return fmt.Sprintf("%ds", seconds)
+	}
 }
