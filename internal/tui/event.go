@@ -9,26 +9,25 @@ import (
 
 	"github.com/fsmiamoto/ralfinho/internal/runner"
 )
+
 // DisplayEventType identifies the kind of display event.
 type DisplayEventType = string
 
 const (
-	DisplaySession        DisplayEventType = "session"
-	DisplayUserMsg        DisplayEventType = "user_msg"
-	DisplayAssistantText  DisplayEventType = "assistant_text"
-	DisplayThinking       DisplayEventType = "thinking"
-	DisplayToolStart      DisplayEventType = "tool_start"
-	DisplayToolUpdate     DisplayEventType = "tool_update"
-	DisplayToolEnd        DisplayEventType = "tool_end"
-	DisplayTurnEnd        DisplayEventType = "turn_end"
-	DisplayAgentEnd       DisplayEventType = "agent_end"
-	DisplayIteration      DisplayEventType = "iteration"
-	DisplayInfo           DisplayEventType = "info"
-	DisplayRestart        DisplayEventType = "restart"
-	DisplayReminderState  DisplayEventType = "reminder_state"
+	DisplaySession       DisplayEventType = "session"
+	DisplayUserMsg       DisplayEventType = "user_msg"
+	DisplayAssistantText DisplayEventType = "assistant_text"
+	DisplayThinking      DisplayEventType = "thinking"
+	DisplayToolStart     DisplayEventType = "tool_start"
+	DisplayToolUpdate    DisplayEventType = "tool_update"
+	DisplayToolEnd       DisplayEventType = "tool_end"
+	DisplayTurnEnd       DisplayEventType = "turn_end"
+	DisplayAgentEnd      DisplayEventType = "agent_end"
+	DisplayIteration     DisplayEventType = "iteration"
+	DisplayInfo          DisplayEventType = "info"
+	DisplayRestart       DisplayEventType = "restart"
+	DisplayReminderState DisplayEventType = "reminder_state"
 )
-
-
 
 // DisplayEvent is a UI-friendly representation of a runner event.
 type DisplayEvent struct {
@@ -36,7 +35,10 @@ type DisplayEvent struct {
 	Summary   string // one-line summary for the stream pane
 	Detail    string // full content for the detail pane
 	Timestamp time.Time
-	Iteration int
+	// RawTimestamp preserves the original runner event timestamp string for
+	// raw/detail views, especially when it is malformed and cannot be parsed.
+	RawTimestamp string
+	Iteration    int
 
 	// AssistantFinal is true when this assistant text event represents
 	// the completed message (i.e. produced by EventMessageEnd), false
@@ -75,10 +77,21 @@ func NewEventConverter() *EventConverter {
 	return &EventConverter{}
 }
 
+func parseRunnerEventTimestamp(raw string) (time.Time, string) {
+	if raw == "" {
+		return time.Time{}, ""
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, raw
+	}
+	return parsed.Local(), raw
+}
+
 // Convert transforms a runner.Event into zero or more DisplayEvents.
 // It may return nil if the event is accumulated (e.g. text_delta).
 func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
-	now := time.Now()
+	eventTime, rawTimestamp := parseRunnerEventTimestamp(ev.Timestamp)
 
 	switch ev.Type {
 	case runner.EventSession:
@@ -87,11 +100,12 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			id = id[:12]
 		}
 		return []DisplayEvent{{
-			Type:      DisplaySession,
-			Summary:   fmt.Sprintf("session %s", id),
-			Detail:    fmt.Sprintf("Session ID: %s\nTimestamp: %s\nCWD: %s", ev.ID, ev.Timestamp, ev.CWD),
-			Timestamp: now,
-			Iteration: c.iteration,
+			Type:         DisplaySession,
+			Summary:      fmt.Sprintf("session %s", id),
+			Detail:       fmt.Sprintf("Session ID: %s\nTimestamp: %s\nCWD: %s", ev.ID, ev.Timestamp, ev.CWD),
+			Timestamp:    eventTime,
+			RawTimestamp: rawTimestamp,
+			Iteration:    c.iteration,
 		}}
 
 	case runner.EventMessageStart:
@@ -123,11 +137,12 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 				}
 			}
 			return []DisplayEvent{{
-				Type:      DisplayUserMsg,
-				Summary:   "> user",
-				Detail:    detail,
-				Timestamp: now,
-				Iteration: c.iteration,
+				Type:         DisplayUserMsg,
+				Summary:      "> user",
+				Detail:       detail,
+				Timestamp:    eventTime,
+				RawTimestamp: rawTimestamp,
+				Iteration:    c.iteration,
 			}}
 		} else if msg.Role == "assistant" {
 			c.currentModel = msg.Model
@@ -137,11 +152,12 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			c.assistantText.Reset()
 			c.inAssistant = true
 			return []DisplayEvent{{
-				Type:      DisplayAssistantText,
-				Summary:   fmt.Sprintf("< assistant (%s)", c.currentModel),
-				Detail:    "",
-				Timestamp: now,
-				Iteration: c.iteration,
+				Type:         DisplayAssistantText,
+				Summary:      fmt.Sprintf("< assistant (%s)", c.currentModel),
+				Detail:       "",
+				Timestamp:    eventTime,
+				RawTimestamp: rawTimestamp,
+				Iteration:    c.iteration,
 			}}
 		}
 		return nil
@@ -160,11 +176,12 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			text := c.assistantText.String()
 			charCount := len(text)
 			return []DisplayEvent{{
-				Type:      DisplayAssistantText,
-				Summary:   fmt.Sprintf("< assistant (%s) [%d chars]", c.currentModel, charCount),
-				Detail:    text,
-				Timestamp: now,
-				Iteration: c.iteration,
+				Type:         DisplayAssistantText,
+				Summary:      fmt.Sprintf("< assistant (%s) [%d chars]", c.currentModel, charCount),
+				Detail:       text,
+				Timestamp:    eventTime,
+				RawTimestamp: rawTimestamp,
+				Iteration:    c.iteration,
 			}}
 		case "thinking_delta":
 			c.thinkingText.WriteString(ae.Delta)
@@ -180,11 +197,12 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 					summary = fmt.Sprintf("thinking (%d chars)", len(text))
 				}
 				return []DisplayEvent{{
-					Type:      DisplayThinking,
-					Summary:   summary,
-					Detail:    text,
-					Timestamp: now,
-					Iteration: c.iteration,
+					Type:         DisplayThinking,
+					Summary:      summary,
+					Detail:       text,
+					Timestamp:    eventTime,
+					RawTimestamp: rawTimestamp,
+					Iteration:    c.iteration,
 				}}
 			}
 			return nil
@@ -205,7 +223,8 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 					Type:           DisplayAssistantText,
 					Summary:        fmt.Sprintf("+ assistant (%d chars)", charCount),
 					Detail:         text,
-					Timestamp:      now,
+					Timestamp:      eventTime,
+					RawTimestamp:   rawTimestamp,
 					Iteration:      c.iteration,
 					AssistantFinal: true,
 				}}
@@ -235,7 +254,8 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			Type:            DisplayToolStart,
 			Summary:         summary,
 			Detail:          detail,
-			Timestamp:       now,
+			Timestamp:       eventTime,
+			RawTimestamp:    rawTimestamp,
 			Iteration:       c.iteration,
 			ToolCallID:      ev.ToolCallID,
 			ToolName:        ev.ToolName,
@@ -250,7 +270,8 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			Type:            DisplayToolUpdate,
 			Summary:         fmt.Sprintf("~ %s", ev.ToolName),
 			Detail:          fmt.Sprintf("Tool: %s\nCall ID: %s", ev.ToolName, ev.ToolCallID),
-			Timestamp:       now,
+			Timestamp:       eventTime,
+			RawTimestamp:    rawTimestamp,
 			Iteration:       c.iteration,
 			ToolCallID:      ev.ToolCallID,
 			ToolName:        ev.ToolName,
@@ -276,7 +297,8 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			Type:           DisplayToolEnd,
 			Summary:        summary,
 			Detail:         detail,
-			Timestamp:      now,
+			Timestamp:      eventTime,
+			RawTimestamp:   rawTimestamp,
 			Iteration:      c.iteration,
 			ToolCallID:     ev.ToolCallID,
 			ToolName:       ev.ToolName,
@@ -286,20 +308,22 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 
 	case runner.EventTurnEnd:
 		return []DisplayEvent{{
-			Type:      DisplayTurnEnd,
-			Summary:   "-- turn end --",
-			Detail:    "Turn completed.",
-			Timestamp: now,
-			Iteration: c.iteration,
+			Type:         DisplayTurnEnd,
+			Summary:      "-- turn end --",
+			Detail:       "Turn completed.",
+			Timestamp:    eventTime,
+			RawTimestamp: rawTimestamp,
+			Iteration:    c.iteration,
 		}}
 
 	case runner.EventAgentEnd:
 		return []DisplayEvent{{
-			Type:      DisplayAgentEnd,
-			Summary:   "-- agent end --",
-			Detail:    "Agent process ended.",
-			Timestamp: now,
-			Iteration: c.iteration,
+			Type:         DisplayAgentEnd,
+			Summary:      "-- agent end --",
+			Detail:       "Agent process ended.",
+			Timestamp:    eventTime,
+			RawTimestamp: rawTimestamp,
+			Iteration:    c.iteration,
 		}}
 
 	case runner.EventIteration:
@@ -308,15 +332,16 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 		if _, err := fmt.Sscanf(ev.ID, "iteration-%d", &n); err == nil {
 			c.iteration = n
 		}
-		return []DisplayEvent{MakeIterationEvent(c.iteration)}
+		return []DisplayEvent{makeIterationEvent(c.iteration, eventTime, rawTimestamp)}
 
 	case runner.EventInactivityTimeout:
 		return []DisplayEvent{{
-			Type:      DisplayInfo,
-			Summary:   "Inactivity timeout — retrying iteration",
-			Detail:    "Inactivity timeout — retrying iteration",
-			Timestamp: now,
-			Iteration: c.iteration,
+			Type:         DisplayInfo,
+			Summary:      "Inactivity timeout — retrying iteration",
+			Detail:       "Inactivity timeout — retrying iteration",
+			Timestamp:    eventTime,
+			RawTimestamp: rawTimestamp,
+			Iteration:    c.iteration,
 		}}
 
 	case runner.EventIterationRestart:
@@ -325,22 +350,24 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 		_, _ = fmt.Sscanf(ev.ID, "restart-%d-%d", &iter, &attempt)
 		text := fmt.Sprintf("Iteration %d restarted (attempt %d)", iter, attempt)
 		return []DisplayEvent{{
-			Type:        DisplayRestart,
-			Summary:     text,
-			Detail:      text,
-			Timestamp:   now,
-			Iteration:   c.iteration,
-			RestartIter: iter,
+			Type:         DisplayRestart,
+			Summary:      text,
+			Detail:       text,
+			Timestamp:    eventTime,
+			RawTimestamp: rawTimestamp,
+			Iteration:    c.iteration,
+			RestartIter:  iter,
 		}}
 
 	case runner.EventReminderState:
 		return []DisplayEvent{{
-			Type:      DisplayReminderState,
-			Summary:   "reminder state update",
-			Detail:    "",
-			Timestamp: now,
-			Iteration: c.iteration,
-			Reminders: ev.Reminders,
+			Type:         DisplayReminderState,
+			Summary:      "reminder state update",
+			Detail:       "",
+			Timestamp:    eventTime,
+			RawTimestamp: rawTimestamp,
+			Iteration:    c.iteration,
+			Reminders:    ev.Reminders,
 		}}
 
 	case runner.EventRateLimit:
@@ -353,11 +380,12 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			}
 		}
 		return []DisplayEvent{{
-			Type:      DisplayInfo,
-			Summary:   summary,
-			Detail:    summary,
-			Timestamp: now,
-			Iteration: c.iteration,
+			Type:         DisplayInfo,
+			Summary:      summary,
+			Detail:       summary,
+			Timestamp:    eventTime,
+			RawTimestamp: rawTimestamp,
+			Iteration:    c.iteration,
 		}}
 
 	default:
@@ -365,15 +393,20 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 	}
 }
 
+func makeIterationEvent(n int, timestamp time.Time, rawTimestamp string) DisplayEvent {
+	return DisplayEvent{
+		Type:         DisplayIteration,
+		Summary:      fmt.Sprintf("-- iteration %d --", n),
+		Detail:       fmt.Sprintf("Starting iteration %d", n),
+		Timestamp:    timestamp,
+		RawTimestamp: rawTimestamp,
+		Iteration:    n,
+	}
+}
+
 // MakeIterationEvent creates a synthetic iteration boundary event.
 func MakeIterationEvent(n int) DisplayEvent {
-	return DisplayEvent{
-		Type:      DisplayIteration,
-		Summary:   fmt.Sprintf("-- iteration %d --", n),
-		Detail:    fmt.Sprintf("Starting iteration %d", n),
-		Timestamp: time.Now(),
-		Iteration: n,
-	}
+	return makeIterationEvent(n, time.Now(), "")
 }
 
 // MakeInfoEvent creates a general info event.

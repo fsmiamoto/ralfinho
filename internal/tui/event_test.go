@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fsmiamoto/ralfinho/internal/events"
 	"github.com/fsmiamoto/ralfinho/internal/runner"
@@ -36,6 +37,67 @@ func TestEventConverter_Session(t *testing.T) {
 	// Detail should contain the full ID.
 	if !strings.Contains(de.Detail, "sess-abcdef123456789") {
 		t.Errorf("detail = %q, want full session ID", de.Detail)
+	}
+}
+
+func TestEventConverter_UsesPersistedTimestamp(t *testing.T) {
+	c := NewEventConverter()
+	const rawTimestamp = "2026-03-14T10:00:00Z"
+	ev := &runner.Event{
+		Type:      runner.EventMessageStart,
+		Timestamp: rawTimestamp,
+		Message:   json.RawMessage(`{"role":"user","content":[{"type":"text","text":"Hello agent"}]}`),
+	}
+
+	des := c.Convert(ev)
+	if len(des) != 1 {
+		t.Fatalf("expected 1 DisplayEvent, got %d", len(des))
+	}
+	want := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC).Local()
+	if !des[0].Timestamp.Equal(want) {
+		t.Fatalf("Timestamp = %s, want persisted timestamp %s", des[0].Timestamp, want)
+	}
+	if des[0].RawTimestamp != rawTimestamp {
+		t.Fatalf("RawTimestamp = %q, want %q", des[0].RawTimestamp, rawTimestamp)
+	}
+}
+
+func TestEventConverter_MalformedTimestampIsRawOnly(t *testing.T) {
+	c := NewEventConverter()
+	ev := &runner.Event{
+		Type:      runner.EventTurnEnd,
+		Timestamp: "not-a-timestamp",
+	}
+
+	des := c.Convert(ev)
+	if len(des) != 1 {
+		t.Fatalf("expected 1 DisplayEvent, got %d", len(des))
+	}
+	if !des[0].Timestamp.IsZero() {
+		t.Fatalf("Timestamp = %s, want zero for malformed timestamp", des[0].Timestamp)
+	}
+	if des[0].RawTimestamp != "not-a-timestamp" {
+		t.Fatalf("RawTimestamp = %q, want raw malformed timestamp", des[0].RawTimestamp)
+	}
+}
+
+func TestEventConverter_IterationUsesPersistedTimestamp(t *testing.T) {
+	c := NewEventConverter()
+	const rawTimestamp = "2026-03-14T10:00:00Z"
+	des := c.Convert(&runner.Event{
+		Type:      runner.EventIteration,
+		ID:        "iteration-3",
+		Timestamp: rawTimestamp,
+	})
+	if len(des) != 1 {
+		t.Fatalf("expected 1 DisplayEvent, got %d", len(des))
+	}
+	want := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC).Local()
+	if !des[0].Timestamp.Equal(want) {
+		t.Fatalf("Timestamp = %s, want persisted timestamp %s", des[0].Timestamp, want)
+	}
+	if des[0].RawTimestamp != rawTimestamp {
+		t.Fatalf("RawTimestamp = %q, want %q", des[0].RawTimestamp, rawTimestamp)
 	}
 }
 

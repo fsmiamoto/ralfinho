@@ -116,9 +116,9 @@ func TestRenderHeaderIncludesOptionalSegmentsWhenWideAndDropsThemWhenNarrow(t *t
 
 func TestScrollIndicator(t *testing.T) {
 	tests := []struct {
-		name                          string
+		name                   string
 		scroll, visible, total int
-		want                          string
+		want                   string
 	}{
 		{"fits in view", 0, 10, 5, ""},
 		{"exact fit", 0, 10, 10, ""},
@@ -244,6 +244,57 @@ func TestRenderDetailSupportsRawAndRenderedAssistantModes(t *testing.T) {
 		for _, want := range []string{"Type: assistant_text", "Time: 10:11:12", "Iteration: 2", "hello *world*"} {
 			if !strings.Contains(detail, want) {
 				t.Fatalf("renderDetail() raw = %q, want substring %q", detail, want)
+			}
+		}
+	})
+
+	t.Run("raw malformed timestamp", func(t *testing.T) {
+		m := Model{
+			width:     80,
+			height:    24,
+			paneRatio: 0.4,
+			cursor:    0,
+			rawMode:   true,
+			events: []DisplayEvent{{
+				Type:         DisplayToolEnd,
+				Detail:       "tool detail",
+				RawTimestamp: "not-a-timestamp",
+				Iteration:    2,
+			}},
+		}
+
+		detail := stripANSI(m.renderDetail())
+		for _, want := range []string{"Type: tool_end", "Timestamp: not-a-timestamp", "Iteration: 2", "tool detail"} {
+			if !strings.Contains(detail, want) {
+				t.Fatalf("renderDetail() raw malformed = %q, want substring %q", detail, want)
+			}
+		}
+		if strings.Contains(detail, "Time: 00:00:00") {
+			t.Fatalf("renderDetail() raw malformed should not show zero time, got %q", detail)
+		}
+	})
+
+	t.Run("raw missing timestamp", func(t *testing.T) {
+		m := Model{
+			width:     80,
+			height:    24,
+			paneRatio: 0.4,
+			cursor:    0,
+			rawMode:   true,
+			events: []DisplayEvent{{
+				Type:      DisplayInfo,
+				Detail:    "old run detail",
+				Iteration: 1,
+			}},
+		}
+
+		detail := stripANSI(m.renderDetail())
+		if strings.Contains(detail, "Time: 00:00:00") {
+			t.Fatalf("renderDetail() raw missing timestamp should not show zero time, got %q", detail)
+		}
+		for _, want := range []string{"Type: info", "Iteration: 1", "old run detail"} {
+			if !strings.Contains(detail, want) {
+				t.Fatalf("renderDetail() raw missing timestamp = %q, want substring %q", detail, want)
 			}
 		}
 	})
@@ -407,10 +458,10 @@ func TestRenderErrorOverlayUsesMinimumInnerWidthOnTinyTerminals(t *testing.T) {
 
 func TestRenderHeaderShowsAgentNameAfterRalfinho(t *testing.T) {
 	tests := []struct {
-		name         string
-		width        int
-		agentName    string
-		wantContains []string
+		name          string
+		width         int
+		agentName     string
+		wantContains  []string
 		wantOmissions []string
 	}{
 		{
@@ -420,10 +471,10 @@ func TestRenderHeaderShowsAgentNameAfterRalfinho(t *testing.T) {
 			wantContains: []string{"ralfinho", "claude"},
 		},
 		{
-			name:         "agent name omitted when too narrow",
-			width:        12,
-			agentName:    "claude",
-			wantContains: []string{"ralfinho"},
+			name:          "agent name omitted when too narrow",
+			width:         12,
+			agentName:     "claude",
+			wantContains:  []string{"ralfinho"},
 			wantOmissions: []string{"claude"},
 		},
 		{

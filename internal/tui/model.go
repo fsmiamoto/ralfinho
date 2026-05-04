@@ -41,19 +41,19 @@ type Model struct {
 	autoScroll   bool // auto-scroll stream when new events arrive
 	confirmQuit  bool // waiting for quit confirmation
 	confirmCtrlC bool // true if ctrl+c triggered confirm, false if q
-	result    *runner.RunResult
-	startTime time.Time
+	result       *runner.RunResult
+	startTime    time.Time
 	modelName    string
 	agentName    string
 	iteration    int // current iteration count for header display
 
-	lastEventTime      time.Time // time of last raw event, for inactivity indicator
-	errorOverlay       string    // non-empty = show error modal overlay
-	errorOverlayScroll int    // scroll offset within the error overlay
-	promptText         string // full effective prompt text
-	promptOverlay      bool   // whether the prompt overlay is shown
-	promptOverlayScroll int   // scroll offset within the prompt overlay
-	helpOverlay        bool   // whether the help/keybinding overlay is shown
+	lastEventTime       time.Time // time of last raw event, for inactivity indicator
+	errorOverlay        string    // non-empty = show error modal overlay
+	errorOverlayScroll  int       // scroll offset within the error overlay
+	promptText          string    // full effective prompt text
+	promptOverlay       bool      // whether the prompt overlay is shown
+	promptOverlayScroll int       // scroll offset within the prompt overlay
+	helpOverlay         bool      // whether the help/keybinding overlay is shown
 
 	memoryOverlay       bool   // whether the memory overlay is shown
 	memoryOverlayTab    int    // 0=NOTES, 1=PROGRESS
@@ -61,11 +61,11 @@ type Model struct {
 	notesPath           string // path to NOTES.md in the run directory
 	progressPath        string // path to PROGRESS.md in the run directory
 
-	timeoutOverlay  bool                   // whether the timeout input overlay is shown
-	timeoutInput    string                 // current text buffer in the timeout overlay
-	timeoutError    string                 // populated when parse fails; cleared on next keystroke
-	currentTimeout  *time.Duration         // local mirror of runner timeout: nil = default; pointer-to-0 = disabled; positive = custom
-	controlSend     chan<- runner.ControlMsg // write end of the control channel; nil in viewer mode
+	timeoutOverlay bool                     // whether the timeout input overlay is shown
+	timeoutInput   string                   // current text buffer in the timeout overlay
+	timeoutError   string                   // populated when parse fails; cleared on next keystroke
+	currentTimeout *time.Duration           // local mirror of runner timeout: nil = default; pointer-to-0 = disabled; positive = custom
+	controlSend    chan<- runner.ControlMsg // write end of the control channel; nil in viewer mode
 
 	reminderOverlay    bool   // whether the reminder editor overlay is shown
 	reminderBuffer     string // text buffer; preserved across Esc, cleared only on successful queue
@@ -324,6 +324,7 @@ func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
 			last.Summary = de.Summary
 			last.Detail = de.Detail
 			last.Timestamp = de.Timestamp
+			last.RawTimestamp = de.RawTimestamp
 			last.AssistantFinal = de.AssistantFinal
 			// Also update the corresponding block.
 			m.updateAssistantBlock(de)
@@ -1237,6 +1238,17 @@ func (m Model) renderStream() string {
 		Render(ts.Render(title) + "\n" + content)
 }
 
+func formatRawDetail(ev DisplayEvent) string {
+	lines := []string{fmt.Sprintf("Type: %s", ev.Type)}
+	if !ev.Timestamp.IsZero() {
+		lines = append(lines, fmt.Sprintf("Time: %s", ev.Timestamp.Format("15:04:05")))
+	} else if ev.RawTimestamp != "" {
+		lines = append(lines, fmt.Sprintf("Timestamp: %s", ev.RawTimestamp))
+	}
+	lines = append(lines, fmt.Sprintf("Iteration: %d", ev.Iteration), "", ev.Detail)
+	return strings.Join(lines, "\n")
+}
+
 func (m Model) renderDetail() string {
 	dw := m.detailWidth()
 	ph := m.paneHeight()
@@ -1247,8 +1259,7 @@ func (m Model) renderDetail() string {
 	if m.cursor >= 0 && m.cursor < len(m.events) {
 		ev := m.events[m.cursor]
 		if m.rawMode {
-			content = fmt.Sprintf("Type: %s\nTime: %s\nIteration: %d\n\n%s",
-				ev.Type, ev.Timestamp.Format("15:04:05"), ev.Iteration, ev.Detail)
+			content = formatRawDetail(ev)
 			content = WrapText(content, contentWidth)
 		} else if ev.Type == DisplayAssistantText && ev.Detail != "" {
 			content = renderAssistantContent(ev.Detail, contentWidth, ev.AssistantFinal)
