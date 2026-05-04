@@ -224,6 +224,48 @@ func TestRenderStreamTruncatesLongSummariesAndShowsSelection(t *testing.T) {
 	}
 }
 
+func TestRenderStreamOmitsTimingMetadata(t *testing.T) {
+	start := time.Date(2026, 3, 14, 10, 0, 0, 0, time.Local)
+	m := Model{
+		width:     80,
+		height:    18,
+		paneRatio: 0.5,
+		events: []DisplayEvent{
+			{
+				Type:           DisplayAssistantText,
+				Summary:        "+ assistant (12 chars)",
+				Detail:         "hello world!",
+				AssistantFinal: true,
+				StartTime:      start,
+				EndTime:        start.Add(2*time.Minute + 13*time.Second),
+				Duration:       2*time.Minute + 13*time.Second,
+			},
+			{
+				Type:           DisplayToolEnd,
+				Summary:        "+ bash done",
+				Detail:         "ok",
+				ToolName:       "bash",
+				ToolResultText: "ok",
+				StartTime:      start,
+				EndTime:        start.Add(2*time.Minute + 13*time.Second),
+				Duration:       2*time.Minute + 13*time.Second,
+			},
+		},
+	}
+
+	stream := stripANSI(m.renderStream())
+	for _, want := range []string{"STREAM (2)", "+ assistant (12 chars)", "+ bash done"} {
+		if !strings.Contains(stream, want) {
+			t.Fatalf("renderStream() = %q, want summary substring %q", stream, want)
+		}
+	}
+	for _, unwanted := range []string{"10:00:00", "2m13s", "2026"} {
+		if strings.Contains(stream, unwanted) {
+			t.Fatalf("renderStream() = %q, should not include timing metadata %q", stream, unwanted)
+		}
+	}
+}
+
 func TestRenderDetailSupportsRawAndRenderedAssistantModes(t *testing.T) {
 	t.Run("raw", func(t *testing.T) {
 		m := Model{
