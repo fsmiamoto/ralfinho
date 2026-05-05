@@ -1825,17 +1825,16 @@ func TestReminderOverlayCtrlPTogglesPersistent(t *testing.T) {
 	}
 }
 
-func TestReminderOverlayCtrlEnterSendsAddAndRestart(t *testing.T) {
+func TestReminderOverlayCtrlRSendsAddAndRestart(t *testing.T) {
 	ctrl := make(chan runner.ControlMsg, 4)
 	m := Model{width: 80, height: 24, controlSend: ctrl, reminderOverlay: true, reminderBuffer: "stop and rethink"}
 
-	// tea.KeyCtrlJ = LF, the canonical "ctrl+enter" surrogate in most terminals.
-	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlJ}))
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlR}))
 	if m.reminderOverlay {
-		t.Fatal("Ctrl+Enter: overlay still open, want closed")
+		t.Fatal("Ctrl+R: overlay still open, want closed")
 	}
 	if m.reminderBuffer != "" {
-		t.Fatalf("Ctrl+Enter: reminderBuffer = %q, want cleared", m.reminderBuffer)
+		t.Fatalf("Ctrl+R: reminderBuffer = %q, want cleared", m.reminderBuffer)
 	}
 
 	first, ok := <-ctrl
@@ -1844,6 +1843,25 @@ func TestReminderOverlayCtrlEnterSendsAddAndRestart(t *testing.T) {
 	}
 	if first.Reminder.Text != "stop and rethink" {
 		t.Fatalf("Reminder.Text = %q, want %q", first.Reminder.Text, "stop and rethink")
+	}
+	second, ok := <-ctrl
+	if !ok || second.Kind != runner.ControlRequestRestart {
+		t.Fatalf("second message = %+v, want ControlRequestRestart", second)
+	}
+}
+
+func TestReminderOverlayCtrlJApplyNowAliasSendsAddAndRestart(t *testing.T) {
+	ctrl := make(chan runner.ControlMsg, 4)
+	m := Model{width: 80, height: 24, controlSend: ctrl, reminderOverlay: true, reminderBuffer: "stop and rethink"}
+
+	m = updateModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyCtrlJ}))
+	if m.reminderOverlay {
+		t.Fatal("Ctrl+J alias: overlay still open, want closed")
+	}
+
+	first, ok := <-ctrl
+	if !ok || first.Kind != runner.ControlAddReminder {
+		t.Fatalf("first message = %+v, want ControlAddReminder", first)
 	}
 	second, ok := <-ctrl
 	if !ok || second.Kind != runner.ControlRequestRestart {
@@ -2256,7 +2274,7 @@ func TestPendingOverlayErrorClearsOnMovement(t *testing.T) {
 func TestHelpOverlayIncludesSteeringKeys(t *testing.T) {
 	m := Model{width: 80, height: 40, helpOverlay: true}
 	view := stripANSI(m.renderHelpOverlay())
-	for _, want := range []string{"s", "Add steering", "Ctrl+P", "Ctrl+Enter", "S", "Remove pending"} {
+	for _, want := range []string{"s", "Add steering", "Ctrl+P", "Ctrl+R", "S", "Remove pending"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("renderHelpOverlay() missing %q, got:\n%s", want, view)
 		}

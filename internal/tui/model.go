@@ -857,10 +857,9 @@ func (m Model) submitTimeoutInput() (tea.Model, tea.Cmd) {
 // handleReminderKey handles raw key input while the reminder editor overlay
 // is open. The buffer survives Esc, so the user never loses typed text.
 func (m Model) handleReminderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Detect ctrl+enter ahead of plain Enter — most terminals don't send a
-	// distinct sequence, but those that do report tea.KeyCtrlJ (LF) or the
-	// string "ctrl+enter".
-	if msg.Type == tea.KeyCtrlJ || msg.String() == "ctrl+enter" {
+	// Ctrl+R is the documented, tmux-safe apply-now shortcut. Keep Ctrl+J
+	// (LF) and terminals that report "ctrl+enter" as compatibility aliases.
+	if msg.Type == tea.KeyCtrlR || msg.Type == tea.KeyCtrlJ || msg.String() == "ctrl+enter" {
 		return m.queueReminder(true)
 	}
 	switch msg.Type {
@@ -1522,7 +1521,7 @@ func (m Model) renderHelpOverlay() string {
 		"  t             Set inactivity timeout\n" +
 		"  s             Add steering for next iteration\n" +
 		"                  Ctrl+P     toggle persistent\n" +
-		"                  Ctrl+Enter apply now (restart)\n" +
+		"                  Ctrl+R     apply now (restart)\n" +
 		"  S             Remove pending steering\n" +
 		"\n" +
 		"Other\n" +
@@ -1700,7 +1699,7 @@ func (m Model) renderReminderOverlay() string {
 		persistText = "on"
 	}
 	body := fmt.Sprintf(
-		"> %s_\n\npersistent: %s\n\n[Enter] queue   [Ctrl+Enter] apply now (restart)\n[Ctrl+P] toggle persistent   [Esc] close (keeps buffer)",
+		"> %s_\n\npersistent: %s\n\n[Enter] queue   [Ctrl+R] apply now (restart)\n[Ctrl+P] toggle persistent   [Esc] close (keeps buffer)",
 		m.reminderBuffer, persistText,
 	)
 	if m.reminderError != "" {
@@ -1712,7 +1711,7 @@ func (m Model) renderReminderOverlay() string {
 		reservedLines: 6,
 		title:         "Add Steering",
 		titleStyle:    browserCardTitle,
-		hint:          "Esc:close  Enter:queue  Ctrl+Enter:apply now  Ctrl+P:persistent",
+		hint:          "Esc:close  Enter:queue  Ctrl+R:apply now  Ctrl+P:persistent",
 		cardBorder:    browserCardBorder,
 	})
 }
