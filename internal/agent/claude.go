@@ -158,12 +158,27 @@ type claudeStreamEvent struct {
 	Message      *claudeMessage      `json:"message,omitempty"`
 	ContentBlock *claudeContentBlock `json:"content_block,omitempty"`
 	Delta        *claudeDelta        `json:"delta,omitempty"`
+	// Usage on a top-level message_delta event reports cumulative output_tokens
+	// for the current message (and may also restate input tokens).
+	Usage *claudeUsage `json:"usage,omitempty"`
 }
 
-// claudeMessage is the message payload in message_start events.
+// claudeMessage is the message payload in message_start events. The Anthropic
+// API reports the input token counts (including cache hits/misses) here.
 type claudeMessage struct {
-	Role  string `json:"role"`
-	Model string `json:"model"`
+	Role  string       `json:"role"`
+	Model string       `json:"model"`
+	Usage *claudeUsage `json:"usage,omitempty"`
+}
+
+// claudeUsage matches the Anthropic API's `usage` object shape. Fields are
+// pointers so we can tell "absent" from "zero" — message_delta only sends
+// output_tokens, but message_start sends every input field.
+type claudeUsage struct {
+	InputTokens         *int `json:"input_tokens,omitempty"`
+	OutputTokens        *int `json:"output_tokens,omitempty"`
+	CacheReadTokens     *int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationTokens *int `json:"cache_creation_input_tokens,omitempty"`
 }
 
 // claudeContentBlock describes a content block in content_block_start events.
@@ -212,14 +227,18 @@ type claudeToolResult struct {
 // Transitions follow the plan's event mapping specification.
 type claudeEventMapper struct {
 	onEvent          func(events.Event)
-	text             strings.Builder    // accumulated assistant text
-	toolRegistry     map[string]string  // toolCallId → toolName
-	inMessage        bool               // true between MessageStart and MessageEnd
-	inToolBlock      bool               // true inside a tool_use content block
-	turnEnded        bool               // true after TurnEnd was emitted
-	currentBlockType string             // "text" or "tool_use"
-	argsAccumulator  strings.Builder    // accumulates input_json_delta partials
-	currentToolID    string             // id of the current tool_use block
+	text             strings.Builder   // accumulated assistant text
+	toolRegistry     map[string]string // toolCallId → toolName
+	inMessage        bool              // true between MessageStart and MessageEnd
+	inToolBlock      bool              // true inside a tool_use content block
+	turnEnded        bool              // true after TurnEnd was emitted
+	currentBlockType string            // "text" or "tool_use"
+	argsAccumulator  strings.Builder   // accumulates input_json_delta partials
+	currentToolID    string            // id of the current tool_use block
+	// currentUsage is the per-message usage being assembled. Populated by
+	// message_start (input/cache tokens) and message_delta (output_tokens),
+	// and emitted in EventMessageEnd before being reset.
+	currentUsage *events.UsageInfo
 }
 
 // newClaudeEventMapper creates a mapper that forwards events through onEvent.
@@ -268,9 +287,11 @@ func (m *claudeEventMapper) handleStreamEvent(raw []byte) {
 		m.mapContentBlockDelta(sel.Event)
 	case "content_block_stop":
 		m.mapContentBlockStop()
+	case "message_delta":
+		m.mapMessageDelta(sel.Event)
 	case "message_stop":
 		m.mapMessageStop()
-	// message_delta, ping, etc. — ignored
+	// ping, etc. — ignored
 	}
 }
 
@@ -324,14 +345,59 @@ func (m *claudeEventMapper) finalize() {
 // ---------------------------------------------------------------------------
 
 // mapMessageStart handles a message_start event. Extracts the model from
-// event.message and emits EventMessageStart(role=assistant).
+// event.message and emits EventMessageStart(role=assistant). Seeds the
+// per-message usage tracker with input/cache token counts when present.
 func (m *claudeEventMapper) mapMessageStart(ev claudeStreamEvent) {
 	if ev.Message == nil {
 		return
 	}
 
+	m.currentUsage = usageFromClaude(ev.Message.Usage)
 	model := ev.Message.Model
 	m.emitMessageStart(model)
+}
+
+// mapMessageDelta handles a message_delta event. The Anthropic API uses
+// these to deliver the cumulative output_tokens count for the current
+// message (and may restate input fields). We merge it into currentUsage so
+// emitMessageEnd can surface the final per-message totals.
+func (m *claudeEventMapper) mapMessageDelta(ev claudeStreamEvent) {
+	if ev.Usage == nil {
+		return
+	}
+	if m.currentUsage == nil {
+		m.currentUsage = &events.UsageInfo{}
+	}
+	mergeClaudeUsage(m.currentUsage, ev.Usage)
+}
+
+// usageFromClaude converts a wire-format claudeUsage (with absent-vs-zero
+// pointer fields) into a flat UsageInfo. Returns nil when the input is nil
+// or carries no fields.
+func usageFromClaude(u *claudeUsage) *events.UsageInfo {
+	if u == nil {
+		return nil
+	}
+	out := &events.UsageInfo{}
+	mergeClaudeUsage(out, u)
+	return out
+}
+
+// mergeClaudeUsage overlays any non-nil fields from src onto dst. Used by
+// both mapMessageStart (initial seed) and mapMessageDelta (output tokens).
+func mergeClaudeUsage(dst *events.UsageInfo, src *claudeUsage) {
+	if src.InputTokens != nil {
+		dst.InputTokens = *src.InputTokens
+	}
+	if src.OutputTokens != nil {
+		dst.OutputTokens = *src.OutputTokens
+	}
+	if src.CacheReadTokens != nil {
+		dst.CacheReadTokens = *src.CacheReadTokens
+	}
+	if src.CacheCreationTokens != nil {
+		dst.CacheCreationTokens = *src.CacheCreationTokens
+	}
 }
 
 // mapContentBlockStart handles a content_block_start event.
@@ -476,8 +542,14 @@ func (m *claudeEventMapper) emitMessageStart(model string) {
 	m.inMessage = true
 }
 
-// emitMessageEnd sends an EventMessageEnd and clears the inMessage flag.
+// emitMessageEnd sends an EventMessageEnd, attaches any per-message usage
+// totals collected from message_start/message_delta, and clears state.
 func (m *claudeEventMapper) emitMessageEnd() {
-	m.onEvent(events.Event{Type: events.EventMessageEnd})
+	ev := events.Event{Type: events.EventMessageEnd}
+	if m.currentUsage != nil {
+		ev.Usage = m.currentUsage
+	}
+	m.onEvent(ev)
 	m.inMessage = false
+	m.currentUsage = nil
 }

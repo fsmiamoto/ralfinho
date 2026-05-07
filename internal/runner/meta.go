@@ -19,6 +19,14 @@ type RunMeta struct {
 	MaxIterations       int    `json:"max_iterations"`
 	IterationsCompleted int    `json:"iterations_completed"`
 	DurationMs          int64  `json:"duration_ms,omitempty"`
+
+	// Token usage totals across the entire run. Populated when the agent
+	// backend reports usage (currently Claude). Omitted when zero so old
+	// runs and non-reporting agents stay clean.
+	TotalInputTokens         int `json:"total_input_tokens,omitempty"`
+	TotalOutputTokens        int `json:"total_output_tokens,omitempty"`
+	TotalCacheReadTokens     int `json:"total_cache_read_tokens,omitempty"`
+	TotalCacheCreationTokens int `json:"total_cache_creation_tokens,omitempty"`
 }
 
 // writeMetaJSON writes meta.json to the given path.

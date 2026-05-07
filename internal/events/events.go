@@ -42,6 +42,10 @@ const (
 
 	// EventRateLimit is emitted when the agent backend reports rate limiting.
 	EventRateLimit EventType = "rate_limit"
+
+	// EventUsage is a synthetic runner event carrying token-usage totals.
+	// Emitted at the end of each iteration with iteration + cumulative counts.
+	EventUsage EventType = "usage"
 )
 
 // ReminderKind distinguishes one-off vs persistent reminders.
@@ -96,11 +100,39 @@ type Event struct {
 
 	// rate_limit
 	RateLimit *RateLimitInfo `json:"rateLimit,omitempty"`
+
+	// Usage is populated on EventMessageEnd by agent backends that report
+	// token counts (currently Claude). On EventUsage it carries the
+	// per-iteration totals; CumulativeUsage carries the run total.
+	Usage           *UsageInfo `json:"usage,omitempty"`
+	CumulativeUsage *UsageInfo `json:"cumulativeUsage,omitempty"`
 }
 
 // RateLimitInfo carries rate limit details from the agent backend.
 type RateLimitInfo struct {
 	RequestsRemaining int `json:"requests_remaining"`
+}
+
+// UsageInfo carries token-usage counts reported by the model backend.
+// All four fields use the Anthropic API's keys directly so the JSON shape
+// matches what the API emits.
+type UsageInfo struct {
+	InputTokens         int `json:"input_tokens"`
+	OutputTokens        int `json:"output_tokens"`
+	CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"`
+}
+
+// Add sums other into u in place. Nil-safe on the receiver caller side
+// (caller must not call Add on a nil pointer).
+func (u *UsageInfo) Add(other *UsageInfo) {
+	if other == nil {
+		return
+	}
+	u.InputTokens += other.InputTokens
+	u.OutputTokens += other.OutputTokens
+	u.CacheReadTokens += other.CacheReadTokens
+	u.CacheCreationTokens += other.CacheCreationTokens
 }
 
 // MessageEnvelope is used for message_start / message_end payloads.
