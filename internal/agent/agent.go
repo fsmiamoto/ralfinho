@@ -1,6 +1,6 @@
 // Package agent defines the Agent interface for running coding agent iterations.
 //
-// Each Agent implementation wraps a specific backend (e.g. pi, kiro-cli).
+// Each Agent implementation wraps a specific backend (e.g. pi, claude).
 // The runner delegates prompt execution to the agent while retaining ownership
 // of signal handling, completion detection, and iteration control.
 package agent
@@ -50,7 +50,7 @@ type Option func(*Options)
 // Options holds optional settings shared across agent implementations.
 type Options struct {
 	// RawWriter, when non-nil, receives a copy of the raw agent output
-	// (e.g. JSONL lines from pi, JSON-RPC frames from kiro) for debugging.
+	// (e.g. JSONL lines from pi) for debugging.
 	RawWriter io.Writer
 
 	// LogWriter receives diagnostic/warning messages from the agent backend.
@@ -97,10 +97,41 @@ func applyOptions(opts []Option) Options {
 	return o
 }
 
+// limitedBuffer captures the last N bytes written to it.
+type limitedBuffer struct {
+	buf  []byte
+	size int
+	pos  int
+	full bool
+}
+
+func newLimitedBuffer(size int) *limitedBuffer {
+	return &limitedBuffer{buf: make([]byte, size), size: size}
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	for _, c := range p {
+		b.buf[b.pos] = c
+		b.pos = (b.pos + 1) % b.size
+		if b.pos == 0 {
+			b.full = true
+		}
+	}
+	return n, nil
+}
+
+func (b *limitedBuffer) String() string {
+	if !b.full {
+		return string(b.buf[:b.pos])
+	}
+	return string(b.buf[b.pos:]) + string(b.buf[:b.pos])
+}
+
 // IsValid reports whether name is a recognized agent name.
 func IsValid(name string) bool {
 	switch name {
-	case "pi", "kiro", "claude":
+	case "pi", "claude":
 		return true
 	default:
 		return false
@@ -111,7 +142,6 @@ func IsValid(name string) bool {
 //
 // Supported names:
 //   - "pi"    → PiAgent (invokes the pi CLI tool)
-//   - "kiro"  → KiroAgent (invokes kiro-cli via ACP protocol)
 //   - "claude" → ClaudeAgent (invokes Claude Code CLI in streaming mode)
 //
 // Unknown names produce a clear error listing the supported agents.
@@ -120,11 +150,9 @@ func Resolve(name string, opts ...Option) (Agent, error) {
 	switch name {
 	case "pi":
 		return NewPiAgent("pi", opts...), nil
-	case "kiro":
-		return NewKiroAgent(opts...), nil
 	case "claude":
 		return NewClaudeAgent(opts...), nil
 	default:
-		return nil, fmt.Errorf("unknown agent %q (supported: pi, kiro, claude)", name)
+		return nil, fmt.Errorf("unknown agent %q (supported: pi, claude)", name)
 	}
 }

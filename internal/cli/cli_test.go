@@ -381,12 +381,12 @@ func TestParseMaxIterationsLongAndShort(t *testing.T) {
 }
 
 func TestParseAgentShortFlag(t *testing.T) {
-	cfg, err := Parse([]string{"-a", "kiro"})
+	cfg, err := Parse([]string{"-a", "claude"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Agent != "kiro" {
-		t.Errorf("Agent = %q, want %q", cfg.Agent, "kiro")
+	if cfg.Agent != "claude" {
+		t.Errorf("Agent = %q, want %q", cfg.Agent, "claude")
 	}
 }
 
@@ -408,12 +408,12 @@ func TestParseAgentDefault(t *testing.T) {
 }
 
 func TestParseAgentShortOverridesLong(t *testing.T) {
-	cfg, err := Parse([]string{"--agent", "pi", "-a", "kiro"})
+	cfg, err := Parse([]string{"--agent", "pi", "-a", "claude"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Agent != "kiro" {
-		t.Errorf("Agent = %q, want %q (short flag should win)", cfg.Agent, "kiro")
+	if cfg.Agent != "claude" {
+		t.Errorf("Agent = %q, want %q (short flag should win)", cfg.Agent, "claude")
 	}
 }
 

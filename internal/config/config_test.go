@@ -280,8 +280,6 @@ func TestMerge_AgentConfigOverrideReplaces(t *testing.T) {
 		Agents: map[string]AgentConfig{
 			// claude entry is fully replaced, not appended to.
 			"claude": {ExtraArgs: []string{"--override-flag"}},
-			// kiro is new in the override.
-			"kiro": {ExtraArgs: []string{"--kiro-flag"}},
 		},
 	}
 
@@ -295,11 +293,6 @@ func TestMerge_AgentConfigOverrideReplaces(t *testing.T) {
 	piArgs := got.Agents["pi"].ExtraArgs
 	if len(piArgs) != 1 || piArgs[0] != "--pi-flag" {
 		t.Errorf("pi extra-args: expected [--pi-flag] (from base), got %v", piArgs)
-	}
-
-	kiroArgs := got.Agents["kiro"].ExtraArgs
-	if len(kiroArgs) != 1 || kiroArgs[0] != "--kiro-flag" {
-		t.Errorf("kiro extra-args: expected [--kiro-flag] (from override), got %v", kiroArgs)
 	}
 }
 
@@ -856,7 +849,7 @@ func TestLoad_SkipsGlobalWhenUserConfigDirIsUnavailable(t *testing.T) {
 	if err := os.MkdirAll(localCfgDir, 0755); err != nil {
 		t.Fatalf("mkdir local config dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(localCfgDir, "config.toml"), []byte("agent = \"kiro\"\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(localCfgDir, "config.toml"), []byte("agent = \"claude\"\n"), 0600); err != nil {
 		t.Fatalf("writing local config: %v", err)
 	}
 
@@ -875,8 +868,8 @@ func TestLoad_SkipsGlobalWhenUserConfigDirIsUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if cfg.Agent != "kiro" {
-		t.Fatalf("Agent: got %q, want %q", cfg.Agent, "kiro")
+	if cfg.Agent != "claude" {
+		t.Fatalf("Agent: got %q, want %q", cfg.Agent, "claude")
 	}
 }
 

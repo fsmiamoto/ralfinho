@@ -15,8 +15,8 @@ import (
 func TestNewBrowserModelSortsAndBuildsFilterOptions(t *testing.T) {
 	summaries := []viewer.RunSummary{
 		browserTestSummary("run-beta", time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC), "pi", "completed", "plan"),
-		browserTestSummary("run-gamma", time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "kiro", "failed", "default"),
-		browserTestSummary("run-alpha", time.Date(2026, 3, 8, 11, 30, 0, 0, time.UTC), "kiro", "interrupted", "prompt"),
+		browserTestSummary("run-gamma", time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "claude", "failed", "default"),
+		browserTestSummary("run-alpha", time.Date(2026, 3, 8, 11, 30, 0, 0, time.UTC), "claude", "interrupted", "prompt"),
 	}
 
 	m := NewBrowserModel(summaries)
@@ -24,7 +24,7 @@ func TestNewBrowserModelSortsAndBuildsFilterOptions(t *testing.T) {
 	if got, want := browserRunIDs(m.summaries), []string{"run-alpha", "run-beta", "run-gamma"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("visible run IDs = %v, want %v", got, want)
 	}
-	if got, want := m.agentOptions, []string{"kiro", "pi"}; !reflect.DeepEqual(got, want) {
+	if got, want := m.agentOptions, []string{"claude", "pi"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("agentOptions = %v, want %v", got, want)
 	}
 	if got, want := m.statusOptions, []string{"completed", "failed", "interrupted"}; !reflect.DeepEqual(got, want) {
@@ -44,12 +44,12 @@ func TestNewBrowserModelSortsAndBuildsFilterOptions(t *testing.T) {
 func TestBrowserModelAppliesSearchAndFieldFilters(t *testing.T) {
 	summaries := []viewer.RunSummary{
 		browserTestSummary("run-beta", time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC), "pi", "completed", "plan"),
-		browserTestSummary("run-gamma", time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "kiro", "failed", "default"),
-		browserTestSummary("run-alpha", time.Date(2026, 3, 8, 11, 30, 0, 0, time.UTC), "kiro", "interrupted", "prompt"),
+		browserTestSummary("run-gamma", time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "claude", "failed", "default"),
+		browserTestSummary("run-alpha", time.Date(2026, 3, 8, 11, 30, 0, 0, time.UTC), "claude", "interrupted", "prompt"),
 	}
 
 	m := NewBrowserModel(summaries)
-	m.searchQuery = "kiro"
+	m.searchQuery = "claude"
 	m.applyBrowserView()
 	if got, want := browserRunIDs(m.summaries), []string{"run-alpha", "run-gamma"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("search results = %v, want %v", got, want)
@@ -63,7 +63,7 @@ func TestBrowserModelAppliesSearchAndFieldFilters(t *testing.T) {
 
 	m.searchQuery = ""
 	m.promptFilter = ""
-	m.agentFilter = "kiro"
+	m.agentFilter = "claude"
 	m.statusFilter = "failed"
 	m.dateFilter = "2026-03-06"
 	m.applyBrowserView()
@@ -75,8 +75,8 @@ func TestBrowserModelAppliesSearchAndFieldFilters(t *testing.T) {
 func TestBrowserModelSearchEditingAndSortCyclePreserveSelection(t *testing.T) {
 	summaries := []viewer.RunSummary{
 		browserTestSummary("run-beta", time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC), "pi", "completed", "plan"),
-		browserTestSummary("run-gamma", time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "kiro", "failed", "default"),
-		browserTestSummary("run-alpha", time.Date(2026, 3, 8, 11, 30, 0, 0, time.UTC), "kiro", "interrupted", "prompt"),
+		browserTestSummary("run-gamma", time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "claude", "failed", "default"),
+		browserTestSummary("run-alpha", time.Date(2026, 3, 8, 11, 30, 0, 0, time.UTC), "claude", "interrupted", "prompt"),
 	}
 
 	m := NewBrowserModel(summaries)
@@ -89,19 +89,19 @@ func TestBrowserModelSearchEditingAndSortCyclePreserveSelection(t *testing.T) {
 	if !m.searching {
 		t.Fatal("searching = false, want true after /")
 	}
-	for _, r := range "kiro" {
+	for _, r := range "claude" {
 		m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{r}}))
 	}
-	if m.searchQuery != "kiro" {
-		t.Fatalf("searchQuery = %q, want %q", m.searchQuery, "kiro")
+	if m.searchQuery != "claude" {
+		t.Fatalf("searchQuery = %q, want %q", m.searchQuery, "claude")
 	}
 	if got, want := browserRunIDs(m.summaries), []string{"run-alpha", "run-gamma"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("search-edit results = %v, want %v", got, want)
 	}
 
 	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyBackspace}))
-	if m.searchQuery != "kir" {
-		t.Fatalf("searchQuery after backspace = %q, want %q", m.searchQuery, "kir")
+	if m.searchQuery != "claud" {
+		t.Fatalf("searchQuery after backspace = %q, want %q", m.searchQuery, "claud")
 	}
 	m = updateBrowserModel(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyEsc}))
 	if m.searching {
@@ -147,7 +147,7 @@ func TestBrowserVisibleIssueCount(t *testing.T) {
 		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
 		{RunID: "r2", ArtifactError: "meta.json missing", SearchText: "r2"},
 		{RunID: "r3", EventsError: "events.jsonl missing", SearchText: "r3"},
-		browserTestSummary("r4", time.Now().Add(-time.Hour), "kiro", "completed", "plan"),
+		browserTestSummary("r4", time.Now().Add(-time.Hour), "claude", "completed", "plan"),
 	}
 	m := NewBrowserModel(summaries)
 	if got, want := m.browserVisibleIssueCount(), 2; got != want {
@@ -557,7 +557,7 @@ func TestBrowserOpenActionOnEmptyList(t *testing.T) {
 func TestBrowserWithSelectedRunID(t *testing.T) {
 	summaries := []viewer.RunSummary{
 		browserTestSummaryWithActions("run-alpha", time.Date(2026, 3, 8, 11, 0, 0, 0, time.UTC), "pi", "completed", "default", true),
-		browserTestSummaryWithActions("run-beta", time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC), "kiro", "completed", "plan", true),
+		browserTestSummaryWithActions("run-beta", time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC), "claude", "completed", "plan", true),
 		browserTestSummaryWithActions("run-gamma", time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "pi", "failed", "prompt", true),
 	}
 
@@ -667,9 +667,9 @@ func TestBrowserResumeResultIncludesMetadata(t *testing.T) {
 		agent  string
 	}{
 		{"effective prompt", viewer.ResumeSourceEffectivePrompt, "/tmp/run1/effective-prompt.md", "pi"},
-		{"prompt file", viewer.ResumeSourcePromptFile, "/home/user/prompt.md", "kiro"},
+		{"prompt file", viewer.ResumeSourcePromptFile, "/home/user/prompt.md", "claude"},
 		{"plan file", viewer.ResumeSourcePlanFile, "/home/user/plan.md", "pi"},
-		{"default", viewer.ResumeSourceDefault, "", "kiro"},
+		{"default", viewer.ResumeSourceDefault, "", "claude"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -988,7 +988,7 @@ func TestBrowserDeleteBlockedOnEmptyList(t *testing.T) {
 func TestBrowserDeleteNextRunIDMiddle(t *testing.T) {
 	summaries := []viewer.RunSummary{
 		browserTestSummaryWithActions("run-alpha", time.Date(2026, 3, 8, 11, 0, 0, 0, time.UTC), "pi", "completed", "default", true),
-		browserTestSummaryWithActions("run-beta", time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC), "kiro", "completed", "plan", true),
+		browserTestSummaryWithActions("run-beta", time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC), "claude", "completed", "plan", true),
 		browserTestSummaryWithActions("run-gamma", time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC), "pi", "failed", "prompt", true),
 	}
 	m := NewBrowserModel(summaries)
@@ -1014,7 +1014,7 @@ func TestBrowserDeleteNextRunIDMiddle(t *testing.T) {
 func TestBrowserDeleteNextRunIDEnd(t *testing.T) {
 	summaries := []viewer.RunSummary{
 		browserTestSummaryWithActions("run-alpha", time.Date(2026, 3, 8, 11, 0, 0, 0, time.UTC), "pi", "completed", "default", true),
-		browserTestSummaryWithActions("run-beta", time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC), "kiro", "completed", "plan", true),
+		browserTestSummaryWithActions("run-beta", time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC), "claude", "completed", "plan", true),
 	}
 	m := NewBrowserModel(summaries)
 	m.width = 100
@@ -1493,7 +1493,7 @@ func TestBrowserSortOrderByRunID(t *testing.T) {
 func TestBrowserSortOrderByAgent(t *testing.T) {
 	summaries := []viewer.RunSummary{
 		browserTestSummary("r1", time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC), "pi", "completed", "default"),
-		browserTestSummary("r2", time.Date(2026, 3, 7, 0, 0, 0, 0, time.UTC), "kiro", "completed", "default"),
+		browserTestSummary("r2", time.Date(2026, 3, 7, 0, 0, 0, 0, time.UTC), "claude", "completed", "default"),
 		browserTestSummary("r3", time.Date(2026, 3, 6, 0, 0, 0, 0, time.UTC), "aider", "completed", "default"),
 	}
 	m := NewBrowserModel(summaries)
@@ -1501,7 +1501,7 @@ func TestBrowserSortOrderByAgent(t *testing.T) {
 	m.applyBrowserView()
 
 	got := browserRunIDs(m.summaries)
-	want := []string{"r3", "r2", "r1"} // aider < kiro < pi
+	want := []string{"r3", "r2", "r1"} // aider < claude < pi
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("agent order = %v, want %v", got, want)
 	}
@@ -1546,7 +1546,7 @@ func TestBrowserSortOrderByPrompt(t *testing.T) {
 func TestBrowserFilterCycleAgentKey(t *testing.T) {
 	summaries := []viewer.RunSummary{
 		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
-		browserTestSummary("r2", time.Now().Add(-time.Hour), "kiro", "completed", "default"),
+		browserTestSummary("r2", time.Now().Add(-time.Hour), "claude", "completed", "default"),
 		browserTestSummary("r3", time.Now().Add(-2*time.Hour), "pi", "failed", "plan"),
 	}
 	m := initBrowserModel(summaries, 100, 40)
@@ -1719,7 +1719,7 @@ func TestBrowserSearchSpaceInQuery(t *testing.T) {
 func TestBrowserClearAllFiltersKey(t *testing.T) {
 	summaries := []viewer.RunSummary{
 		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
-		browserTestSummary("r2", time.Now().Add(-time.Hour), "kiro", "failed", "plan"),
+		browserTestSummary("r2", time.Now().Add(-time.Hour), "claude", "failed", "plan"),
 	}
 	m := initBrowserModel(summaries, 100, 40)
 
@@ -1756,7 +1756,7 @@ func TestBrowserClearAllFiltersKey(t *testing.T) {
 func TestBrowserHeaderShowsStateTokens(t *testing.T) {
 	summaries := []viewer.RunSummary{
 		browserTestSummary("r1", time.Now(), "pi", "completed", "default"),
-		browserTestSummary("r2", time.Now().Add(-time.Hour), "kiro", "failed", "plan"),
+		browserTestSummary("r2", time.Now().Add(-time.Hour), "claude", "failed", "plan"),
 	}
 	m := initBrowserModel(summaries, 200, 40) // wide enough for all tokens
 
@@ -1878,7 +1878,7 @@ func TestBrowserQuitOnCtrlC(t *testing.T) {
 func TestBrowserOpenResultPreservesRunID(t *testing.T) {
 	summaries := []viewer.RunSummary{
 		browserTestSummaryWithActions("run-one", time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC), "pi", "completed", "default", true),
-		browserTestSummaryWithActions("run-two", time.Date(2026, 3, 7, 0, 0, 0, 0, time.UTC), "kiro", "completed", "plan", true),
+		browserTestSummaryWithActions("run-two", time.Date(2026, 3, 7, 0, 0, 0, 0, time.UTC), "claude", "completed", "plan", true),
 	}
 	m := initBrowserModel(summaries, 100, 40)
 
@@ -1928,7 +1928,7 @@ func TestBrowserDeleteResultIncludesAllFields(t *testing.T) {
 
 func TestBrowserResumeResultIncludesAllFields(t *testing.T) {
 	summaries := []viewer.RunSummary{
-		browserTestSummaryResumable("res-run", time.Now(), "kiro", "interrupted", "plan",
+		browserTestSummaryResumable("res-run", time.Now(), "claude", "interrupted", "plan",
 			viewer.ResumeSourcePlanFile, "/path/to/plan.md"),
 	}
 	m := initBrowserModel(summaries, 100, 40)
@@ -1945,8 +1945,8 @@ func TestBrowserResumeResultIncludesAllFields(t *testing.T) {
 	if result.RunID != "res-run" {
 		t.Fatalf("RunID = %q, want %q", result.RunID, "res-run")
 	}
-	if result.ResumeAgent != "kiro" {
-		t.Fatalf("ResumeAgent = %q, want %q", result.ResumeAgent, "kiro")
+	if result.ResumeAgent != "claude" {
+		t.Fatalf("ResumeAgent = %q, want %q", result.ResumeAgent, "claude")
 	}
 	if result.ResumeSource != viewer.ResumeSourcePlanFile {
 		t.Fatalf("ResumeSource = %q, want %q", result.ResumeSource, viewer.ResumeSourcePlanFile)
@@ -2162,7 +2162,7 @@ func TestBrowserFacetSortKey(t *testing.T) {
 		{"unknown", 1, "unknown"},
 		{"", 1, ""},
 		{"  ", 1, ""},
-		{"Kiro", 0, "kiro"},
+		{"Claude", 0, "claude"},
 	}
 	for _, tt := range tests {
 		rank, key := browserFacetSortKey(tt.input)
@@ -2541,7 +2541,7 @@ func TestBrowserSummaryLess(t *testing.T) {
 	t0 := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
 	t1 := time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC)
 
-	newer := browserTestSummary("run-b", t0, "kiro", "completed", "default")
+	newer := browserTestSummary("run-b", t0, "claude", "completed", "default")
 	older := browserTestSummary("run-a", t1, "pi", "failed", "plan")
 
 	tests := []struct {
@@ -2597,16 +2597,16 @@ func TestBrowserSummaryLess(t *testing.T) {
 		},
 		// browserSortAgent
 		{
-			name: "agent: kiro before pi alphabetically",
-			a:    newer, // kiro
+			name: "agent: claude before pi alphabetically",
+			a:    newer, // claude
 			b:    older, // pi
 			mode: browserSortAgent,
 			want: true,
 		},
 		{
-			name: "agent: pi not before kiro",
+			name: "agent: pi not before claude",
 			a:    older, // pi
-			b:    newer, // kiro
+			b:    newer, // claude
 			mode: browserSortAgent,
 			want: false,
 		},

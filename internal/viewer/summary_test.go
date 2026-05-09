@@ -31,7 +31,7 @@ func TestListRunSummariesOrdersNewestFirstAndCachesSearchFields(t *testing.T) {
 		RunID:               "newer-run",
 		StartedAt:           "2026-03-08T11:30:00Z",
 		Status:              string(runner.StatusInterrupted),
-		Agent:               "kiro",
+		Agent:               "claude",
 		PromptSource:        "prompt",
 		PromptFile:          "tasks/browser-prompt.md",
 		IterationsCompleted: 4,
@@ -80,7 +80,7 @@ func TestListRunSummariesOrdersNewestFirstAndCachesSearchFields(t *testing.T) {
 		t.Fatalf("Delete action = %#v, want available", newer.Actions.Delete)
 	}
 
-	for _, want := range []string{"newer-run", "kiro", "interrupted", "prompt", "browser-prompt.md", "2026-03-08 11:30"} {
+	for _, want := range []string{"newer-run", "claude", "interrupted", "prompt", "browser-prompt.md", "2026-03-08 11:30"} {
 		if !strings.Contains(newer.SearchText, strings.ToLower(want)) {
 			t.Fatalf("SearchText = %q, want substring %q", newer.SearchText, strings.ToLower(want))
 		}
@@ -210,7 +210,7 @@ func TestListRunSummariesDefinesActionEligibilityFromArtifacts(t *testing.T) {
 		RunID:        "meta-fallback",
 		StartedAt:    "2026-03-08T07:00:00Z",
 		Status:       string(runner.StatusInterrupted),
-		Agent:        "kiro",
+		Agent:        "claude",
 		PromptSource: "plan",
 		PlanFile:     "plans/resume.md",
 	})

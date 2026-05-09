@@ -94,7 +94,7 @@ func TestListRunsPrintsReadableOutput(t *testing.T) {
 			RunID:               "22222222-new",
 			StartedAt:           "2026-03-08T11:30:00Z",
 			Status:              string(runner.StatusInterrupted),
-			Agent:               "kiro",
+			Agent:               "claude",
 			PromptSource:        "prompt",
 			PromptFile:          "tasks/browser-prompt.md",
 			IterationsCompleted: 4,
@@ -116,7 +116,7 @@ func TestListRunsPrintsReadableOutput(t *testing.T) {
 			t.Fatalf("header = %q, want %q", lines[0], "Available runs:")
 		}
 
-		for _, want := range []string{"22222222", "2026-03-08 11:30", "kiro", "interrupted", "4 iterations", "3m12s", "browser-prompt.md"} {
+		for _, want := range []string{"22222222", "2026-03-08 11:30", "claude", "interrupted", "4 iterations", "3m12s", "browser-prompt.md"} {
 			if !strings.Contains(lines[1], want) {
 				t.Fatalf("newest run line = %q, missing %q", lines[1], want)
 			}

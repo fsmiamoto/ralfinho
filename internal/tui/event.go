@@ -299,7 +299,7 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 
 	case runner.EventToolExecutionUpdate:
 		// Intermediate tool update — carries the actual arguments for a tool
-		// that was previously started with minimal info (common with kiro-cli).
+		// that was previously started with minimal info.
 		startTime := time.Time{}
 		if c.toolStartTimes != nil {
 			startTime = c.toolStartTimes[ev.ToolCallID]

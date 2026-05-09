@@ -357,7 +357,7 @@ func TestBrowserSearchKeyCtrlCAndUnhandledKey(t *testing.T) {
 	t.Run("unhandled keys are ignored while searching", func(t *testing.T) {
 		m := initBrowserModel(makeSummaries(1), 100, 30)
 		m.searching = true
-		m.searchQuery = "kiro"
+		m.searchQuery = "claude"
 		before := m
 
 		next, cmd := updateBrowserModelWithCmd(t, m, tea.KeyMsg(tea.Key{Type: tea.KeyLeft}))

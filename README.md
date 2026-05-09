@@ -54,7 +54,7 @@ on useful improvements, a nice way to try out ralfinho for the first time.
 ```
 --prompt <file>           Explicit prompt file
 --plan <file>             Plan file (generates prompt from template)
--a, --agent <name>        Agent backend: "pi", "kiro", or "claude" (default: pi)
+-a, --agent <name>        Agent backend: "pi" or "claude" (default: pi)
 -m, --max-iterations <n>  Max iterations, 0=unlimited (default: 0)
 --inactivity-timeout <d>  Stuck-detection watchdog duration; 0 disables (default: 5m)
 --no-tui                  Disable TUI, plain stderr output
@@ -86,5 +86,4 @@ by default. Runs with missing or corrupt artifacts are included but marked with 
 ## Agent Backends
 
 Ralfinho supports multiple AI agent backends via the `--agent` flag:
-[pi](https://pi.dev) (default), [kiro](https://kiro.dev), and
-[claude-code](https://code.claude.com).
+[pi](https://pi.dev) (default) and [claude-code](https://code.claude.com).

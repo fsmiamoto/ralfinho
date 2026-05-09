@@ -392,7 +392,7 @@ func formatToolArgs(toolName string, rawArgs json.RawMessage) string {
 
 	// Content-based fallback: detect tool type from JSON structure without
 	// relying on the tool name. This handles cases where the tool name is an
-	// unrecognized variant (e.g. a kiro-specific label).
+	// unrecognized variant.
 	var generic map[string]json.RawMessage
 	if json.Unmarshal(rawArgs, &generic) == nil {
 		// A "command" key strongly suggests a shell/exec tool.

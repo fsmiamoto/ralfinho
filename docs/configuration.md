@@ -46,7 +46,7 @@ extra-args = ["--timeout", "30"]
 
 Supported top-level keys:
 
-- `agent` — default agent name (`pi`, `kiro`, or `claude`)
+- `agent` — default agent name (`pi` or `claude`)
 - `max-iterations` — default iteration limit (`0` means unlimited)
 - `inactivity-timeout` — duration with no agent activity before the stuck-detection
   watchdog fires (e.g. `"10m"`, `"1h"`). `"0"` disables the watchdog entirely —

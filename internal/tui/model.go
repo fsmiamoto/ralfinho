@@ -445,7 +445,7 @@ func (m *Model) buildBlock(de DisplayEvent) {
 		m.activeToolIdx = len(m.blocks) - 1
 		m.invalidateMainLayoutFrom(len(m.blocks) - 1)
 	case DisplayToolUpdate:
-		// Intermediate update — kiro sends the actual args in a follow-up.
+		// Intermediate update — some agents send the actual args in a follow-up.
 		// Find the matching tool block and update its args.
 		for i := len(m.blocks) - 1; i >= 0; i-- {
 			if m.blocks[i].Kind == BlockToolCall && m.blocks[i].ToolCallID == de.ToolCallID {

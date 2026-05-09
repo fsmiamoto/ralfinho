@@ -109,7 +109,7 @@ func main() {
 
 	// Validate agent name early (before creating run dirs / prompt resolution).
 	if !agent.IsValid(cfg.Agent) {
-		fmt.Fprintf(os.Stderr, "ralfinho: unknown agent %q (supported: pi, kiro, claude)\n", cfg.Agent)
+		fmt.Fprintf(os.Stderr, "ralfinho: unknown agent %q (supported: pi, claude)\n", cfg.Agent)
 		os.Exit(1)
 	}
 

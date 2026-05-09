@@ -118,13 +118,13 @@ func TestFormatRunSummary(t *testing.T) {
 			name: "truncates long run ID to 8 chars",
 			summary: viewer.RunSummary{
 				RunID:               "abcdef12-long-id",
-				Agent:               "kiro",
+				Agent:               "claude",
 				Status:              "failed",
 				IterationsCompleted: 1,
 				PromptLabel:         "default",
 				StartedAt:           time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 			},
-			checks: []string{"abcdef12", "kiro", "failed"},
+			checks: []string{"abcdef12", "claude", "failed"},
 		},
 		{
 			name: "short run ID not truncated",
@@ -520,7 +520,7 @@ func TestParseFlagSetRecognizesSupportedForms(t *testing.T) {
 	set := parseFlagSet([]string{
 		"--agent=claude",
 		"-a",
-		"kiro",
+		"claude",
 		"--max-iterations",
 		"5",
 		"-m=7",
@@ -555,21 +555,21 @@ func TestApplyFileConfigOnlyFillsUnsetFlags(t *testing.T) {
 	noTUI := true
 
 	cfg := &cli.Config{
-		Agent:         "kiro",
+		Agent:         "claude",
 		MaxIterations: 0,
 		NoTUI:         false,
 		RunsDir:       "cli/runs",
 	}
 
 	applyFileConfig(cfg, &config.FileConfig{
-		Agent:         "claude",
+		Agent:         "pi",
 		MaxIterations: &maxIterations,
 		RunsDir:       "file/runs",
 		NoTUI:         &noTUI,
-	}, []string{"-a", "kiro", "--runs-dir", "cli/runs", "prompt.md"})
+	}, []string{"-a", "claude", "--runs-dir", "cli/runs", "prompt.md"})
 
-	if cfg.Agent != "kiro" {
-		t.Fatalf("Agent = %q, want CLI value %q", cfg.Agent, "kiro")
+	if cfg.Agent != "claude" {
+		t.Fatalf("Agent = %q, want CLI value %q", cfg.Agent, "claude")
 	}
 	if cfg.RunsDir != "cli/runs" {
 		t.Fatalf("RunsDir = %q, want CLI value %q", cfg.RunsDir, "cli/runs")
@@ -684,8 +684,8 @@ func TestExtraArgsForAgentUsesLoadedFileConfig(t *testing.T) {
 	if got := extraArgsForAgent("claude"); !reflect.DeepEqual(got, []string{"--model", "claude-opus-4-5"}) {
 		t.Fatalf("extraArgsForAgent(claude) = %#v, want %#v", got, []string{"--model", "claude-opus-4-5"})
 	}
-	if got := extraArgsForAgent("kiro"); got != nil {
-		t.Fatalf("extraArgsForAgent(kiro) = %#v, want nil", got)
+	if got := extraArgsForAgent("unknown"); got != nil {
+		t.Fatalf("extraArgsForAgent(unknown) = %#v, want nil", got)
 	}
 }
 

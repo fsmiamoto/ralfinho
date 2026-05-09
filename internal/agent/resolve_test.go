@@ -16,16 +16,6 @@ func TestResolve_Pi(t *testing.T) {
 	}
 }
 
-func TestResolve_Kiro(t *testing.T) {
-	a, err := Resolve("kiro")
-	if err != nil {
-		t.Fatalf("Resolve('kiro') error: %v", err)
-	}
-	if _, ok := a.(*KiroAgent); !ok {
-		t.Errorf("expected *KiroAgent, got %T", a)
-	}
-}
-
 func TestResolve_Claude(t *testing.T) {
 	a, err := Resolve("claude")
 	if err != nil {
@@ -44,7 +34,7 @@ func TestResolve_Unknown(t *testing.T) {
 	if !strings.Contains(err.Error(), "unknown agent") {
 		t.Errorf("error should mention 'unknown agent', got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "pi, kiro, claude") {
+	if !strings.Contains(err.Error(), "pi, claude") {
 		t.Errorf("error should list supported agents, got: %v", err)
 	}
 }
@@ -61,18 +51,6 @@ func TestResolve_ForwardsOptions(t *testing.T) {
 	}
 }
 
-func TestResolve_ForwardsOptionsToKiro(t *testing.T) {
-	var buf bytes.Buffer
-	a, err := Resolve("kiro", WithRawWriter(&buf))
-	if err != nil {
-		t.Fatalf("Resolve error: %v", err)
-	}
-	ka := a.(*KiroAgent)
-	if ka.opts.RawWriter != &buf {
-		t.Error("RawWriter option was not forwarded to KiroAgent")
-	}
-}
-
 func TestResolve_ForwardsOptionsToClaude(t *testing.T) {
 	var buf bytes.Buffer
 	a, err := Resolve("claude", WithRawWriter(&buf))
@@ -86,14 +64,14 @@ func TestResolve_ForwardsOptionsToClaude(t *testing.T) {
 }
 
 func TestIsValid(t *testing.T) {
-	valid := []string{"pi", "kiro", "claude"}
+	valid := []string{"pi", "claude"}
 	for _, name := range valid {
 		if !IsValid(name) {
 			t.Errorf("IsValid(%q) = false, want true", name)
 		}
 	}
 
-	invalid := []string{"", "unknown", "Pi", "KIRO", "Claude", "openai", "gemini"}
+	invalid := []string{"", "unknown", "Pi", "Claude", "openai", "gemini"}
 	for _, name := range invalid {
 		if IsValid(name) {
 			t.Errorf("IsValid(%q) = true, want false", name)
@@ -104,7 +82,7 @@ func TestIsValid(t *testing.T) {
 func TestIsValid_ConsistentWithResolve(t *testing.T) {
 	// IsValid and Resolve must agree: every name that IsValid accepts
 	// should Resolve without error, and vice versa.
-	names := []string{"pi", "kiro", "claude", "unknown", ""}
+	names := []string{"pi", "claude", "unknown", ""}
 	for _, name := range names {
 		valid := IsValid(name)
 		_, err := Resolve(name)
