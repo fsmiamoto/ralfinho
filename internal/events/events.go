@@ -42,6 +42,10 @@ const (
 
 	// EventRateLimit is emitted when the agent backend reports rate limiting.
 	EventRateLimit EventType = "rate_limit"
+
+	// EventDuetPhase is emitted by DuetRunner before each builder/verifier leg.
+	// It carries the current phase name, cycle number, and max cycles.
+	EventDuetPhase EventType = "duet_phase"
 )
 
 // ReminderKind distinguishes one-off vs persistent reminders.
@@ -96,6 +100,11 @@ type Event struct {
 
 	// rate_limit
 	RateLimit *RateLimitInfo `json:"rateLimit,omitempty"`
+
+	// duet_phase
+	DuetPhase     string `json:"duetPhase,omitempty"`
+	DuetCycle     int    `json:"duetCycle,omitempty"`
+	DuetMaxCycles int    `json:"duetMaxCycles,omitempty"`
 }
 
 // RateLimitInfo carries rate limit details from the agent backend.

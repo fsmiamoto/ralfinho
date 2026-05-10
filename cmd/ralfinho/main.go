@@ -107,6 +107,12 @@ func main() {
 		return
 	}
 
+	// Handle "duet" subcommand.
+	if cfg.Duet != nil {
+		runDuet(cfg)
+		return
+	}
+
 	// Validate agent name early (before creating run dirs / prompt resolution).
 	if !agent.IsValid(cfg.Agent) {
 		fmt.Fprintf(os.Stderr, "ralfinho: unknown agent %q (supported: pi, claude)\n", cfg.Agent)
@@ -180,6 +186,141 @@ func runTUI(cfg *cli.Config, promptText, runID string) {
 
 	printRunSummary("run summary", result)
 	exitForStatus(result.Status)
+}
+
+// runDuet runs the builder-verifier duet loop, with or without TUI.
+func runDuet(cfg *cli.Config) {
+	d := cfg.Duet
+
+	builderPromptText, err := prompt.BuildFromPromptFile(d.BuilderPromptFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ralfinho duet: builder prompt: %v\n", err)
+		os.Exit(1)
+	}
+
+	verifierPromptText, err := prompt.BuildFromPromptFile(d.VerifierPromptFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ralfinho duet: verifier prompt: %v\n", err)
+		os.Exit(1)
+	}
+
+	builderAgent := d.BuilderAgent
+	verifierAgent := d.VerifierAgent
+	if verifierAgent == "" {
+		verifierAgent = builderAgent
+	}
+
+	for _, a := range []string{builderAgent, verifierAgent} {
+		if !agent.IsValid(a) {
+			fmt.Fprintf(os.Stderr, "ralfinho duet: unknown agent %q (supported: pi, claude)\n", a)
+			os.Exit(1)
+		}
+	}
+
+	noTUI := d.NoTUI
+	if !noTUI && !isTerminal() {
+		noTUI = true
+	}
+
+	duetID := runner.NewRunID()
+
+	var eventCh chan runner.Event
+	if !noTUI {
+		eventCh = make(chan runner.Event, 256)
+	}
+
+	builderCfg := runner.RunConfig{
+		Agent:          builderAgent,
+		Prompt:         builderPromptText,
+		MaxIterations:  d.MaxIterations,
+		RunsDir:        "",  // set per-cycle by DuetRunner
+		PromptSource:   "prompt",
+		PromptFile:     d.BuilderPromptFile,
+		AgentExtraArgs: extraArgsForAgent(builderAgent),
+		EventChan:      eventCh,
+	}
+	verifierCfg := runner.RunConfig{
+		Agent:          verifierAgent,
+		Prompt:         verifierPromptText,
+		MaxIterations:  d.MaxIterations,
+		RunsDir:        "",  // set per-cycle by DuetRunner
+		PromptSource:   "prompt",
+		PromptFile:     d.VerifierPromptFile,
+		AgentExtraArgs: extraArgsForAgent(verifierAgent),
+		EventChan:      eventCh,
+	}
+
+	duetCfg := runner.DuetConfig{
+		Builder:   builderCfg,
+		Verifier:  verifierCfg,
+		MaxCycles: d.MaxCycles,
+		RunsDir:   d.RunsDir,
+		DuetID:    duetID,
+	}
+
+	if noTUI {
+		dr := runner.NewDuetRunner(duetCfg)
+		result := dr.Run(context.Background())
+		printDuetSummary(result)
+		exitForDuetStatus(result.Status)
+		return
+	}
+
+	// TUI mode: run DuetRunner in background, feed events to TUI.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var duetResult runner.DuetResult
+	runDone := make(chan struct{})
+	go func() {
+		dr := runner.NewDuetRunner(duetCfg)
+		duetResult = dr.Run(ctx)
+		close(runDone)
+		close(eventCh)
+	}()
+
+	// Use builder agent name for TUI header (duet phase events update it live).
+	notesPath := filepath.Join(d.RunsDir, duetID, "NOTES.md")
+	progressPath := filepath.Join(d.RunsDir, duetID, "PROGRESS.md")
+	model := tui.NewModel(eventCh, builderAgent, builderPromptText, notesPath, progressPath, inactivityTimeout, nil)
+	p := newTeaProgram(model, tea.WithAltScreen())
+
+	go func() {
+		<-runDone
+		p.Send(tui.DoneMsg{Result: runner.RunResult{
+			RunID:  duetID,
+			Agent:  builderAgent,
+			Status: runner.Status(duetResult.Status),
+		}})
+	}()
+
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "ralfinho: %v\n", err)
+		os.Exit(1)
+	}
+
+	<-runDone
+	printDuetSummary(duetResult)
+	exitForDuetStatus(duetResult.Status)
+}
+
+func printDuetSummary(result runner.DuetResult) {
+	fmt.Fprintf(os.Stderr, "\n=== duet summary ===\n")
+	fmt.Fprintf(os.Stderr, "duet-id: %s\n", result.DuetID)
+	fmt.Fprintf(os.Stderr, "cycles:  %d\n", result.Cycles)
+	fmt.Fprintf(os.Stderr, "status:  %s\n", result.Status)
+	if result.LastFeedback != "" {
+		fmt.Fprintf(os.Stderr, "last feedback: %s\n", result.LastFeedback)
+	}
+}
+
+func exitForDuetStatus(status runner.DuetStatus) {
+	switch status {
+	case runner.DuetStatusBuilderFailed, runner.DuetStatusVerifierFailed, runner.DuetStatusMaxCycles:
+		os.Exit(1)
+	case runner.DuetStatusInterrupted:
+		os.Exit(2)
+	}
 }
 
 // runAgentWithTUI runs the agent in a background goroutine with a Bubble Tea

@@ -25,9 +25,22 @@ type Config struct {
 	RunsDir           string         // directory for run storage
 
 	// Subcommand
-	ViewRunID   string // non-empty means "view <run-id>" replay mode
-	ViewList    bool   // true means "view" without a run-id
-	ShowVersion bool   // true means --version was requested
+	ViewRunID   string      // non-empty means "view <run-id>" replay mode
+	ViewList    bool        // true means "view" without a run-id
+	ShowVersion bool        // true means --version was requested
+	Duet        *DuetConfig // non-nil means "duet" subcommand
+}
+
+// DuetConfig holds the parsed parameters for the "duet" subcommand.
+type DuetConfig struct {
+	BuilderPromptFile string
+	VerifierPromptFile string
+	BuilderAgent       string
+	VerifierAgent      string // empty = use BuilderAgent
+	MaxCycles          int    // 0 = unlimited
+	MaxIterations      int    // per-leg iteration cap
+	NoTUI              bool
+	RunsDir            string
 }
 
 // ViewMode is the resolved execution mode for the "view" subcommand.
@@ -42,6 +55,7 @@ const (
 
 const usage = `Usage: ralfinho [flags] [PROMPT_FILE]
        ralfinho view [--runs-dir <path>] [--no-tui] [<run-id>]
+       ralfinho duet --builder-prompt <file> --verifier-prompt <file> [flags]
 
 An autonomous coding agent runner.
 
@@ -102,6 +116,9 @@ func (c Config) ResolveViewMode(interactive bool) ViewMode {
 func Parse(args []string) (*Config, error) {
 	if len(args) > 0 && args[0] == "view" {
 		return parseView(args[1:])
+	}
+	if len(args) > 0 && args[0] == "duet" {
+		return parseDuet(args[1:])
 	}
 
 	fs := flag.NewFlagSet("ralfinho", flag.ContinueOnError)
@@ -235,6 +252,91 @@ func Parse(args []string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func parseDuet(args []string) (*Config, error) {
+	fs := flag.NewFlagSet("duet", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var (
+		builderPrompt  string
+		verifierPrompt string
+		agentFlag      string
+		agentShort     string
+		verifierAgent  string
+		maxCycles      string
+		maxIter        string
+		maxShort       string
+		noTUI          bool
+		runsDir        string
+	)
+
+	fs.StringVar(&builderPrompt, "builder-prompt", "", "")
+	fs.StringVar(&verifierPrompt, "verifier-prompt", "", "")
+	fs.StringVar(&agentFlag, "agent", "", "")
+	fs.StringVar(&agentShort, "a", "", "")
+	fs.StringVar(&verifierAgent, "verifier-agent", "", "")
+	fs.StringVar(&maxCycles, "max-cycles", "", "")
+	fs.StringVar(&maxIter, "max-iterations", "", "")
+	fs.StringVar(&maxShort, "m", "", "")
+	fs.BoolVar(&noTUI, "no-tui", false, "")
+	fs.StringVar(&runsDir, "runs-dir", ".ralfinho/runs", "")
+
+	if err := fs.Parse(args); err != nil {
+		return nil, fmt.Errorf("invalid duet flags: %w", err)
+	}
+
+	if builderPrompt == "" {
+		return nil, fmt.Errorf("duet: --builder-prompt is required")
+	}
+	if verifierPrompt == "" {
+		return nil, fmt.Errorf("duet: --verifier-prompt is required")
+	}
+
+	agent := "pi"
+	if agentFlag != "" {
+		agent = agentFlag
+	}
+	if agentShort != "" {
+		agent = agentShort
+	}
+
+	maxCyclesInt := 0
+	if maxCycles != "" {
+		n, err := strconv.Atoi(maxCycles)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("duet: --max-cycles must be a non-negative integer, got %q", maxCycles)
+		}
+		maxCyclesInt = n
+	}
+
+	maxIterations := 0
+	raw := maxIter
+	if maxShort != "" {
+		raw = maxShort
+	}
+	if raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("duet: --max-iterations must be a non-negative integer, got %q", raw)
+		}
+		maxIterations = n
+	}
+
+	return &Config{
+		RunsDir: runsDir,
+		NoTUI:   noTUI,
+		Duet: &DuetConfig{
+			BuilderPromptFile:  builderPrompt,
+			VerifierPromptFile: verifierPrompt,
+			BuilderAgent:       agent,
+			VerifierAgent:      verifierAgent,
+			MaxCycles:          maxCyclesInt,
+			MaxIterations:      maxIterations,
+			NoTUI:              noTUI,
+			RunsDir:            runsDir,
+		},
+	}, nil
 }
 
 func parseView(args []string) (*Config, error) {

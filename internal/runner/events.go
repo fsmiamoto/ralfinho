@@ -28,6 +28,7 @@ const (
 	EventIterationRestart    = events.EventIterationRestart
 	EventReminderState       = events.EventReminderState
 	EventRateLimit           = events.EventRateLimit
+	EventDuetPhase           = events.EventDuetPhase
 )
 
 type Event = events.Event

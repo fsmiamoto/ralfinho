@@ -27,6 +27,7 @@ const (
 	DisplayInfo          DisplayEventType = "info"
 	DisplayRestart       DisplayEventType = "restart"
 	DisplayReminderState DisplayEventType = "reminder_state"
+	DisplayDuetPhase     DisplayEventType = "duet_phase"
 )
 
 // DisplayEvent is a UI-friendly representation of a runner event.
@@ -69,6 +70,11 @@ type DisplayEvent struct {
 	// Reminders is the current reminder snapshot; populated only on
 	// DisplayReminderState events. The TUI overwrites its mirror with this.
 	Reminders []runner.Reminder
+
+	// DuetPhase is populated only on DisplayDuetPhase events.
+	DuetPhase     string
+	DuetCycle     int
+	DuetMaxCycles int
 }
 
 // EventConverter accumulates runner events and produces DisplayEvents.
@@ -433,6 +439,23 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			Timestamp:    eventTime,
 			RawTimestamp: rawTimestamp,
 			Iteration:    c.iteration,
+		}}
+
+	case runner.EventDuetPhase:
+		summary := fmt.Sprintf("▶ %s  cycle %d", ev.DuetPhase, ev.DuetCycle)
+		if ev.DuetMaxCycles > 0 {
+			summary = fmt.Sprintf("▶ %s  cycle %d/%d", ev.DuetPhase, ev.DuetCycle, ev.DuetMaxCycles)
+		}
+		return []DisplayEvent{{
+			Type:          DisplayDuetPhase,
+			Summary:       summary,
+			Detail:        summary,
+			Timestamp:     eventTime,
+			RawTimestamp:  rawTimestamp,
+			Iteration:     c.iteration,
+			DuetPhase:     ev.DuetPhase,
+			DuetCycle:     ev.DuetCycle,
+			DuetMaxCycles: ev.DuetMaxCycles,
 		}}
 
 	default:
