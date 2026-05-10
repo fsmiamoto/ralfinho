@@ -79,6 +79,11 @@ type Model struct {
 	pendingCursor  int    // selected index in pendingReminders for removal overlay
 	pendingError   string // populated when a remove send hits a full control channel; cleared on next interaction
 
+	// Duet mode phase indicator; non-empty when a duet run is active.
+	duetPhase     string // "BUILDER" or "VERIFIER"
+	duetCycle     int
+	duetMaxCycles int
+
 	// restartCount tracks restart attempts per iteration. Reset for an
 	// iteration when a fresh DisplayIteration arrives; incremented on
 	// DisplayRestart. Used by renderHeader.
@@ -302,6 +307,14 @@ func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
 				m.pendingCursor = 0
 			}
 		}
+		return m, nil
+	}
+
+	// Duet phase transitions update the header indicator; no block is added.
+	if de.Type == DisplayDuetPhase {
+		m.duetPhase = de.DuetPhase
+		m.duetCycle = de.DuetCycle
+		m.duetMaxCycles = de.DuetMaxCycles
 		return m, nil
 	}
 
@@ -1198,7 +1211,13 @@ func (m Model) renderHeader() string {
 
 	// Build optional segments, only adding them if they fit.
 	var optional []string
-	if m.agentName != "" {
+	if m.duetPhase != "" {
+		phaseSeg := fmt.Sprintf("▶ %s  cycle %d", m.duetPhase, m.duetCycle)
+		if m.duetMaxCycles > 0 {
+			phaseSeg = fmt.Sprintf("▶ %s  cycle %d/%d", m.duetPhase, m.duetCycle, m.duetMaxCycles)
+		}
+		optional = append(optional, phaseSeg)
+	} else if m.agentName != "" {
 		optional = append(optional, m.agentName)
 	}
 	if m.iteration > 0 {
