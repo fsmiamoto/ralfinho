@@ -27,6 +27,7 @@ const (
 	DisplayInfo          DisplayEventType = "info"
 	DisplayRestart       DisplayEventType = "restart"
 	DisplayReminderState DisplayEventType = "reminder_state"
+	DisplayUsage         DisplayEventType = "usage"
 )
 
 // DisplayEvent is a UI-friendly representation of a runner event.
@@ -69,6 +70,12 @@ type DisplayEvent struct {
 	// Reminders is the current reminder snapshot; populated only on
 	// DisplayReminderState events. The TUI overwrites its mirror with this.
 	Reminders []runner.Reminder
+
+	// Token usage; populated on DisplayUsage events.
+	IterationInputTokens  int
+	IterationOutputTokens int
+	TotalInputTokens      int
+	TotalOutputTokens     int
 }
 
 // EventConverter accumulates runner events and produces DisplayEvents.
@@ -435,6 +442,27 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			Iteration:    c.iteration,
 		}}
 
+	case runner.EventUsage:
+		de := DisplayEvent{
+			Type:         DisplayUsage,
+			Timestamp:    eventTime,
+			RawTimestamp: rawTimestamp,
+			Iteration:    c.iteration,
+		}
+		if ev.Usage != nil {
+			de.IterationInputTokens = ev.Usage.InputTokens
+			de.IterationOutputTokens = ev.Usage.OutputTokens
+		}
+		if ev.TotalUsage != nil {
+			de.TotalInputTokens = ev.TotalUsage.InputTokens
+			de.TotalOutputTokens = ev.TotalUsage.OutputTokens
+		}
+		de.Summary = fmt.Sprintf("ctx: %s in / %s out  (Σ %s / %s)",
+			formatTokens(de.IterationInputTokens), formatTokens(de.IterationOutputTokens),
+			formatTokens(de.TotalInputTokens), formatTokens(de.TotalOutputTokens))
+		de.Detail = de.Summary
+		return []DisplayEvent{de}
+
 	default:
 		return nil
 	}
@@ -476,6 +504,14 @@ func jsonToText(raw json.RawMessage) string {
 		return s
 	}
 	return string(raw)
+}
+
+// formatTokens formats a token count compactly: 1234 → "1.2k", 999 → "999".
+func formatTokens(n int) string {
+	if n >= 1000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 func truncateStr(s string, n int) string {

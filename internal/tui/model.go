@@ -84,6 +84,10 @@ type Model struct {
 	// DisplayRestart. Used by renderHeader.
 	restartCount map[int]int
 
+	// cumulative token usage (updated on DisplayUsage events)
+	totalInputTokens  int
+	totalOutputTokens int
+
 	// Main view (top pane) state.
 	blocks         []MainBlock // ordered content blocks for the main view
 	mainScroll     int         // scroll offset in main view (line-based)
@@ -316,6 +320,12 @@ func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
 		}
 		m.restartCount[iter]++
 		// Fall through so the restart still appears in the stream/main view as info.
+	}
+
+	// Update cumulative token counters on usage events.
+	if de.Type == DisplayUsage {
+		m.totalInputTokens = de.TotalInputTokens
+		m.totalOutputTokens = de.TotalOutputTokens
 	}
 
 	// Extract model name from assistant_text display metadata. Prefer the
@@ -1217,6 +1227,9 @@ func (m Model) renderHeader() string {
 		optional = append(optional, compactDuration(m.runDuration))
 	}
 	optional = append(optional, "Timeout: "+timeoutHeaderValue(m.currentTimeout))
+	if m.totalInputTokens > 0 || m.totalOutputTokens > 0 {
+		optional = append(optional, fmt.Sprintf("Ctx: %s/%s", formatTokens(m.totalInputTokens), formatTokens(m.totalOutputTokens)))
+	}
 
 	bar := strings.Join(parts, sep)
 	for _, seg := range optional {

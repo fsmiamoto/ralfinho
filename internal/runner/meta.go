@@ -19,6 +19,12 @@ type RunMeta struct {
 	MaxIterations       int    `json:"max_iterations"`
 	IterationsCompleted int    `json:"iterations_completed"`
 	DurationMs          int64  `json:"duration_ms,omitempty"`
+
+	// Cumulative token usage (zero when agent does not emit usage data).
+	TotalInputTokens         int `json:"total_input_tokens,omitempty"`
+	TotalOutputTokens        int `json:"total_output_tokens,omitempty"`
+	TotalCacheReadTokens     int `json:"total_cache_read_tokens,omitempty"`
+	TotalCacheCreationTokens int `json:"total_cache_creation_tokens,omitempty"`
 }
 
 // writeMetaJSON writes meta.json to the given path.

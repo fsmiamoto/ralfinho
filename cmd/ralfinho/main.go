@@ -245,9 +245,21 @@ func printRunSummary(label string, result runner.RunResult) {
 	fmt.Fprintf(os.Stderr, "agent:      %s\n", result.Agent)
 	fmt.Fprintf(os.Stderr, "iterations: %d\n", result.Iterations)
 	fmt.Fprintf(os.Stderr, "status:     %s\n", result.Status)
+	if result.TotalInputTokens > 0 || result.TotalOutputTokens > 0 {
+		fmt.Fprintf(os.Stderr, "usage:      %s in / %s out\n",
+			formatTokensSummary(result.TotalInputTokens),
+			formatTokensSummary(result.TotalOutputTokens))
+	}
 	if result.Error != "" {
 		fmt.Fprintf(os.Stderr, "error:      %s\n", result.Error)
 	}
+}
+
+func formatTokensSummary(n int) string {
+	if n >= 1000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 func exitForStatus(status runner.Status) {

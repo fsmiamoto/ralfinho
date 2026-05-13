@@ -59,6 +59,10 @@ type RunResult struct {
 	Agent      string
 	Duration   time.Duration
 	Error      string // non-empty when Status == StatusFailed
+
+	// Cumulative token usage across all iterations (zero when agent does not emit usage).
+	TotalInputTokens  int
+	TotalOutputTokens int
 }
 
 // Runner drives the agent iteration loop.
@@ -80,6 +84,10 @@ type Runner struct {
 	restartCount        map[int]int     // attempts logged for each iteration that was restarted
 	operatorLog         *operatorLogger // operator-log.jsonl; nil if file failed to open
 	operatorLogFile     *os.File        // backing file for operatorLog (closed in closeRunFiles)
+
+	// token usage accumulators
+	iterationUsage UsageInfo // reset after each iteration
+	totalUsage     UsageInfo // cumulative across all iterations
 }
 
 // NewRunID generates a new UUID suitable for use as a run ID.
@@ -176,6 +184,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 		})
 
 		status, err := r.runIteration(ctx)
+		r.emitIterationUsage(r.iteration)
 		if err != nil {
 			r.logf("error: %v\n", err)
 			r.sessionLogf("[%s] error: %v\n", r.timestamp(), err)
@@ -234,6 +243,8 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 
 	// Write final meta.json and close persistence files.
 	result.Duration = time.Since(r.startedAt)
+	result.TotalInputTokens = r.totalUsage.InputTokens
+	result.TotalOutputTokens = r.totalUsage.OutputTokens
 	r.writeMeta(result.Status, result.Iterations)
 	r.closeRunFiles()
 
@@ -465,6 +476,42 @@ func (r *Runner) handleControlMsg(msg ControlMsg) {
 	}
 }
 
+// emitIterationUsage accumulates the current iteration's usage into the
+// running total, resets the per-iteration accumulator, writes an EventUsage
+// record to events.jsonl, and forwards it to the TUI. No-op when the agent
+// did not emit any usage data this iteration.
+func (r *Runner) emitIterationUsage(iteration int) {
+	iter := r.iterationUsage
+	r.totalUsage.InputTokens += iter.InputTokens
+	r.totalUsage.OutputTokens += iter.OutputTokens
+	r.totalUsage.CacheReadTokens += iter.CacheReadTokens
+	r.totalUsage.CacheCreationTokens += iter.CacheCreationTokens
+	r.iterationUsage = UsageInfo{}
+
+	if iter.InputTokens == 0 && iter.OutputTokens == 0 {
+		return
+	}
+
+	total := r.totalUsage
+	ev := Event{
+		Type:       EventUsage,
+		ID:         fmt.Sprintf("usage-%d", iteration),
+		Timestamp:  time.Now().Format(time.RFC3339),
+		Usage:      &iter,
+		TotalUsage: &total,
+	}
+
+	if r.eventsFile != nil {
+		if data, merr := json.Marshal(ev); merr == nil {
+			if _, werr := fmt.Fprintln(r.eventsFile, string(data)); werr != nil {
+				r.logf("warning: writing usage event to events.jsonl: %v\n", werr)
+			}
+		}
+	}
+
+	r.sendEvent(ev)
+}
+
 // emitReminderState sends the current reminder snapshot to the TUI so its
 // pending-list mirror stays in sync. It is a synthetic event — not written to
 // events.jsonl, just delivered via the EventChan.
@@ -550,6 +597,12 @@ func (r *Runner) handleEvent(ev *Event) {
 
 	case EventMessageEnd:
 		r.flushSessionText()
+		if ev.Usage != nil {
+			r.iterationUsage.InputTokens += ev.Usage.InputTokens
+			r.iterationUsage.OutputTokens += ev.Usage.OutputTokens
+			r.iterationUsage.CacheReadTokens += ev.Usage.CacheReadTokens
+			r.iterationUsage.CacheCreationTokens += ev.Usage.CacheCreationTokens
+		}
 
 	case EventToolExecutionStart:
 		r.logf("  > tool: %s (id=%s)\n", ev.ToolName, truncate(ev.ToolCallID, 12))
@@ -781,17 +834,21 @@ func (r *Runner) writeMeta(status Status, iterations int) {
 		}
 	}
 	meta := RunMeta{
-		RunID:               r.runID,
-		StartedAt:           r.startedAt.Format(time.RFC3339),
-		EndedAt:             endedAt,
-		Status:              string(status),
-		Agent:               r.cfg.Agent,
-		PromptSource:        r.cfg.PromptSource,
-		PromptFile:          r.cfg.PromptFile,
-		PlanFile:            r.cfg.PlanFile,
-		MaxIterations:       r.cfg.MaxIterations,
-		IterationsCompleted: iterations,
-		DurationMs:          durationMs,
+		RunID:                    r.runID,
+		StartedAt:                r.startedAt.Format(time.RFC3339),
+		EndedAt:                  endedAt,
+		Status:                   string(status),
+		Agent:                    r.cfg.Agent,
+		PromptSource:             r.cfg.PromptSource,
+		PromptFile:               r.cfg.PromptFile,
+		PlanFile:                 r.cfg.PlanFile,
+		MaxIterations:            r.cfg.MaxIterations,
+		IterationsCompleted:      iterations,
+		DurationMs:               durationMs,
+		TotalInputTokens:         r.totalUsage.InputTokens,
+		TotalOutputTokens:        r.totalUsage.OutputTokens,
+		TotalCacheReadTokens:     r.totalUsage.CacheReadTokens,
+		TotalCacheCreationTokens: r.totalUsage.CacheCreationTokens,
 	}
 	if err := writeMetaJSON(filepath.Join(dir, "meta.json"), meta); err != nil {
 		r.logf("warning: could not write meta.json: %v\n", err)

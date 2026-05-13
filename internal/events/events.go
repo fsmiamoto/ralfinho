@@ -42,6 +42,10 @@ const (
 
 	// EventRateLimit is emitted when the agent backend reports rate limiting.
 	EventRateLimit EventType = "rate_limit"
+
+	// EventUsage is a synthetic per-iteration event carrying token usage totals.
+	// Usage holds the iteration totals; TotalUsage holds the cumulative run totals.
+	EventUsage EventType = "usage"
 )
 
 // ReminderKind distinguishes one-off vs persistent reminders.
@@ -96,11 +100,24 @@ type Event struct {
 
 	// rate_limit
 	RateLimit *RateLimitInfo `json:"rateLimit,omitempty"`
+
+	// usage (EventMessageEnd carries per-message; EventUsage carries per-iteration + cumulative)
+	Usage      *UsageInfo `json:"usage,omitempty"`
+	TotalUsage *UsageInfo `json:"total_usage,omitempty"`
 }
 
 // RateLimitInfo carries rate limit details from the agent backend.
 type RateLimitInfo struct {
 	RequestsRemaining int `json:"requests_remaining"`
+}
+
+// UsageInfo holds token counts from an LLM API response.
+// Populated on EventMessageEnd (per-message) and EventUsage (per-iteration / cumulative).
+type UsageInfo struct {
+	InputTokens         int `json:"input_tokens"`
+	OutputTokens        int `json:"output_tokens"`
+	CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"`
 }
 
 // MessageEnvelope is used for message_start / message_end payloads.

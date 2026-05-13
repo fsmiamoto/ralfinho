@@ -158,12 +158,23 @@ type claudeStreamEvent struct {
 	Message      *claudeMessage      `json:"message,omitempty"`
 	ContentBlock *claudeContentBlock `json:"content_block,omitempty"`
 	Delta        *claudeDelta        `json:"delta,omitempty"`
+	Usage        *claudeUsage        `json:"usage,omitempty"` // present in message_delta
+}
+
+// claudeUsage holds token counts from the Anthropic API streaming events.
+// Present in message_start (input tokens) and message_delta (output tokens).
+type claudeUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 }
 
 // claudeMessage is the message payload in message_start events.
 type claudeMessage struct {
-	Role  string `json:"role"`
-	Model string `json:"model"`
+	Role  string       `json:"role"`
+	Model string       `json:"model"`
+	Usage *claudeUsage `json:"usage,omitempty"`
 }
 
 // claudeContentBlock describes a content block in content_block_start events.
@@ -220,6 +231,12 @@ type claudeEventMapper struct {
 	currentBlockType string             // "text" or "tool_use"
 	argsAccumulator  strings.Builder    // accumulates input_json_delta partials
 	currentToolID    string             // id of the current tool_use block
+
+	// per-message token counters; reset in emitMessageEnd
+	msgInputTokens   int
+	msgOutputTokens  int
+	msgCacheRead     int
+	msgCacheCreate   int
 }
 
 // newClaudeEventMapper creates a mapper that forwards events through onEvent.
@@ -270,7 +287,9 @@ func (m *claudeEventMapper) handleStreamEvent(raw []byte) {
 		m.mapContentBlockStop()
 	case "message_stop":
 		m.mapMessageStop()
-	// message_delta, ping, etc. — ignored
+	case "message_delta":
+		m.mapMessageDelta(sel.Event)
+	// ping, etc. — ignored
 	}
 }
 
@@ -329,9 +348,20 @@ func (m *claudeEventMapper) mapMessageStart(ev claudeStreamEvent) {
 	if ev.Message == nil {
 		return
 	}
-
 	model := ev.Message.Model
+	if ev.Message.Usage != nil {
+		m.msgInputTokens = ev.Message.Usage.InputTokens
+		m.msgCacheRead = ev.Message.Usage.CacheReadInputTokens
+		m.msgCacheCreate = ev.Message.Usage.CacheCreationInputTokens
+	}
 	m.emitMessageStart(model)
+}
+
+// mapMessageDelta handles a message_delta event, capturing output token count.
+func (m *claudeEventMapper) mapMessageDelta(ev claudeStreamEvent) {
+	if ev.Usage != nil {
+		m.msgOutputTokens = ev.Usage.OutputTokens
+	}
 }
 
 // mapContentBlockStart handles a content_block_start event.
@@ -476,8 +506,18 @@ func (m *claudeEventMapper) emitMessageStart(model string) {
 	m.inMessage = true
 }
 
-// emitMessageEnd sends an EventMessageEnd and clears the inMessage flag.
+// emitMessageEnd sends an EventMessageEnd (with per-message usage) and clears the inMessage flag.
 func (m *claudeEventMapper) emitMessageEnd() {
-	m.onEvent(events.Event{Type: events.EventMessageEnd})
+	usage := &events.UsageInfo{
+		InputTokens:         m.msgInputTokens,
+		OutputTokens:        m.msgOutputTokens,
+		CacheReadTokens:     m.msgCacheRead,
+		CacheCreationTokens: m.msgCacheCreate,
+	}
+	m.msgInputTokens = 0
+	m.msgOutputTokens = 0
+	m.msgCacheRead = 0
+	m.msgCacheCreate = 0
+	m.onEvent(events.Event{Type: events.EventMessageEnd, Usage: usage})
 	m.inMessage = false
 }

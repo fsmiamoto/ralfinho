@@ -28,6 +28,7 @@ const (
 	EventIterationRestart    = events.EventIterationRestart
 	EventReminderState       = events.EventReminderState
 	EventRateLimit           = events.EventRateLimit
+	EventUsage               = events.EventUsage
 )
 
 type Event = events.Event
@@ -36,3 +37,4 @@ type AssistantEvent = events.AssistantEvent
 type ContentBlock = events.ContentBlock
 type ToolArgs = events.ToolArgs
 type RateLimitInfo = events.RateLimitInfo
+type UsageInfo = events.UsageInfo
