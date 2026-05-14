@@ -264,20 +264,23 @@ const (
 	markerClose    = "</promise>"
 )
 
-// parseVerdict scans text for APPROVED or REJECTED markers.
+// parseVerdict scans text for APPROVED or REJECTED markers. When both appear
+// (e.g. the verifier flips its verdict mid-message), the later marker wins so
+// the final stated verdict is honored.
 func parseVerdict(text string) (verdictKind, string) {
-	if strings.Contains(text, approvedMarker) {
-		return verdictApproved, ""
-	}
-	idx := strings.Index(text, rejectedPrefix)
-	if idx >= 0 {
-		rest := text[idx+len(rejectedPrefix):]
+	approvedIdx := strings.LastIndex(text, approvedMarker)
+	rejectedIdx := strings.LastIndex(text, rejectedPrefix)
+
+	if rejectedIdx > approvedIdx {
+		rest := text[rejectedIdx+len(rejectedPrefix):]
 		end := strings.Index(rest, markerClose)
-		reason := ""
-		if end >= 0 {
-			reason = strings.TrimSpace(rest[:end])
+		if end < 0 {
+			return verdictNone, ""
 		}
-		return verdictRejected, reason
+		return verdictRejected, strings.TrimSpace(rest[:end])
+	}
+	if approvedIdx >= 0 {
+		return verdictApproved, ""
 	}
 	return verdictNone, ""
 }

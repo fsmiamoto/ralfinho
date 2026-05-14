@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,6 +75,11 @@ func TestParseVerdict(t *testing.T) {
 		{"rejected no reason", "<promise>REJECTED:</promise>", verdictRejected, ""},
 		{"none", "no markers at all", verdictNone, ""},
 		{"partial approved", "<promise>APPROV</promise>", verdictNone, ""},
+		// When both markers appear, the later marker wins (final stated verdict).
+		{"approved then rejected", "<promise>APPROVED</promise> wait, on second look <promise>REJECTED: edge case</promise>", verdictRejected, "edge case"},
+		{"rejected then approved", "<promise>REJECTED: noop</promise> actually fine <promise>APPROVED</promise>", verdictApproved, ""},
+		// Rejected marker without a closing tag is treated as no verdict (verifier protocol violation).
+		{"rejected unterminated", "<promise>REJECTED: forgot close", verdictNone, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -203,10 +209,16 @@ fi`
 	if err != nil {
 		t.Fatalf("ReadDir cycle-2 builder: %v", err)
 	}
-	if len(entries) == 0 {
-		t.Fatal("no run dir created for cycle-2 builder")
+	var runDirs []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			runDirs = append(runDirs, e.Name())
+		}
 	}
-	promptPath := filepath.Join(cycle2BuilderDir, entries[0].Name(), "effective-prompt.md")
+	if len(runDirs) != 1 {
+		t.Fatalf("expected exactly 1 run dir in cycle-2 builder, got %d (%v)", len(runDirs), runDirs)
+	}
+	promptPath := filepath.Join(cycle2BuilderDir, runDirs[0], "effective-prompt.md")
 	data, err := os.ReadFile(promptPath)
 	if err != nil {
 		t.Fatalf("reading cycle-2 effective prompt: %v", err)
@@ -323,11 +335,18 @@ func TestDuetRunner_MetaJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading meta.json: %v", err)
 	}
-	if !strings.Contains(string(data), `"approved"`) {
-		t.Errorf("meta.json does not contain approved status: %s", data)
+	var meta DuetMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatalf("unmarshaling meta.json: %v\nraw: %s", err, data)
 	}
-	if !strings.Contains(string(data), `"test-meta"`) {
-		t.Errorf("meta.json does not contain duet ID: %s", data)
+	if meta.Status != string(DuetStatusApproved) {
+		t.Errorf("meta.json status = %q, want %q", meta.Status, DuetStatusApproved)
+	}
+	if meta.DuetID != "test-meta" {
+		t.Errorf("meta.json duet_id = %q, want %q", meta.DuetID, "test-meta")
+	}
+	if meta.Cycles != 1 {
+		t.Errorf("meta.json cycles = %d, want 1", meta.Cycles)
 	}
 }
 

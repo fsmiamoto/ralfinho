@@ -578,3 +578,15 @@ func TestParseDuet_InvalidMaxCycles(t *testing.T) {
 		t.Fatalf("expected max-cycles error, got %v", err)
 	}
 }
+
+func TestParseDuet_RejectsUnexpectedPositional(t *testing.T) {
+	_, err := Parse([]string{
+		"duet",
+		"--builder-prompt", "b.md",
+		"--verifier-prompt", "v.md",
+		"stray-arg",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unexpected positional argument") {
+		t.Fatalf("expected unexpected-positional error, got %v", err)
+	}
+}

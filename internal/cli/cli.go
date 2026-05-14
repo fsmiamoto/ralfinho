@@ -285,6 +285,9 @@ func parseDuet(args []string) (*Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, fmt.Errorf("invalid duet flags: %w", err)
 	}
+	if remaining := fs.Args(); len(remaining) > 0 {
+		return nil, fmt.Errorf("duet: unexpected positional argument %q", remaining[0])
+	}
 
 	if builderPrompt == "" {
 		return nil, fmt.Errorf("duet: --builder-prompt is required")
