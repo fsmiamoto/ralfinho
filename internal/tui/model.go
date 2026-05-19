@@ -79,6 +79,12 @@ type Model struct {
 	pendingCursor  int    // selected index in pendingReminders for removal overlay
 	pendingError   string // populated when a remove send hits a full control channel; cleared on next interaction
 
+	// Token-usage mirrors of the runner state. Populated by DisplayUsage
+	// events; nil until the agent backend reports usage. lastUsage holds
+	// the per-iteration counts; totalUsage the cumulative run total.
+	lastUsage  *runner.UsageInfo
+	totalUsage *runner.UsageInfo
+
 	// restartCount tracks restart attempts per iteration. Reset for an
 	// iteration when a fresh DisplayIteration arrives; incremented on
 	// DisplayRestart. Used by renderHeader.
@@ -153,6 +159,19 @@ func NewViewerModel(events []DisplayEvent, meta runner.RunMeta, promptText, note
 		promptText:     promptText,
 		notesPath:      notesPath,
 		progressPath:   progressPath,
+	}
+
+	// Seed the usage display from saved meta.json totals so replay sessions
+	// show the same numbers a live run did.
+	if meta.TotalInputTokens > 0 || meta.TotalOutputTokens > 0 ||
+		meta.TotalCacheReadTokens > 0 || meta.TotalCacheCreationTokens > 0 {
+		total := &runner.UsageInfo{
+			InputTokens:         meta.TotalInputTokens,
+			OutputTokens:        meta.TotalOutputTokens,
+			CacheReadTokens:     meta.TotalCacheReadTokens,
+			CacheCreationTokens: meta.TotalCacheCreationTokens,
+		}
+		m.totalUsage = total
 	}
 
 	// Pre-build blocks from loaded display events.
@@ -302,6 +321,14 @@ func (m Model) addDisplayEvent(de DisplayEvent) (tea.Model, tea.Cmd) {
 				m.pendingCursor = 0
 			}
 		}
+		return m, nil
+	}
+
+	// Usage updates are also pure model mutations — surface in the status
+	// line, but don't pollute the stream/main view with synthetic blocks.
+	if de.Type == DisplayUsage {
+		m.lastUsage = de.Usage
+		m.totalUsage = de.CumulativeUsage
 		return m, nil
 	}
 
@@ -1419,6 +1446,9 @@ func (m Model) renderStatus() string {
 	if strip := remindersStrip(m.pendingReminders); strip != "" {
 		left += " │ " + strip
 	}
+	if strip := usageStrip(m.lastUsage, m.totalUsage); strip != "" {
+		left += " │ " + strip
+	}
 
 	modeStr := "rendered"
 	if m.rawMode {
@@ -1758,6 +1788,41 @@ func (m Model) renderPendingOverlay() string {
 		hint:          "j/k:move  x:remove  S/Esc/q:close",
 		cardBorder:    browserCardBorder,
 	})
+}
+
+// usageStrip returns a compact token-usage summary for the status bar:
+// "tokens: 12.5k in / 3.2k out (run: 48.0k / 9.1k)". Returns "" when no
+// usage has been reported yet (so old runs/non-reporting agents stay clean).
+// `last` is the most recent iteration's counts; `total` is the cumulative
+// run total. Both may be nil; we render whatever is available.
+func usageStrip(last, total *runner.UsageInfo) string {
+	if last == nil && total == nil {
+		return ""
+	}
+	if last == nil {
+		return fmt.Sprintf("tokens: %s in / %s out",
+			compactTokens(total.InputTokens), compactTokens(total.OutputTokens))
+	}
+	s := fmt.Sprintf("tokens: %s in / %s out",
+		compactTokens(last.InputTokens), compactTokens(last.OutputTokens))
+	if total != nil && (total.InputTokens != last.InputTokens || total.OutputTokens != last.OutputTokens) {
+		s += fmt.Sprintf(" (run: %s / %s)",
+			compactTokens(total.InputTokens), compactTokens(total.OutputTokens))
+	}
+	return s
+}
+
+// compactTokens renders a token count as "12.5k" / "1.2M" for compact display.
+// Counts under 1000 are rendered as-is.
+func compactTokens(n int) string {
+	switch {
+	case n < 1000:
+		return fmt.Sprintf("%d", n)
+	case n < 1_000_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	default:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
 }
 
 // remindersStrip returns a compact summary of pending steering for the

@@ -80,6 +80,12 @@ type Runner struct {
 	restartCount        map[int]int     // attempts logged for each iteration that was restarted
 	operatorLog         *operatorLogger // operator-log.jsonl; nil if file failed to open
 	operatorLogFile     *os.File        // backing file for operatorLog (closed in closeRunFiles)
+
+	// Token usage tracking. iterUsage resets at the start of each iteration;
+	// totalUsage accumulates across the whole run. Both are persisted to
+	// meta.json (totalUsage) and surfaced via synthetic EventUsage events.
+	iterUsage  UsageInfo
+	totalUsage UsageInfo
 }
 
 // NewRunID generates a new UUID suitable for use as a run ID.
@@ -165,6 +171,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 		}
 
 		r.iteration = result.Iterations
+		r.iterUsage = UsageInfo{} // reset per-iteration usage
 		r.sessionLogf("\n=== Iteration %d ===\n", r.iteration)
 		r.logf("--- iteration %d ---\n", result.Iterations)
 
@@ -176,6 +183,7 @@ func (r *Runner) Run(ctx context.Context) RunResult {
 		})
 
 		status, err := r.runIteration(ctx)
+		r.emitUsage()
 		if err != nil {
 			r.logf("error: %v\n", err)
 			r.sessionLogf("[%s] error: %v\n", r.timestamp(), err)
@@ -465,6 +473,41 @@ func (r *Runner) handleControlMsg(msg ControlMsg) {
 	}
 }
 
+// emitUsage sends a synthetic EventUsage carrying both the just-completed
+// iteration's usage and the cumulative run total. Skips when nothing was
+// reported (e.g. agents that don't surface usage). The event is delivered
+// to the TUI via EventChan and persisted to events.jsonl so saved runs can
+// be replayed with usage intact.
+func (r *Runner) emitUsage() {
+	if r.iterUsage == (UsageInfo{}) && r.totalUsage == (UsageInfo{}) {
+		return
+	}
+	iter := r.iterUsage
+	total := r.totalUsage
+	ev := Event{
+		Type:            EventUsage,
+		ID:              fmt.Sprintf("usage-%d", r.iteration),
+		Timestamp:       time.Now().Format(time.RFC3339Nano),
+		Usage:           &iter,
+		CumulativeUsage: &total,
+	}
+	if r.eventsFile != nil {
+		if data, err := json.Marshal(ev); err == nil {
+			fmt.Fprintln(r.eventsFile, string(data))
+		}
+	}
+	r.sendEvent(ev)
+	if iter.InputTokens > 0 || iter.OutputTokens > 0 {
+		r.logf("  usage: %s in / %s out (run total: %s in / %s out)\n",
+			formatTokens(iter.InputTokens), formatTokens(iter.OutputTokens),
+			formatTokens(total.InputTokens), formatTokens(total.OutputTokens))
+		r.sessionLogf("[%s] usage: %s in / %s out (run total: %s in / %s out)\n",
+			r.timestamp(),
+			formatTokens(iter.InputTokens), formatTokens(iter.OutputTokens),
+			formatTokens(total.InputTokens), formatTokens(total.OutputTokens))
+	}
+}
+
 // emitReminderState sends the current reminder snapshot to the TUI so its
 // pending-list mirror stays in sync. It is a synthetic event — not written to
 // events.jsonl, just delivered via the EventChan.
@@ -550,6 +593,10 @@ func (r *Runner) handleEvent(ev *Event) {
 
 	case EventMessageEnd:
 		r.flushSessionText()
+		if ev.Usage != nil {
+			r.iterUsage.Add(ev.Usage)
+			r.totalUsage.Add(ev.Usage)
+		}
 
 	case EventToolExecutionStart:
 		r.logf("  > tool: %s (id=%s)\n", ev.ToolName, truncate(ev.ToolCallID, 12))
@@ -781,17 +828,21 @@ func (r *Runner) writeMeta(status Status, iterations int) {
 		}
 	}
 	meta := RunMeta{
-		RunID:               r.runID,
-		StartedAt:           r.startedAt.Format(time.RFC3339),
-		EndedAt:             endedAt,
-		Status:              string(status),
-		Agent:               r.cfg.Agent,
-		PromptSource:        r.cfg.PromptSource,
-		PromptFile:          r.cfg.PromptFile,
-		PlanFile:            r.cfg.PlanFile,
-		MaxIterations:       r.cfg.MaxIterations,
-		IterationsCompleted: iterations,
-		DurationMs:          durationMs,
+		RunID:                    r.runID,
+		StartedAt:                r.startedAt.Format(time.RFC3339),
+		EndedAt:                  endedAt,
+		Status:                   string(status),
+		Agent:                    r.cfg.Agent,
+		PromptSource:             r.cfg.PromptSource,
+		PromptFile:               r.cfg.PromptFile,
+		PlanFile:                 r.cfg.PlanFile,
+		MaxIterations:            r.cfg.MaxIterations,
+		IterationsCompleted:      iterations,
+		DurationMs:               durationMs,
+		TotalInputTokens:         r.totalUsage.InputTokens,
+		TotalOutputTokens:        r.totalUsage.OutputTokens,
+		TotalCacheReadTokens:     r.totalUsage.CacheReadTokens,
+		TotalCacheCreationTokens: r.totalUsage.CacheCreationTokens,
 	}
 	if err := writeMetaJSON(filepath.Join(dir, "meta.json"), meta); err != nil {
 		r.logf("warning: could not write meta.json: %v\n", err)
@@ -811,6 +862,24 @@ func newUUID() string {
 	buf[8] = (buf[8] & 0x3f) | 0x80 // variant 2
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
+}
+
+// formatTokens renders a token count using a thousands separator for
+// readability ("12,450"). Negative or zero values render as "0".
+func formatTokens(n int) string {
+	if n <= 0 {
+		return "0"
+	}
+	s := fmt.Sprintf("%d", n)
+	// Insert commas from the right.
+	out := make([]byte, 0, len(s)+len(s)/3)
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, byte(c))
+	}
+	return string(out)
 }
 
 // truncate shortens s to at most n runes, adding "…" if truncated.

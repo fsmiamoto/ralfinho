@@ -27,6 +27,7 @@ const (
 	DisplayInfo          DisplayEventType = "info"
 	DisplayRestart       DisplayEventType = "restart"
 	DisplayReminderState DisplayEventType = "reminder_state"
+	DisplayUsage         DisplayEventType = "usage"
 )
 
 // DisplayEvent is a UI-friendly representation of a runner event.
@@ -69,6 +70,12 @@ type DisplayEvent struct {
 	// Reminders is the current reminder snapshot; populated only on
 	// DisplayReminderState events. The TUI overwrites its mirror with this.
 	Reminders []runner.Reminder
+
+	// Usage and CumulativeUsage are populated only on DisplayUsage events.
+	// They mirror the runner's per-iteration and run-total token counts so
+	// the TUI status line can render context-window pressure.
+	Usage           *runner.UsageInfo
+	CumulativeUsage *runner.UsageInfo
 }
 
 // EventConverter accumulates runner events and produces DisplayEvents.
@@ -415,6 +422,18 @@ func (c *EventConverter) Convert(ev *runner.Event) []DisplayEvent {
 			RawTimestamp: rawTimestamp,
 			Iteration:    c.iteration,
 			Reminders:    ev.Reminders,
+		}}
+
+	case runner.EventUsage:
+		return []DisplayEvent{{
+			Type:            DisplayUsage,
+			Summary:         "usage update",
+			Detail:          "",
+			Timestamp:       eventTime,
+			RawTimestamp:    rawTimestamp,
+			Iteration:       c.iteration,
+			Usage:           ev.Usage,
+			CumulativeUsage: ev.CumulativeUsage,
 		}}
 
 	case runner.EventRateLimit:
