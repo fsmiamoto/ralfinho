@@ -192,13 +192,28 @@ func runTUI(cfg *cli.Config, promptText, runID string) {
 func runDuet(cfg *cli.Config) {
 	d := cfg.Duet
 
-	builderPromptText, err := prompt.BuildFromPromptFile(d.BuilderPromptFile)
+	duetID := runner.NewRunID()
+	notesPath := filepath.Join(d.RunsDir, duetID, "NOTES.md")
+	progressPath := filepath.Join(d.RunsDir, duetID, "PROGRESS.md")
+
+	var builderPromptText string
+	var err error
+	if d.BuilderPromptFile != "" {
+		builderPromptText, err = prompt.BuildFromPromptFile(d.BuilderPromptFile)
+	} else {
+		builderPromptText, err = prompt.BuildDuetBuilder(d.PlanFile, notesPath, progressPath)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ralfinho duet: builder prompt: %v\n", err)
 		os.Exit(1)
 	}
 
-	verifierPromptText, err := prompt.BuildFromPromptFile(d.VerifierPromptFile)
+	var verifierPromptText string
+	if d.VerifierPromptFile != "" {
+		verifierPromptText, err = prompt.BuildFromPromptFile(d.VerifierPromptFile)
+	} else {
+		verifierPromptText, err = prompt.BuildDuetVerifier(d.PlanFile)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ralfinho duet: verifier prompt: %v\n", err)
 		os.Exit(1)
@@ -222,30 +237,40 @@ func runDuet(cfg *cli.Config) {
 		noTUI = true
 	}
 
-	duetID := runner.NewRunID()
-
 	var eventCh chan runner.Event
 	if !noTUI {
 		eventCh = make(chan runner.Event, 256)
 	}
 
+	builderSource := "prompt"
+	builderFile := d.BuilderPromptFile
+	if d.BuilderPromptFile == "" {
+		builderSource = "plan"
+		builderFile = d.PlanFile
+	}
 	builderCfg := runner.RunConfig{
 		Agent:          builderAgent,
 		Prompt:         builderPromptText,
 		MaxIterations:  d.MaxIterations,
 		RunsDir:        "",  // set per-cycle by DuetRunner
-		PromptSource:   "prompt",
-		PromptFile:     d.BuilderPromptFile,
+		PromptSource:   builderSource,
+		PromptFile:     builderFile,
 		AgentExtraArgs: extraArgsForAgent(builderAgent),
 		EventChan:      eventCh,
+	}
+	verifierSource := "prompt"
+	verifierFile := d.VerifierPromptFile
+	if d.VerifierPromptFile == "" {
+		verifierSource = "plan"
+		verifierFile = d.PlanFile
 	}
 	verifierCfg := runner.RunConfig{
 		Agent:          verifierAgent,
 		Prompt:         verifierPromptText,
 		MaxIterations:  d.MaxIterations,
 		RunsDir:        "",  // set per-cycle by DuetRunner
-		PromptSource:   "prompt",
-		PromptFile:     d.VerifierPromptFile,
+		PromptSource:   verifierSource,
+		PromptFile:     verifierFile,
 		AgentExtraArgs: extraArgsForAgent(verifierAgent),
 		EventChan:      eventCh,
 	}
@@ -279,9 +304,6 @@ func runDuet(cfg *cli.Config) {
 		close(eventCh)
 	}()
 
-	// Use builder agent name for TUI header (duet phase events update it live).
-	notesPath := filepath.Join(d.RunsDir, duetID, "NOTES.md")
-	progressPath := filepath.Join(d.RunsDir, duetID, "PROGRESS.md")
 	model := tui.NewModel(eventCh, builderAgent, builderPromptText, notesPath, progressPath, inactivityTimeout, nil)
 	p := newTeaProgram(model, tea.WithAltScreen())
 

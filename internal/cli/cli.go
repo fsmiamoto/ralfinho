@@ -33,8 +33,9 @@ type Config struct {
 
 // DuetConfig holds the parsed parameters for the "duet" subcommand.
 type DuetConfig struct {
-	BuilderPromptFile string
-	VerifierPromptFile string
+	PlanFile           string // --plan: default prompts for both legs
+	BuilderPromptFile  string // overrides default builder prompt
+	VerifierPromptFile string // overrides default verifier prompt
 	BuilderAgent       string
 	VerifierAgent      string // empty = use BuilderAgent
 	MaxCycles          int    // 0 = unlimited
@@ -55,6 +56,7 @@ const (
 
 const usage = `Usage: ralfinho [flags] [PROMPT_FILE]
        ralfinho view [--runs-dir <path>] [--no-tui] [<run-id>]
+       ralfinho duet --plan <file> [flags]
        ralfinho duet --builder-prompt <file> --verifier-prompt <file> [flags]
 
 An autonomous coding agent runner.
@@ -259,6 +261,7 @@ func parseDuet(args []string) (*Config, error) {
 	fs.SetOutput(io.Discard)
 
 	var (
+		planFlag       string
 		builderPrompt  string
 		verifierPrompt string
 		agentFlag      string
@@ -271,6 +274,7 @@ func parseDuet(args []string) (*Config, error) {
 		runsDir        string
 	)
 
+	fs.StringVar(&planFlag, "plan", "", "")
 	fs.StringVar(&builderPrompt, "builder-prompt", "", "")
 	fs.StringVar(&verifierPrompt, "verifier-prompt", "", "")
 	fs.StringVar(&agentFlag, "agent", "", "")
@@ -289,11 +293,11 @@ func parseDuet(args []string) (*Config, error) {
 		return nil, fmt.Errorf("duet: unexpected positional argument %q", remaining[0])
 	}
 
-	if builderPrompt == "" {
-		return nil, fmt.Errorf("duet: --builder-prompt is required")
+	if planFlag == "" && builderPrompt == "" {
+		return nil, fmt.Errorf("duet: --plan or --builder-prompt is required")
 	}
-	if verifierPrompt == "" {
-		return nil, fmt.Errorf("duet: --verifier-prompt is required")
+	if planFlag == "" && verifierPrompt == "" {
+		return nil, fmt.Errorf("duet: --plan or --verifier-prompt is required")
 	}
 
 	agent := "pi"
@@ -330,6 +334,7 @@ func parseDuet(args []string) (*Config, error) {
 		RunsDir: runsDir,
 		NoTUI:   noTUI,
 		Duet: &DuetConfig{
+			PlanFile:           planFlag,
 			BuilderPromptFile:  builderPrompt,
 			VerifierPromptFile: verifierPrompt,
 			BuilderAgent:       agent,

@@ -509,12 +509,52 @@ func TestParseInactivityTimeout_Invalid(t *testing.T) {
 
 func TestParseDuet_RequiredFlags(t *testing.T) {
 	_, err := Parse([]string{"duet"})
-	if err == nil || !strings.Contains(err.Error(), "--builder-prompt is required") {
-		t.Fatalf("expected --builder-prompt required error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "--plan or --builder-prompt is required") {
+		t.Fatalf("expected plan/builder-prompt required error, got %v", err)
 	}
 	_, err = Parse([]string{"duet", "--builder-prompt", "b.md"})
-	if err == nil || !strings.Contains(err.Error(), "--verifier-prompt is required") {
-		t.Fatalf("expected --verifier-prompt required error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "--plan or --verifier-prompt is required") {
+		t.Fatalf("expected plan/verifier-prompt required error, got %v", err)
+	}
+}
+
+func TestParseDuet_PlanFlag(t *testing.T) {
+	cfg, err := Parse([]string{
+		"duet",
+		"--plan", "PLAN.md",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Duet.PlanFile != "PLAN.md" {
+		t.Errorf("PlanFile = %q, want PLAN.md", cfg.Duet.PlanFile)
+	}
+	if cfg.Duet.BuilderPromptFile != "" {
+		t.Errorf("BuilderPromptFile = %q, want empty", cfg.Duet.BuilderPromptFile)
+	}
+	if cfg.Duet.VerifierPromptFile != "" {
+		t.Errorf("VerifierPromptFile = %q, want empty", cfg.Duet.VerifierPromptFile)
+	}
+}
+
+func TestParseDuet_PlanWithExplicitOverrides(t *testing.T) {
+	cfg, err := Parse([]string{
+		"duet",
+		"--plan", "PLAN.md",
+		"--builder-prompt", "custom-builder.md",
+		"--verifier-prompt", "custom-verifier.md",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Duet.PlanFile != "PLAN.md" {
+		t.Errorf("PlanFile = %q, want PLAN.md", cfg.Duet.PlanFile)
+	}
+	if cfg.Duet.BuilderPromptFile != "custom-builder.md" {
+		t.Errorf("BuilderPromptFile = %q, want custom-builder.md", cfg.Duet.BuilderPromptFile)
+	}
+	if cfg.Duet.VerifierPromptFile != "custom-verifier.md" {
+		t.Errorf("VerifierPromptFile = %q, want custom-verifier.md", cfg.Duet.VerifierPromptFile)
 	}
 }
 

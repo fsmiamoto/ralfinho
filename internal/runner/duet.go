@@ -171,11 +171,11 @@ func (d *DuetRunner) Run(ctx context.Context) DuetResult {
 			feedbackAccum += fmt.Sprintf("### Cycle %d\n%s\n\n", result.Cycles, reason)
 
 		default:
-			// Verifier emitted neither APPROVED nor REJECTED — hard fail.
-			result.Status = DuetStatusVerifierFailed
-			result.Duration = time.Since(d.startedAt)
-			d.writeDuetMeta(result.Status, result.Cycles)
-			return result
+			// Verifier emitted neither APPROVED nor REJECTED — treat as
+			// rejection so the builder gets another chance to self-heal.
+			reason = "verifier did not emit an explicit verdict"
+			result.LastFeedback = reason
+			feedbackAccum += fmt.Sprintf("### Cycle %d\n%s\n\n", result.Cycles, reason)
 		}
 
 		// Check max cycles.

@@ -228,9 +228,10 @@ fi`
 	}
 }
 
-// TestDuetRunner_VerifierFailed verifies the hard-fail path when the verifier
-// emits neither APPROVED nor REJECTED.
-func TestDuetRunner_VerifierFailed(t *testing.T) {
+// TestDuetRunner_NoVerdictTreatedAsRejection verifies that when the verifier
+// emits neither APPROVED nor REJECTED, it is treated as a rejection so the
+// builder gets another chance to self-heal.
+func TestDuetRunner_NoVerdictTreatedAsRejection(t *testing.T) {
 	binDir, runsDir := duetTestSetup(t)
 
 	writeFakePI(t, filepath.Join(binDir, "pi"),
@@ -248,19 +249,22 @@ func TestDuetRunner_VerifierFailed(t *testing.T) {
 			Agent:  "pi",
 			Prompt: "VERIFY_TOKEN check the work",
 		},
-		MaxCycles: 5,
+		MaxCycles: 2,
 		RunsDir:   runsDir,
-		DuetID:    "test-verifier-failed",
+		DuetID:    "test-no-verdict",
 	}
 
 	dr := NewDuetRunner(cfg)
 	result := dr.Run(context.Background())
 
-	if result.Status != DuetStatusVerifierFailed {
-		t.Errorf("Status = %q, want %q", result.Status, DuetStatusVerifierFailed)
+	if result.Status != DuetStatusMaxCycles {
+		t.Errorf("Status = %q, want %q (no-verdict should be treated as rejection)", result.Status, DuetStatusMaxCycles)
 	}
-	if result.Cycles != 1 {
-		t.Errorf("Cycles = %d, want 1", result.Cycles)
+	if result.Cycles != 2 {
+		t.Errorf("Cycles = %d, want 2", result.Cycles)
+	}
+	if result.LastFeedback != "verifier did not emit an explicit verdict" {
+		t.Errorf("LastFeedback = %q, want generic no-verdict message", result.LastFeedback)
 	}
 }
 
