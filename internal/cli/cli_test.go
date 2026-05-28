@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -503,5 +504,129 @@ func TestParseInactivityTimeout_Invalid(t *testing.T) {
 	_, err := Parse([]string{"--inactivity-timeout", "not-a-duration", "todo.md"})
 	if err == nil {
 		t.Fatal("expected error for invalid duration string")
+	}
+}
+
+func TestParseDuet_RequiredFlags(t *testing.T) {
+	_, err := Parse([]string{"duet"})
+	if err == nil || !strings.Contains(err.Error(), "--plan or --builder-prompt is required") {
+		t.Fatalf("expected plan/builder-prompt required error, got %v", err)
+	}
+	_, err = Parse([]string{"duet", "--builder-prompt", "b.md"})
+	if err == nil || !strings.Contains(err.Error(), "--plan or --verifier-prompt is required") {
+		t.Fatalf("expected plan/verifier-prompt required error, got %v", err)
+	}
+}
+
+func TestParseDuet_PlanFlag(t *testing.T) {
+	cfg, err := Parse([]string{
+		"duet",
+		"--plan", "PLAN.md",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Duet.PlanFile != "PLAN.md" {
+		t.Errorf("PlanFile = %q, want PLAN.md", cfg.Duet.PlanFile)
+	}
+	if cfg.Duet.BuilderPromptFile != "" {
+		t.Errorf("BuilderPromptFile = %q, want empty", cfg.Duet.BuilderPromptFile)
+	}
+	if cfg.Duet.VerifierPromptFile != "" {
+		t.Errorf("VerifierPromptFile = %q, want empty", cfg.Duet.VerifierPromptFile)
+	}
+}
+
+func TestParseDuet_PlanWithExplicitOverrides(t *testing.T) {
+	cfg, err := Parse([]string{
+		"duet",
+		"--plan", "PLAN.md",
+		"--builder-prompt", "custom-builder.md",
+		"--verifier-prompt", "custom-verifier.md",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Duet.PlanFile != "PLAN.md" {
+		t.Errorf("PlanFile = %q, want PLAN.md", cfg.Duet.PlanFile)
+	}
+	if cfg.Duet.BuilderPromptFile != "custom-builder.md" {
+		t.Errorf("BuilderPromptFile = %q, want custom-builder.md", cfg.Duet.BuilderPromptFile)
+	}
+	if cfg.Duet.VerifierPromptFile != "custom-verifier.md" {
+		t.Errorf("VerifierPromptFile = %q, want custom-verifier.md", cfg.Duet.VerifierPromptFile)
+	}
+}
+
+func TestParseDuet_Defaults(t *testing.T) {
+	cfg, err := Parse([]string{
+		"duet",
+		"--builder-prompt", "b.md",
+		"--verifier-prompt", "v.md",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Duet == nil {
+		t.Fatal("Duet config is nil")
+	}
+	if cfg.Duet.BuilderAgent != "pi" {
+		t.Errorf("BuilderAgent = %q, want pi", cfg.Duet.BuilderAgent)
+	}
+	if cfg.Duet.VerifierAgent != "" {
+		t.Errorf("VerifierAgent = %q, want empty (defaults to builder)", cfg.Duet.VerifierAgent)
+	}
+	if cfg.Duet.MaxCycles != 0 {
+		t.Errorf("MaxCycles = %d, want 0", cfg.Duet.MaxCycles)
+	}
+	if cfg.Duet.RunsDir != ".ralfinho/runs" {
+		t.Errorf("RunsDir = %q, want .ralfinho/runs", cfg.Duet.RunsDir)
+	}
+}
+
+func TestParseDuet_VerifierAgentOverride(t *testing.T) {
+	cfg, err := Parse([]string{
+		"duet",
+		"--builder-prompt", "b.md",
+		"--verifier-prompt", "v.md",
+		"--agent", "claude",
+		"--verifier-agent", "pi",
+		"--max-cycles", "5",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Duet.BuilderAgent != "claude" {
+		t.Errorf("BuilderAgent = %q, want claude", cfg.Duet.BuilderAgent)
+	}
+	if cfg.Duet.VerifierAgent != "pi" {
+		t.Errorf("VerifierAgent = %q, want pi", cfg.Duet.VerifierAgent)
+	}
+	if cfg.Duet.MaxCycles != 5 {
+		t.Errorf("MaxCycles = %d, want 5", cfg.Duet.MaxCycles)
+	}
+}
+
+func TestParseDuet_InvalidMaxCycles(t *testing.T) {
+	_, err := Parse([]string{
+		"duet",
+		"--builder-prompt", "b.md",
+		"--verifier-prompt", "v.md",
+		"--max-cycles", "-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "--max-cycles must be a non-negative integer") {
+		t.Fatalf("expected max-cycles error, got %v", err)
+	}
+}
+
+func TestParseDuet_RejectsUnexpectedPositional(t *testing.T) {
+	_, err := Parse([]string{
+		"duet",
+		"--builder-prompt", "b.md",
+		"--verifier-prompt", "v.md",
+		"stray-arg",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unexpected positional argument") {
+		t.Fatalf("expected unexpected-positional error, got %v", err)
 	}
 }

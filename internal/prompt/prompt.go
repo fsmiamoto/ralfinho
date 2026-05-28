@@ -60,6 +60,34 @@ func BuildDefault(templateOverride, notesPath, progressPath string) (string, err
 	})
 }
 
+// BuildDuetBuilder renders the default builder prompt for a duet run using the
+// plan file. It is used when --builder-prompt is not provided.
+func BuildDuetBuilder(planPath, notesPath, progressPath string) (string, error) {
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		return "", fmt.Errorf("reading plan file %q: %w", planPath, err)
+	}
+	return renderTemplate(duetBuilderTemplate, planData{
+		PlanPath:     planPath,
+		PlanContent:  string(data),
+		NotesPath:    notesPath,
+		ProgressPath: progressPath,
+	})
+}
+
+// BuildDuetVerifier renders the default verifier prompt for a duet run using the
+// plan file. It is used when --verifier-prompt is not provided.
+func BuildDuetVerifier(planPath string) (string, error) {
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		return "", fmt.Errorf("reading plan file %q: %w", planPath, err)
+	}
+	return renderTemplate(duetVerifierTemplate, planData{
+		PlanPath:    planPath,
+		PlanContent: string(data),
+	})
+}
+
 func renderTemplate(templateText string, data planData) (string, error) {
 	tmpl, err := template.New("prompt").Parse(templateText)
 	if err != nil {
