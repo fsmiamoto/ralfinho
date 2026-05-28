@@ -39,7 +39,6 @@ type DuetConfig struct {
 	BuilderAgent       string
 	VerifierAgent      string // empty = use BuilderAgent
 	MaxCycles          int    // 0 = unlimited
-	MaxIterations      int    // per-leg iteration cap
 	NoTUI              bool
 	RunsDir            string
 }
@@ -268,8 +267,6 @@ func parseDuet(args []string) (*Config, error) {
 		agentShort     string
 		verifierAgent  string
 		maxCycles      string
-		maxIter        string
-		maxShort       string
 		noTUI          bool
 		runsDir        string
 	)
@@ -281,8 +278,6 @@ func parseDuet(args []string) (*Config, error) {
 	fs.StringVar(&agentShort, "a", "", "")
 	fs.StringVar(&verifierAgent, "verifier-agent", "", "")
 	fs.StringVar(&maxCycles, "max-cycles", "", "")
-	fs.StringVar(&maxIter, "max-iterations", "", "")
-	fs.StringVar(&maxShort, "m", "", "")
 	fs.BoolVar(&noTUI, "no-tui", false, "")
 	fs.StringVar(&runsDir, "runs-dir", ".ralfinho/runs", "")
 
@@ -317,19 +312,6 @@ func parseDuet(args []string) (*Config, error) {
 		maxCyclesInt = n
 	}
 
-	maxIterations := 0
-	raw := maxIter
-	if maxShort != "" {
-		raw = maxShort
-	}
-	if raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 {
-			return nil, fmt.Errorf("duet: --max-iterations must be a non-negative integer, got %q", raw)
-		}
-		maxIterations = n
-	}
-
 	return &Config{
 		RunsDir: runsDir,
 		NoTUI:   noTUI,
@@ -340,7 +322,6 @@ func parseDuet(args []string) (*Config, error) {
 			BuilderAgent:       agent,
 			VerifierAgent:      verifierAgent,
 			MaxCycles:          maxCyclesInt,
-			MaxIterations:      maxIterations,
 			NoTUI:              noTUI,
 			RunsDir:            runsDir,
 		},

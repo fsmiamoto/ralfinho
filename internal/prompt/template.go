@@ -26,8 +26,10 @@ const defaultTemplate = `You are running inside a task loop. Each iteration star
 {{end}}`
 
 // duetBuilderTemplate is the Go text/template used for the builder leg of a
-// duet run when no explicit --builder-prompt is provided.
-const duetBuilderTemplate = `You are the BUILDER in a build-verify loop. Each iteration starts with a fresh context. You have NO memory of previous iterations. The files below ARE your memory.
+// duet run when no explicit --builder-prompt is provided. Each builder leg is
+// one-shot — no COMPLETE marker is required; the verifier catches whether the
+// task was actually done.
+const duetBuilderTemplate = `You are the BUILDER in a build-verify loop. This run is one-shot: do one focused unit of work and stop. The verifier will check it next.
 
 ## Memory files
 - {{.ProgressPath}} — tracks which tasks are done and which remain.
@@ -42,7 +44,7 @@ const duetBuilderTemplate = `You are the BUILDER in a build-verify loop. Each it
   - Unit tests are important, but we should actually try running the code and seeing the results like an engineer would at each step.
 6. Update {{.ProgressPath}} (mark the task done, list remaining tasks) and {{.NotesPath}} (log decisions, discoveries, and context the next iteration will need). Only include things you find really relevant. Do this BEFORE finishing.
 7. Git commit ONLY the files related to the task you completed with a clear, descriptive commit message. Do NOT include {{.ProgressPath}} or {{.NotesPath}} in this commit — those are loop-internal memory files, not project artifacts. Also don't include any Co-Authored by in the message.
-8. When you are done with your work for this iteration, output exactly: <promise>COMPLETE</promise>
+8. Stop when the task is done. There is no COMPLETE marker to emit — the run is one-shot.
 
 {{if .PlanContent}}
 ## Plan Content ({{.PlanPath}})
@@ -50,8 +52,9 @@ const duetBuilderTemplate = `You are the BUILDER in a build-verify loop. Each it
 {{end}}`
 
 // duetVerifierTemplate is the Go text/template used for the verifier leg of a
-// duet run when no explicit --verifier-prompt is provided.
-const duetVerifierTemplate = `You are the VERIFIER in a build-verify loop. A builder agent has just attempted work on a plan. Your job is to review whether the work was done correctly.
+// duet run when no explicit --verifier-prompt is provided. Each verifier leg
+// is one-shot — emit a verdict and stop; no COMPLETE marker is required.
+const duetVerifierTemplate = `You are the VERIFIER in a build-verify loop. A builder agent has just attempted work on a plan. Your job is to review whether the work was done correctly. This run is one-shot.
 
 ## Plan
 Review the plan below to understand what was supposed to be done:
@@ -66,10 +69,9 @@ The builder updated its PROGRESS.md with what it did. This is appended below by 
 ## Your task
 1. Check that the builder's claimed work actually matches what's in the codebase.
 2. Run tests or inspect files to verify correctness.
-3. Emit exactly ONE of the following verdicts:
+3. Emit exactly ONE of the following verdicts and then stop:
    - <promise>APPROVED</promise> — the work is correct and complete for the tasks the builder attempted.
    - <promise>REJECTED: <concise reason></promise> — the work has issues that need fixing.
-4. Always finish with <promise>COMPLETE</promise> so the runner loop exits cleanly.
 
 Be specific in rejection reasons — the builder will receive your feedback and attempt to fix the issues.`
 

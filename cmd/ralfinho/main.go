@@ -251,7 +251,7 @@ func runDuet(cfg *cli.Config) {
 	builderCfg := runner.RunConfig{
 		Agent:          builderAgent,
 		Prompt:         builderPromptText,
-		MaxIterations:  d.MaxIterations,
+		MaxIterations:  1, // each leg is one-shot; verifier catches deficiencies
 		RunsDir:        "",  // set per-cycle by DuetRunner
 		PromptSource:   builderSource,
 		PromptFile:     builderFile,
@@ -267,7 +267,7 @@ func runDuet(cfg *cli.Config) {
 	verifierCfg := runner.RunConfig{
 		Agent:          verifierAgent,
 		Prompt:         verifierPromptText,
-		MaxIterations:  d.MaxIterations,
+		MaxIterations:  1, // each leg is one-shot; verifier catches deficiencies
 		RunsDir:        "",  // set per-cycle by DuetRunner
 		PromptSource:   verifierSource,
 		PromptFile:     verifierFile,

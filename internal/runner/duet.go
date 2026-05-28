@@ -120,12 +120,15 @@ func (d *DuetRunner) Run(ctx context.Context) DuetResult {
 			result.Duration = time.Since(d.startedAt)
 			d.writeDuetMeta(result.Status, result.Cycles)
 			return result
-		case StatusFailed, StatusMaxIterationsReached, StatusStuck:
+		case StatusFailed, StatusStuck:
 			result.Status = DuetStatusBuilderFailed
 			result.Duration = time.Since(d.startedAt)
 			d.writeDuetMeta(result.Status, result.Cycles)
 			return result
 		}
+		// StatusCompleted and StatusMaxIterationsReached both mean the
+		// builder leg finished naturally; with one-shot legs the latter is
+		// the normal exit path (no COMPLETE marker required).
 
 		// --- Verifier phase ---
 		d.emitPhase("VERIFIER", result.Cycles)
